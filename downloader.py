@@ -40,7 +40,7 @@ def _bridge_community_session():
 _bridge_community_session()
 
 OUTPUT_DIR = "/home/espo/Music"
-SERVICES = ["amazon", "tidal", "qobuz"]
+SERVICES = ["qobuz", "tidal", "amazon"]
 QUALITY = "LOSSLESS"
 FILENAME_FORMAT = "{artist} - {title}"
 USE_ARTIST_SUBFOLDERS = True
@@ -253,7 +253,9 @@ async def main():
     )
     logger.info("Logging to %s", log_path)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("SpotiFLAC").setLevel(logging.WARNING)
+    for name in list(logging.root.manager.loggerDict):
+        if name.startswith("SpotiFLAC"):
+            logging.getLogger(name).setLevel(logging.WARNING)
 
     logger.info("SpotiLoop starting")
     logger.info("  Playlist: %s", url)
