@@ -226,15 +226,30 @@ async def download_playlist(client: AsyncSpotiFLAC, url: str):
 
     seen_ids: set[str] = set()
     unique_tracks: list[TrackMetadata] = []
-    dups = 0
+    dup_counts: dict[str, int] = {}
     for t in tracks:
         if t.id in seen_ids:
-            dups += 1
+            dup_counts[t.id] = dup_counts.get(t.id, 1) + 1
         else:
             seen_ids.add(t.id)
             unique_tracks.append(t)
-    if dups:
-        logger.warning("Dropped %d duplicate track IDs from playlist", dups)
+    if dup_counts:
+        dup_titles = {
+            t.title: c
+            for t in tracks
+            if (c := dup_counts.get(t.id))
+        }
+        logger.warning(
+            "Dropped %d duplicate track IDs from playlist",
+            len(tracks) - len(unique_tracks),
+        )
+        lines = [f"  {title} x{count}" for title, count in dup_titles.items()]
+        joined = "\n".join(lines)
+        logger.warning("Duplicates:\n%s", joined)
+        dup_path = Path(__file__).parent / "duplicates.log"
+        with open(dup_path, "w") as f:
+            f.write(joined + "\n")
+        logger.warning("Full list written to %s", dup_path)
     logger.info("Unique tracks to process: %d", len(unique_tracks))
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
