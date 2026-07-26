@@ -252,6 +252,8 @@ async def main():
         ],
     )
     logger.info("Logging to %s", log_path)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("SpotiFLAC").setLevel(logging.WARNING)
 
     logger.info("SpotiLoop starting")
     logger.info("  Playlist: %s", url)
@@ -280,6 +282,13 @@ async def main():
                 embed_lyrics=EMBED_LYRICS,
             ) as client:
                 await download_playlist(client, url)
+            s = _stats
+            if s["ok"] == 0:
+                logger.info(
+                    "All providers failed — going back to health check loop..."
+                )
+                await asyncio.sleep(5)
+                continue
             logger.info("All tracks processed. Exiting.")
             return
         except Exception as e:
