@@ -75,6 +75,7 @@ MAX_CONCURRENT = 3
 CHECK_INTERVAL = 300
 PER_TRACK_TIMEOUT = 180
 MAX_RETRIES = 3
+CONSECUTIVE_FAIL_LIMIT = 5
 
 _UNSAFE_FOLDER_RE = re.compile(r'[<>:"/\\|?*]')
 
@@ -171,9 +172,13 @@ async def wait_for_providers():
         await _heartbeat_sleep(CHECK_INTERVAL, "Waiting for providers")
 
 
+class _AbortDownload(Exception):
+    """Raised when too many consecutive tracks fail — providers are likely down."""
+
 _stats: dict[str, int] = {"skipped": 0, "ok": 0, "failed": 0}
 _progress_total: int = 0
 _progress_done: int = 0
+_consec_fails: int = 0
 _last_heartbeat: float = time.time()
 _in_progress: set[str] = set()
 _in_progress_lock = asyncio.Lock()
@@ -196,7 +201,7 @@ async def download_track_with_retry(
     track: TrackMetadata,
     sem: asyncio.Semaphore,
 ):
-    global _progress_done
+    global _progress_done, _consec_fails
     track_url = f"https://open.spotify.com/track/{track.id}"
 
     for attempt in range(1 + MAX_RETRIES):
@@ -205,6 +210,7 @@ async def download_track_with_retry(
                 if track_file_exists(track):
                     _stats["skipped"] += 1
                     _progress_done += 1
+                    _consec_fails = 0
                     logger.info(
                         "[%d/%d] SKIP %s — already on disk",
                         _progress_done, _progress_total, track.title,
@@ -214,6 +220,7 @@ async def download_track_with_retry(
                     if track.id in _in_progress:
                         _stats["skipped"] += 1
                         _progress_done += 1
+                        _consec_fails = 0
                         logger.info(
                             "[%d/%d] SKIP %s — already downloading in another task",
                             _progress_done, _progress_total, track.title,
@@ -230,6 +237,7 @@ async def download_track_with_retry(
                         _in_progress.discard(track.id)
             _stats["ok"] += 1
             _progress_done += 1
+            _consec_fails = 0
             logger.info(
                 "[%d/%d] OK %s",
                 _progress_done, _progress_total, track.title,
@@ -254,10 +262,15 @@ async def download_track_with_retry(
 
     _stats["failed"] += 1
     _progress_done += 1
+    _consec_fails += 1
     logger.error(
         "[%d/%d] GAVE UP %s after %d attempts",
         _progress_done, _progress_total, track.title, 1 + MAX_RETRIES,
     )
+    if _consec_fails >= CONSECUTIVE_FAIL_LIMIT:
+        raise _AbortDownload(
+            f"{_consec_fails} consecutive tracks failed — providers likely down"
+        )
 
 
 async def download_playlist(client: AsyncSpotiFLAC, url: str):
@@ -294,9 +307,10 @@ async def download_playlist(client: AsyncSpotiFLAC, url: str):
         with open(dup_path, "w") as f:
             f.write(joined + "\n")
         logger.warning("Full list written to %s", dup_path)
-    global _progress_total, _progress_done
+    global _progress_total, _progress_done, _consec_fails
     _progress_total = len(unique_tracks)
     _progress_done = 0
+    _consec_fails = 0
     logger.info("Unique tracks to process: %d", _progress_total)
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
@@ -368,11 +382,14 @@ async def main():
                 continue
             logger.info("All tracks processed. Exiting.")
             return
+        except _AbortDownload as e:
+            logger.warning("Abort: %s. Re-checking providers...", e)
+            await asyncio.sleep(5)
+            continue
         except Exception as e:
             logger.error(
                 "Session crashed: %s. Restarting in 30s...", e, exc_info=True
             )
-            logger.info("Restarting in 30s...")
             await _heartbeat_sleep(30, "Restarting after crash")
 
 
