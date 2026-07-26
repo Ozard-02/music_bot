@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
@@ -78,31 +79,33 @@ def _get_first_artist(artists: str) -> str:
     return "".join(result).strip()
 
 
-_dir_cache: dict[str, list[str]] = {}
+_dir_cache: dict[str, tuple[float, list[str]]] = {}
+_DIR_CACHE_TTL = 60
 
 def _scan_dir(path: Path) -> list[str]:
-    """Memoized directory listing — same dir is only scanned once."""
+    """Memoized directory listing with TTL — same dir is only scanned once per 60s."""
     key = str(path.resolve())
-    if key not in _dir_cache:
-        if path.is_dir():
-            _dir_cache[key] = [f.stem.lower() for f in path.iterdir() if f.is_file()]
-        else:
-            _dir_cache[key] = []
-    return _dir_cache[key]
+    now = time.time()
+    cached = _dir_cache.get(key)
+    if cached and (now - cached[0]) < _DIR_CACHE_TTL:
+        return cached[1]
+    if path.is_dir():
+        stems = [f.stem.lower() for f in path.iterdir() if f.is_file()]
+    else:
+        stems = []
+    _dir_cache[key] = (now, stems)
+    return stems
 
 
 def track_file_exists(track: TrackMetadata) -> bool:
     """Check if a track already exists on disk. Never returns a false negative."""
     title = sanitize(track.title)
-    artist_name = sanitize(
-        _get_first_artist(track.artists) if FIRST_ARTIST_ONLY else track.artists
-    )
+    first_artist = _get_first_artist(track.artists) if FIRST_ARTIST_ONLY else track.artists
+    artist_name = sanitize(first_artist)
     if not title or not artist_name:
         return False
 
-    folder_artist = _safe_folder(
-        _get_first_artist(track.artists) if FIRST_ARTIST_ONLY else track.artists
-    )
+    folder_artist = _safe_folder(first_artist)
     folder_album = _safe_folder(track.album)
     ext = ".flac"
 
@@ -151,7 +154,23 @@ async def wait_for_providers():
         logger.info(
             "All providers down. Next check in %ds...", CHECK_INTERVAL
         )
-        await asyncio.sleep(CHECK_INTERVAL)
+        await _heartbeat_sleep(CHECK_INTERVAL, "Waiting for providers")
+
+
+_stats: dict[str, int] = {"skipped": 0, "ok": 0, "failed": 0}
+_last_heartbeat: float = time.time()
+
+
+async def _heartbeat_sleep(seconds: int, msg: str = "Waiting..."):
+    """Sleep for `seconds`, logging a heartbeat every 60s."""
+    global _last_heartbeat
+    for _ in range(seconds):
+        await asyncio.sleep(1)
+        now = time.time()
+        if now - _last_heartbeat >= 60:
+            logger.info("[heartbeat] %s (%ds left)", msg, seconds)
+            _last_heartbeat = now
+        seconds -= 1
 
 
 async def download_track_with_retry(
@@ -160,6 +179,7 @@ async def download_track_with_retry(
     sem: asyncio.Semaphore,
 ):
     if track_file_exists(track):
+        _stats["skipped"] += 1
         logger.info("SKIP %s — already on disk", track.title)
         return
 
@@ -172,6 +192,7 @@ async def download_track_with_retry(
                     client.download_track(track_url),
                     timeout=PER_TRACK_TIMEOUT,
                 )
+            _stats["ok"] += 1
             logger.info("OK %s", track.title)
             return
         except asyncio.TimeoutError:
@@ -191,10 +212,12 @@ async def download_track_with_retry(
             )
         await asyncio.sleep(min(30, 2**attempt))
 
+    _stats["failed"] += 1
     logger.error("GAVE UP %s after %d attempts", track.title, 1 + MAX_RETRIES)
 
 
 async def download_playlist(client: AsyncSpotiFLAC, url: str):
+    _stats.update(skipped=0, ok=0, failed=0)
     logger.info("Fetching playlist: %s", url)
     info, tracks = await client.get_playlist(url)
     logger.info(
@@ -205,6 +228,12 @@ async def download_playlist(client: AsyncSpotiFLAC, url: str):
     tasks = [download_track_with_retry(client, t, sem) for t in tracks]
     await asyncio.gather(*tasks)
 
+    s = _stats
+    logger.info(
+        "SUMMARY — %d skipped, %d downloaded, %d failed",
+        s["skipped"], s["ok"], s["failed"],
+    )
+
 
 async def main():
     url = sys.argv[1] if len(sys.argv) > 1 else None
@@ -212,11 +241,17 @@ async def main():
         print("Usage: python downloader.py <spotify_playlist_url>")
         sys.exit(1)
 
+    log_path = Path(__file__).parent / "spoty_loop.log"
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
+        handlers=[
+            logging.FileHandler(log_path),
+            logging.StreamHandler(),
+        ],
     )
+    logger.info("Logging to %s", log_path)
 
     logger.info("SpotiLoop starting")
     logger.info("  Playlist: %s", url)
@@ -231,7 +266,9 @@ async def main():
 
     while True:
         try:
+            logger.info("--- Stage: waiting for providers ---")
             working = await wait_for_providers()
+            logger.info("--- Stage: downloading playlist ---")
             async with AsyncSpotiFLAC(
                 output_dir=OUTPUT_DIR,
                 services=working,
@@ -249,7 +286,8 @@ async def main():
             logger.error(
                 "Session crashed: %s. Restarting in 30s...", e, exc_info=True
             )
-            await asyncio.sleep(30)
+            logger.info("Restarting in 30s...")
+            await _heartbeat_sleep(30, "Restarting after crash")
 
 
 if __name__ == "__main__":
