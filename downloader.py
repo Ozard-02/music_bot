@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
 from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
@@ -39,14 +40,37 @@ def _bridge_community_session():
 
 _bridge_community_session()
 
-OUTPUT_DIR = "/home/espo/Music"
+def _load_config() -> dict:
+    path = os.path.expanduser("~/.spotiflac/config.json")
+    cfg = {}
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except Exception:
+        pass
+    folder_template = cfg.get("folderTemplate", "{album_artist}/{album}")
+    return {
+        "output_dir": cfg.get("downloadPath", "/home/espo/Music"),
+        "filename_format": cfg.get("filenameTemplate", "{artist} - {title}"),
+        "use_artist_subfolders": "{album_artist}" in folder_template,
+        "use_album_subfolders": "{album}" in folder_template,
+        "first_artist_only": cfg.get("useFirstArtistOnly", True),
+        "embed_lyrics": cfg.get("embedLyrics", True),
+        "quality": cfg.get("tidalQuality", "LOSSLESS"),
+    }
+
+
+CFG = _load_config()
+
+OUTPUT_DIR = CFG["output_dir"]
+FILENAME_FORMAT = CFG["filename_format"]
+USE_ARTIST_SUBFOLDERS = CFG["use_artist_subfolders"]
+USE_ALBUM_SUBFOLDERS = CFG["use_album_subfolders"]
+FIRST_ARTIST_ONLY = CFG["first_artist_only"]
+EMBED_LYRICS = CFG["embed_lyrics"]
+QUALITY = CFG["quality"]
+
 SERVICES = ["qobuz", "tidal", "amazon"]
-QUALITY = "LOSSLESS"
-FILENAME_FORMAT = "{artist} - {title}"
-USE_ARTIST_SUBFOLDERS = True
-USE_ALBUM_SUBFOLDERS = True
-FIRST_ARTIST_ONLY = True
-EMBED_LYRICS = True
 MAX_CONCURRENT = 3
 CHECK_INTERVAL = 300
 PER_TRACK_TIMEOUT = 180
@@ -79,22 +103,12 @@ def _get_first_artist(artists: str) -> str:
     return "".join(result).strip()
 
 
-_dir_cache: dict[str, tuple[float, list[str]]] = {}
-_DIR_CACHE_TTL = 60
-
-def _scan_dir(path: Path) -> list[str]:
-    """Memoized directory listing with TTL — same dir is only scanned once per 60s."""
-    key = str(path.resolve())
-    now = time.time()
-    cached = _dir_cache.get(key)
-    if cached and (now - cached[0]) < _DIR_CACHE_TTL:
-        return cached[1]
-    if path.is_dir():
-        stems = [f.stem.lower() for f in path.iterdir() if f.is_file()]
-    else:
-        stems = []
-    _dir_cache[key] = (now, stems)
-    return stems
+@lru_cache(maxsize=128)
+def _scan_dir(path: Path) -> tuple[str, ...]:
+    resolved = path.resolve()
+    if resolved.is_dir():
+        return tuple(f.stem.lower() for f in resolved.iterdir() if f.is_file())
+    return ()
 
 
 def track_file_exists(track: TrackMetadata) -> bool:
@@ -158,6 +172,8 @@ async def wait_for_providers():
 
 
 _stats: dict[str, int] = {"skipped": 0, "ok": 0, "failed": 0}
+_progress_total: int = 0
+_progress_done: int = 0
 _last_heartbeat: float = time.time()
 _in_progress: set[str] = set()
 _in_progress_lock = asyncio.Lock()
@@ -180,6 +196,7 @@ async def download_track_with_retry(
     track: TrackMetadata,
     sem: asyncio.Semaphore,
 ):
+    global _progress_done
     track_url = f"https://open.spotify.com/track/{track.id}"
 
     for attempt in range(1 + MAX_RETRIES):
@@ -187,14 +204,19 @@ async def download_track_with_retry(
             async with sem:
                 if track_file_exists(track):
                     _stats["skipped"] += 1
-                    logger.info("SKIP %s — already on disk", track.title)
+                    _progress_done += 1
+                    logger.info(
+                        "[%d/%d] SKIP %s — already on disk",
+                        _progress_done, _progress_total, track.title,
+                    )
                     return
                 async with _in_progress_lock:
                     if track.id in _in_progress:
                         _stats["skipped"] += 1
+                        _progress_done += 1
                         logger.info(
-                            "SKIP %s — already downloading in another task",
-                            track.title,
+                            "[%d/%d] SKIP %s — already downloading in another task",
+                            _progress_done, _progress_total, track.title,
                         )
                         return
                     _in_progress.add(track.id)
@@ -207,7 +229,11 @@ async def download_track_with_retry(
                     async with _in_progress_lock:
                         _in_progress.discard(track.id)
             _stats["ok"] += 1
-            logger.info("OK %s", track.title)
+            _progress_done += 1
+            logger.info(
+                "[%d/%d] OK %s",
+                _progress_done, _progress_total, track.title,
+            )
             return
         except asyncio.TimeoutError:
             logger.warning(
@@ -227,7 +253,11 @@ async def download_track_with_retry(
         await asyncio.sleep(min(30, 2**attempt))
 
     _stats["failed"] += 1
-    logger.error("GAVE UP %s after %d attempts", track.title, 1 + MAX_RETRIES)
+    _progress_done += 1
+    logger.error(
+        "[%d/%d] GAVE UP %s after %d attempts",
+        _progress_done, _progress_total, track.title, 1 + MAX_RETRIES,
+    )
 
 
 async def download_playlist(client: AsyncSpotiFLAC, url: str):
@@ -264,7 +294,10 @@ async def download_playlist(client: AsyncSpotiFLAC, url: str):
         with open(dup_path, "w") as f:
             f.write(joined + "\n")
         logger.warning("Full list written to %s", dup_path)
-    logger.info("Unique tracks to process: %d", len(unique_tracks))
+    global _progress_total, _progress_done
+    _progress_total = len(unique_tracks)
+    _progress_done = 0
+    logger.info("Unique tracks to process: %d", _progress_total)
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
     tasks = [download_track_with_retry(client, t, sem) for t in unique_tracks]

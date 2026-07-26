@@ -8,11 +8,14 @@ Download Spotify playlists to FLAC using SpotiFLAC's anonymous providers (Tidal/
 ```
 loop forever:
   copy desktop community session (avoids Cloudflare)
-  health-check amazon, tidal, qobuz (every 5 min)
+  suppress SpotiFLAC child loggers
+  health-check qobuz, tidal, amazon (every 5 min)
   if any provider is UP:
     fetch playlist metadata
+    dedup by track.id (first kept, duplicates → duplicates.log)
     for each track:
       skip if file exists on disk (exact match + directory scan)
+      skip if same track.id already downloading (in-progress guard)
       download with 3 parallel workers, 3 min timeout, 3 retries
     done → exit
   else:
@@ -32,6 +35,16 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files are skipped.
 ## Wait time
 The script checks provider health every **300 seconds (5 minutes)**. If all providers are down, it loops forever until at least one responds. If a provider responds but the download fails mid-track, the track is retried up to 3 times (with exponential backoff), then the whole session restarts after 30s.
 
+## Provider priority
+`SERVICES = ["qobuz", "tidal", "amazon"]` — Qobuz is tried first. Tidal v1 API is permanently retired (410). Amazon is last-resort.
+
+## Files
+| File | Purpose |
+|------|---------|
+| `downloader.py` | Main script |
+| `spoty_loop.log` | Full log (all runs) |
+| `duplicates.log` | Track IDs that appeared >1× in the playlist |
+
 ## Progress
 
 - [x] Read existing config from `~/.spotiflac/config.json`
@@ -45,5 +58,8 @@ The script checks provider health every **300 seconds (5 minutes)**. If all prov
 - [x] Bridge desktop community session (fixes Cloudflare prompt)
 - [x] Test: existing files correctly detected (Billie Eilish, MACE, Ernia — all SKIP)
 - [x] Test: non-existing files correctly detected (Nitro — not found, will download)
-- [ ] Wait for Tidal/Qobuz APIs to come back online
+- [x] Reorder services to Qobuz-first
+- [x] Suppress SpotiFLAC child loggers
+- [x] Dedup + duplicates.log
+- [x] Fix skip race (check inside sem + in-progress guard)
 - [ ] Run full playlist download
