@@ -159,6 +159,8 @@ async def wait_for_providers():
 
 _stats: dict[str, int] = {"skipped": 0, "ok": 0, "failed": 0}
 _last_heartbeat: float = time.time()
+_in_progress: set[str] = set()
+_in_progress_lock = asyncio.Lock()
 
 
 async def _heartbeat_sleep(seconds: int, msg: str = "Waiting..."):
@@ -178,20 +180,32 @@ async def download_track_with_retry(
     track: TrackMetadata,
     sem: asyncio.Semaphore,
 ):
-    if track_file_exists(track):
-        _stats["skipped"] += 1
-        logger.info("SKIP %s — already on disk", track.title)
-        return
-
     track_url = f"https://open.spotify.com/track/{track.id}"
 
     for attempt in range(1 + MAX_RETRIES):
         try:
             async with sem:
-                await asyncio.wait_for(
-                    client.download_track(track_url),
-                    timeout=PER_TRACK_TIMEOUT,
-                )
+                if track_file_exists(track):
+                    _stats["skipped"] += 1
+                    logger.info("SKIP %s — already on disk", track.title)
+                    return
+                async with _in_progress_lock:
+                    if track.id in _in_progress:
+                        _stats["skipped"] += 1
+                        logger.info(
+                            "SKIP %s — already downloading in another task",
+                            track.title,
+                        )
+                        return
+                    _in_progress.add(track.id)
+                try:
+                    await asyncio.wait_for(
+                        client.download_track(track_url),
+                        timeout=PER_TRACK_TIMEOUT,
+                    )
+                finally:
+                    async with _in_progress_lock:
+                        _in_progress.discard(track.id)
             _stats["ok"] += 1
             logger.info("OK %s", track.title)
             return
