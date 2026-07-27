@@ -8,6 +8,7 @@ album art from Spotify, and replaces whatever Qobuz enrichment put there.
 import asyncio
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -20,12 +21,17 @@ MAX_CONCURRENT = 10
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("fix_covers")
 
+_TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
+
 
 def _get_spotify_id(filepath: str) -> str | None:
     audio = FLAC(filepath)
-    url = audio.get("URL", [None])[0]
-    if url and "open.spotify.com/track/" in url:
-        return url.split("/track/")[-1].split("?")[0].strip()
+    for tag in ("URL", "comment"):
+        val = audio.get(tag, [None])[0]
+        if val:
+            m = _TRACK_ID_RE.search(val)
+            if m:
+                return m.group(1)
     return None
 
 
@@ -67,10 +73,6 @@ async def fix_covers(dry_run: bool = False):
                     return
 
                 cover_url = track.cover_url
-                if "i.scdn.co/image/" in cover_url:
-                    cover_url = cover_url.replace(
-                        "ab67616d0000b273", "ab67616d0000b273"
-                    )
 
                 resp = await http.get(cover_url)
                 if resp.status_code != 200:

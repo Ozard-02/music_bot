@@ -1,0 +1,195 @@
+"""Tests for worker.py — helpers and Worker._process."""
+
+import asyncio
+from unittest.mock import AsyncMock, patch
+from datetime import datetime, timezone, timedelta
+
+import pytest
+
+from config import MAX_QUEUE_RETRIES
+from worker import _age_seconds, _format_summary, Worker
+
+
+class TestAgeSeconds:
+    def test_zero_for_recent(self):
+        now = datetime.now(timezone.utc).isoformat()
+        assert _age_seconds(now) < 1
+
+    def test_one_hour_ago(self):
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        assert 3599 < _age_seconds(past) < 3601
+
+    def test_invalid_date_returns_zero(self):
+        assert _age_seconds("not-a-date") == 0
+
+    def test_none_returns_zero(self):
+        assert _age_seconds(None) == 0
+
+
+class TestFormatSummary:
+    def test_only_ok(self):
+        r = _format_summary("Title", {"ok": 1, "skipped": 0, "failed": 0})
+        assert "1 ok" in r
+        assert "skipped" not in r
+        assert "failed" not in r
+
+    def test_only_skipped(self):
+        r = _format_summary("Title", {"ok": 0, "skipped": 2, "failed": 0})
+        assert "2 skipped" in r
+        assert "ok" not in r
+        assert "failed" not in r
+
+    def test_only_failed(self):
+        r = _format_summary("Title", {"ok": 0, "skipped": 0, "failed": 3})
+        assert "3 failed" in r
+        assert "ok" not in r
+        assert "skipped" not in r
+
+    def test_mixed(self):
+        r = _format_summary("Title", {"ok": 1, "skipped": 2, "failed": 3})
+        assert all(x in r for x in ["1 ok", "2 skipped", "3 failed"])
+
+    def test_all_zero(self):
+        r = _format_summary("Title", {"ok": 0, "skipped": 0, "failed": 0})
+        assert r == "<b>Title</b>\n"
+
+    def test_includes_display_name(self):
+        r = _format_summary("My Album", {"ok": 5, "skipped": 0, "failed": 0})
+        assert "My Album" in r
+
+
+class TestWorkerProcess:
+    """Tests Worker._process with mocked run_url and bot."""
+
+    @pytest.fixture
+    def bot(self):
+        return AsyncMock()
+
+    @pytest.fixture
+    def worker(self, queue_manager, bot, config, logger):
+        return Worker(queue_manager, bot, 12345, config, logger, asyncio.Event())
+
+    @pytest.mark.asyncio
+    async def test_success_marks_done(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        with patch("worker.run_url_sync", return_value={"ok": 5, "skipped": 2, "failed": 0}):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["done"] == 1
+        assert s["running"] == 0
+        h = qm.get_history(1)
+        assert h[0]["result_ok"] == 5
+        assert h[0]["result_skipped"] == 2
+        assert h[0]["result_failed"] == 0
+
+        bot.send_message.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_success_sends_correct_message(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        with patch("worker.run_url_sync", return_value={"ok": 3, "skipped": 0, "failed": 0}):
+            await worker._process(item)
+
+        msg = bot.send_message.call_args[1]["text"]
+        assert "3 ok" in msg
+
+    @pytest.mark.asyncio
+    async def test_failure_requeues_within_limits(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        with patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3}):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["queued"] == 1
+        assert s["running"] == 0
+        next_item = qm.dequeue()
+        assert next_item["retries"] == 1
+
+        bot.send_message.assert_awaited()
+        msg = bot.send_message.call_args[1]["text"]
+        assert "Re-queued" in msg
+
+    @pytest.mark.asyncio
+    async def test_max_retries_permanent_fail(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        for _ in range(MAX_QUEUE_RETRIES):
+            item = qm.dequeue()
+            qm.requeue(item["id"])
+        item = qm.dequeue()
+
+        with patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3}):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["failed"] == 1
+        assert s["queued"] == 0
+
+        msg = bot.send_message.call_args[1]["text"]
+        assert "Failed" in msg or "retries" in msg
+
+    @pytest.mark.asyncio
+    async def test_exception_during_download_fails_item(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        with patch("worker.run_url_sync", side_effect=RuntimeError("Connection failed")):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["failed"] == 1
+        assert s["running"] == 0
+
+        bot.send_message.assert_awaited()
+        msg = bot.send_message.call_args[1]["text"]
+        assert "Failed" in msg
+
+    @pytest.mark.asyncio
+    async def test_logs_failed_tracks_to_db(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        with patch("worker.run_url_sync", return_value={
+            "ok": 0, "skipped": 0, "failed": 2,
+            "failed_tracks": [
+                ("id1", "Broken Song", "Qobuz 500"),
+                ("id2", "Another Fail", "Tidal 410"),
+            ],
+        }):
+            await worker._process(item)
+
+        tracks = qm.get_failed_tracks(item_id=item["id"])
+        assert len(tracks) == 2
+        titles = {t["track_title"] for t in tracks}
+        assert "Broken Song" in titles
+        assert "Another Fail" in titles
+
+    @pytest.mark.asyncio
+    async def test_overnight_timeout_gives_up(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+        old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        item["created_at"] = old
+
+        with patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3}):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["failed"] == 1
+        assert s["queued"] == 0
+
+        msg = bot.send_message.call_args[1]["text"]
+        assert "24h" in msg or "gave up" in msg.lower()
