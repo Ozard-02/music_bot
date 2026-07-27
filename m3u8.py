@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""
+Generate an M3U8 playlist file for a Spotify playlist.
+
+Scans ~/Music for already-downloaded tracks and creates an .m3u8 file
+with relative paths suitable for Navidrome / any music player.
+
+Usage:
+    python m3u8.py <playlist_url> [playlist_name]
+"""
+
+import argparse
+import asyncio
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+
+from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
+from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+
+from config import load_config
+
+
+_FS_UNSAFE = re.compile(r'[\\/*?:"<>|]')
+_WS = re.compile(r"\s+")
+
+
+def _sanitize(value: str, fallback: str = "Unknown") -> str:
+    if not value:
+        return fallback
+    cleaned = _FS_UNSAFE.sub("", value)
+    cleaned = _WS.sub(" ", cleaned).strip()
+    return cleaned or fallback
+
+
+def sanitize_filename(name: str) -> str:
+    return re.sub(r'[<>:"/\\|?*]', "_", name).strip() or "playlist"
+
+
+def track_relative_path(track: TrackMetadata, cfg: dict) -> str:
+    artist = _sanitize(track.first_artist if cfg["first_artist_only"] else track.artists)
+    album_artist = _sanitize(track.album_artist)
+    album = _sanitize(track.album)
+    title = _sanitize(track.title)
+    filename = cfg["filename_format"].format(artist=artist, title=title)
+    rel = Path(album_artist) / album / f"{filename}.flac"
+    return str(rel)
+
+
+def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str], int]:
+    lines = ["#EXTM3U"]
+    count = 0
+    seen_ids: set[str] = set()
+    for t in tracks:
+        if t.id in seen_ids:
+            continue
+        seen_ids.add(t.id)
+        rel = track_relative_path(t, cfg)
+        full = Path(cfg["output_dir"]) / rel
+        if full.exists():
+            count += 1
+            lines.append(f"#EXTINF:{t.duration_seconds or 0:.0f},{t.first_artist} - {t.title}")
+            lines.append(rel)
+    return lines, count
+
+
+def write_m3u8(name: str, lines: list[str], cfg: dict):
+    out = Path(cfg["output_dir"]) / f"{sanitize_filename(name)}.m3u8"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out
+
+
+async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None):
+    parsed = parse_spotify_url(url)
+    if parsed["type"] != "playlist":
+        raise ValueError(f"Not a playlist URL: {url}")
+
+    if cfg is None:
+        cfg = load_config()
+
+    async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
+        info, tracks = await client.get_playlist(url)
+
+    playlist_name = name or info.get("name", "playlist")
+    tracks = list(tracks)
+
+    lines, included_count = build_m3u8_lines(tracks, cfg)
+    path = write_m3u8(playlist_name, lines, cfg)
+
+    return {
+        "path": str(path),
+        "playlist_name": playlist_name,
+        "total_tracks": len(tracks),
+        "exist_on_disk": included_count,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate M3U8 for a Spotify playlist")
+    parser.add_argument("url", help="Spotify playlist URL")
+    parser.add_argument("name", nargs="?", default=None, help="Playlist name (default: Spotify name)")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logger = logging.getLogger("m3u8")
+
+    try:
+        result = asyncio.run(build_m3u8(args.url, args.name))
+        logger.info(
+            "Wrote %s — %d/%d tracks on disk",
+            result["path"], result["exist_on_disk"], result["total_tracks"],
+        )
+    except Exception as e:
+        logger.error("Error: %s", e)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

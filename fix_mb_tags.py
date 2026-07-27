@@ -6,17 +6,18 @@ that cause Navidrome to group unrelated albums together.
 """
 
 import os
-import subprocess
 import sys
 
+from mutagen.flac import FLAC
+
 MUSIC_DIR = os.path.expanduser("~/Music")
-BAD_TAGS = [
+BAD_TAGS = {
     "MUSICBRAINZ_ALBUMID",
     "MUSICBRAINZ_ALBUMARTISTID",
     "MUSICBRAINZ_TRACKID",
     "MUSICBRAINZ_ARTISTID",
     "MUSICBRAINZ_RELEASEGROUPID",
-]
+}
 
 count = 0
 for root, _dirs, files in os.walk(MUSIC_DIR):
@@ -24,19 +25,13 @@ for root, _dirs, files in os.walk(MUSIC_DIR):
         if not fn.lower().endswith(".flac"):
             continue
         path = os.path.join(root, fn)
-        for tag in BAD_TAGS:
-            result = subprocess.run(
-                ["metaflac", "--remove-tag=" + tag, path],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                pass
-            elif "No such tag" in result.stderr:
-                pass
-            else:
-                print(f"Error removing {tag} from {path}: {result.stderr}")
-
+        audio = FLAC(path)
+        modified = False
+        for tag in BAD_TAGS & set(audio):
+            del audio[tag]
+            modified = True
+        if modified:
+            audio.save()
         count += 1
         if count % 500 == 0:
             print(f"[{count}] files processed...")
