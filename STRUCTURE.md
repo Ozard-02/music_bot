@@ -1,32 +1,36 @@
 # Code Structure
 
-## `downloader.py` — single file, no modules needed
+## `downloader.py` — single file
 
 ```
 main()
-├─ _bridge_community_session()       # copy desktop session (avoids Cloudflare)
-├─ health-check loop (every 300s)   # run_health_check + get_working_providers
-│  └─ once providers UP (SERVICES=[qobuz, tidal, amazon]):
-│     ├─ dedup by track.id           # first occurrence kept, rest → duplicates.log
-│     ├─ fetch_playlist()            # SpotiFLAC resolves Spotify playlist → track list
-│     └─ download loop               # asyncio.Semaphore(3) for concurrency
-│        ├─ track_file_exists()      # exact path → directory scan fallback
-│        ├─ _in_progress guard       # per-track-id, prevents parallel-dup races
-│        ├─ _get_first_artist()      # parenthesis-aware first-artist extraction
-│        └─ client.download_track()  # SpotiFLAC does the actual download
-├─ SpotiFLAC child loggers → WARNING  # suppress internal noise
-├─ on crash: wait 30s → restart
-├─ stdout: progress bar per download
+├─ bridge_community_session(logger)  # copy desktop session (avoids Cloudflare)
+├─ load_config(logger) → cfg        # read ~/.spotiflac/config.json
+├─ suppress httpx + SpotiFLAC child loggers → WARNING
+├─ outer loop (crash recovery):
+│  └─ wait_for_providers(logger)    # health check every 300s until one UP
+│     └─ inner loop (retry until failed==0):
+│        ├─ state = RunState()      # dataclass: skipped/ok/failed/total/done/in_progress
+│        ├─ AsyncSpotiFLAC(...)     # configured from cfg, enrich_providers excludes qobuz
+│        ├─ download_playlist():
+│        │  ├─ dedup by track.id → duplicates.log
+│        │  ├─ Semaphore(3)
+│        │  └─ download_track_with_retry():
+│        │     ├─ in_progress guard per track ID
+│        │     ├─ client.download_track() (180s timeout, 3 retries)
+│        │     └─ [N/M] progress log per outcome
+│        └─ if failed==0 → exit
+│           all failed → 5min wait
+│           some failed → 60s wait
+│        on crash → 30s → restart outer loop
 ├─ spoty_loop.log: full log
 └─ duplicates.log: repeated track IDs per run
-
-Helpers (not in SpotiFLAC):
-├─ track_file_exists(title, artist, album)
-├─ _get_first_artist(artist_str)
-└─ _bridge_community_session()
 ```
 
-## External deps (via SpotiFLAC)
-- `SpotiFLAC.providers.{tidal, qobuz, amazon}` — actual streaming providers
-- `SpotiFLAC.core.health_check` — probes provider endpoints
-- `SpotiFLAC.core.session_desktop` — community session management
+## SpotiFLAC patch
+`SpotiFLAC/core/tagger.py`: `_embed_flac` strips `MUSICBRAINZ_*` before writing Vorbis comments (avoids Navidrome album merge).
+
+## Helper scripts
+- `fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
+- `fix_covers.py` — re-embed Spotify cover art into all FLACs with Spotify track IDs
+- `IMPROVEMENTS.md` — planned Telegram bot + Docker + SQLite queue

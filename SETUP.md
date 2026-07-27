@@ -1,65 +1,52 @@
 # SpotyLoop — Resilient Playlist Downloader
 
 ## Goal
-Download Spotify playlists to FLAC using SpotiFLAC's anonymous providers (Tidal/Qobuz/Amazon), matching `~/Music/{Artist}/{Album}/{Artist} - {title}.flac`. Never deletes existing files.
+Download Spotify playlists to FLAC using SpotiFLAC's anonymous providers (Tidal/Qobuz/Amazon), matching `~/Music/{Artist}/{Album}/{Artist} - {title}.flac`. Never deletes existing files. Retries until every track is downloaded.
 
 ## How it works
 
 ```
-loop forever:
+while True:
   copy desktop community session (avoids Cloudflare)
   suppress SpotiFLAC child loggers
-  health-check qobuz, tidal, amazon (every 5 min)
-  if any provider is UP:
-    fetch playlist metadata
-    dedup by track.id (first kept, duplicates → duplicates.log)
-    for each track:
-      skip if file exists on disk (exact match + directory scan)
-      skip if same track.id already downloading (in-progress guard)
-      download with 3 parallel workers, 3 min timeout, 3 retries
-    done → exit
-  else:
-    wait 5 min → retry
-  if crash → restart loop after 30s
+  health-check qobuz, tidal, amazon (every 5 min) until at least one UP
+  while failed > 0:
+    dedup playlist by track.id (first kept, duplicates → duplicates.log)
+    download all unique tracks with 3 parallel workers (180s timeout, 3 retries)
+    if zero failed → exit success
+    if all failed → wait 5 min (server likely down)
+    if some failed → wait 60s and retry only the failed ones
+  if crash → restart outer loop after 30s
 ```
+
+Existing files are detected by SpotiFLAC's internal `_file_exists()` — no re-download.
 
 ## Usage
 
 ```bash
 cd /home/espo/spoty_loop
-.venv/bin/python downloader.py "https://open.spotify.com/playlist/04T3Cj34SKqYqaGd90pAiX"
+./downloader.py "https://open.spotify.com/playlist/..."
 ```
 
-Press `Ctrl+C` to abort. Rerun to resume — existing files are skipped.
-
-## Wait time
-The script checks provider health every **300 seconds (5 minutes)**. If all providers are down, it loops forever until at least one responds. If a provider responds but the download fails mid-track, the track is retried up to 3 times (with exponential backoff), then the whole session restarts after 30s.
+Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 
 ## Provider priority
-`SERVICES = ["qobuz", "tidal", "amazon"]` — Qobuz is tried first. Tidal v1 API is permanently retired (410). Amazon is last-resort.
+`SERVICES = ["qobuz", "tidal", "amazon"]` — Qobuz first. Tidal v1 API retired (410). Amazon last.
 
 ## Files
 | File | Purpose |
 |------|---------|
 | `downloader.py` | Main script |
+| `config.default.json` | Reference config (keys used by downloader) |
+| `fix_mb_tags.py` | Remove MUSICBRAINZ_* tags from existing FLACs |
+| `fix_covers.py` | Re-embed correct Spotify cover art into FLACs |
 | `spoty_loop.log` | Full log (all runs) |
 | `duplicates.log` | Track IDs that appeared >1× in the playlist |
 
-## Progress
+Config is read from `~/.spotiflac/config.json` (created by the desktop app). If missing, a warning points to `config.default.json` and hardcoded defaults are used.
 
-- [x] Read existing config from `~/.spotiflac/config.json`
-- [x] Confirm file structure: `~/Music/{Artist}/{Album}/{Artist} - {title}.flac`
-- [x] Install SpotiFLAC in uv venv
-- [x] Confirm imports work
-- [x] Analyze SpotiFLAC path logic for skip check
-- [x] Write `downloader.py`
-- [x] Fix `first_artist` comma-inside-parentheses bug
-- [x] Fix skip check with directory scan fallback
-- [x] Bridge desktop community session (fixes Cloudflare prompt)
-- [x] Test: existing files correctly detected (Billie Eilish, MACE, Ernia — all SKIP)
-- [x] Test: non-existing files correctly detected (Nitro — not found, will download)
-- [x] Reorder services to Qobuz-first
-- [x] Suppress SpotiFLAC child loggers
-- [x] Dedup + duplicates.log
-- [x] Fix skip race (check inside sem + in-progress guard)
-- [ ] Run full playlist download
+## Navidrome note
+Qobuz metadata enrichment injects bogus `MUSICBRAINZ_ALBUMID` values that cause Navidrome to merge unrelated albums. `SpotiFLAC/core/tagger.py` is patched to strip all `MUSICBRAINZ_*` tags before writing. Run `fix_mb_tags.py` on existing files if you see misgrouped albums.
+
+## Cover art note
+Qobuz enrichment returns wrong HD covers for some albums (e.g., Ditonellapiaga "Chimica"). `enrich_providers` in downloader.py excludes qobuz: `["deezer", "apple", "tidal", "soundcloud"]`. Run `fix_covers.py` on existing files with incorrect covers.

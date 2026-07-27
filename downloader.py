@@ -1,56 +1,74 @@
 #!/usr/bin/env python3
 """
 Resilient parallel playlist downloader using SpotiFLAC.
-Matches ~/Music/{Artist}/{Album}/{Artist} - {title}.flac structure.
-Never deletes existing files — only skips or adds new ones.
+~/Music/{Artist}/{Album}/{Artist} - {title}.flac
 """
 
 import asyncio
 import json
 import logging
 import os
-import re
 import sys
 import time
-from functools import lru_cache
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
 from SpotiFLAC.core.health_check import run_health_check, get_working_providers
-from SpotiFLAC.core.models import sanitize
 
 
-def _bridge_community_session():
-    """Copy desktop app's session to module's expected path if valid."""
+SERVICES = ["qobuz", "tidal", "amazon"]
+MAX_CONCURRENT = 3
+CHECK_INTERVAL = 300
+PER_TRACK_TIMEOUT = 180
+MAX_RETRIES = 3
+
+
+@dataclass
+class RunState:
+    skipped: int = 0
+    ok: int = 0
+    failed: int = 0
+    total: int = 0
+    done: int = 0
+    in_progress: set = field(default_factory=set)
+
+
+def bridge_community_session(logger: logging.Logger):
     desktop = os.path.expanduser("~/.spotiflac/community_session.json")
-    module_dir = os.path.expanduser("~/.spotiflac/signed_sessions")
-    module = os.path.join(module_dir, "community_sessions.json")
-    if not os.path.exists(desktop):
-        return
+    module_path = os.path.expanduser("~/.spotiflac/signed_sessions/community_sessions.json")
     try:
         with open(desktop) as f:
             data = json.load(f)
         if data.get("session_id"):
-            os.makedirs(module_dir, exist_ok=True)
-            with open(module, "w") as f:
+            os.makedirs(os.path.dirname(module_path), exist_ok=True)
+            with open(module_path, "w") as f:
                 json.dump(data, f, indent=2)
-    except Exception:
-        pass
+            logger.info("Community session bridged")
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("No desktop session to bridge: %s", e)
 
 
-_bridge_community_session()
+DEFAULT_CONFIG_PATH = Path(__file__).parent / "config.default.json"
 
-def _load_config() -> dict:
+
+def load_config(logger: logging.Logger) -> dict:
     path = os.path.expanduser("~/.spotiflac/config.json")
-    cfg = {}
     try:
         with open(path) as f:
             cfg = json.load(f)
-    except Exception:
-        pass
+    except FileNotFoundError:
+        logger.warning(
+            "Config not found at %s — see %s for reference, falling back to defaults",
+            path, DEFAULT_CONFIG_PATH,
+        )
+        cfg = {}
+    except json.JSONDecodeError as e:
+        logger.warning("Config parse error at %s: %s, using defaults", path, e)
+        cfg = {}
     folder_template = cfg.get("folderTemplate", "{album_artist}/{album}")
     return {
-        "output_dir": cfg.get("downloadPath", "/home/espo/Music"),
+        "output_dir": cfg.get("downloadPath", os.path.expanduser("~/Music")),
         "filename_format": cfg.get("filenameTemplate", "{artist} - {title}"),
         "use_artist_subfolders": "{album_artist}" in folder_template,
         "use_album_subfolders": "{album}" in folder_template,
@@ -60,101 +78,7 @@ def _load_config() -> dict:
     }
 
 
-CFG = _load_config()
-
-OUTPUT_DIR = CFG["output_dir"]
-FILENAME_FORMAT = CFG["filename_format"]
-USE_ARTIST_SUBFOLDERS = CFG["use_artist_subfolders"]
-USE_ALBUM_SUBFOLDERS = CFG["use_album_subfolders"]
-FIRST_ARTIST_ONLY = CFG["first_artist_only"]
-EMBED_LYRICS = CFG["embed_lyrics"]
-QUALITY = CFG["quality"]
-
-SERVICES = ["qobuz", "tidal", "amazon"]
-MAX_CONCURRENT = 3
-CHECK_INTERVAL = 300
-PER_TRACK_TIMEOUT = 180
-MAX_RETRIES = 3
-
-_UNSAFE_FOLDER_RE = re.compile(r'[<>:"/\\|?*]')
-
-logger = logging.getLogger("spoty_loop")
-
-
-def _safe_folder(name: str) -> str:
-    return _UNSAFE_FOLDER_RE.sub("_", name.strip())
-
-
-def _get_first_artist(artists: str) -> str:
-    """Extract first artist, handling commas inside parentheses correctly."""
-    result = []
-    depth = 0
-    for ch in artists:
-        if ch == "(":
-            depth += 1
-            result.append(ch)
-        elif ch == ")":
-            depth -= 1
-            result.append(ch)
-        elif ch == "," and depth == 0:
-            break
-        else:
-            result.append(ch)
-    return "".join(result).strip()
-
-
-@lru_cache(maxsize=128)
-def _scan_dir(path: Path) -> tuple[str, ...]:
-    resolved = path.resolve()
-    if resolved.is_dir():
-        return tuple(f.stem.lower() for f in resolved.iterdir() if f.is_file())
-    return ()
-
-
-def track_file_exists(track: TrackMetadata) -> bool:
-    """Check if a track already exists on disk. Never returns a false negative."""
-    title = sanitize(track.title)
-    first_artist = _get_first_artist(track.artists) if FIRST_ARTIST_ONLY else track.artists
-    artist_name = sanitize(first_artist)
-    if not title or not artist_name:
-        return False
-
-    folder_artist = _safe_folder(first_artist)
-    folder_album = _safe_folder(track.album)
-    ext = ".flac"
-
-    expected_name = f"{artist_name} - {title}{ext}"
-
-    if USE_ARTIST_SUBFOLDERS and USE_ALBUM_SUBFOLDERS and folder_album:
-        album_dir = Path(OUTPUT_DIR) / folder_artist / folder_album
-        expected_path = album_dir / expected_name
-
-        if expected_path.exists():
-            return True
-
-        title_lower = title.lower()
-        for stem in _scan_dir(album_dir):
-            if title_lower in stem:
-                return True
-    elif USE_ARTIST_SUBFOLDERS:
-        artist_dir = Path(OUTPUT_DIR) / folder_artist
-        expected_path = artist_dir / expected_name
-        if expected_path.exists():
-            return True
-        title_lower = title.lower()
-        for stem in _scan_dir(artist_dir):
-            if title_lower in stem:
-                return True
-    else:
-        expected_path = Path(OUTPUT_DIR) / expected_name
-        if expected_path.exists():
-            return True
-
-    return False
-
-
-async def wait_for_providers():
-    logger.info("Health-checking providers every %ds...", CHECK_INTERVAL)
+async def wait_for_providers(logger: logging.Logger) -> list[str]:
     while True:
         try:
             results = await run_health_check(SERVICES)
@@ -164,149 +88,110 @@ async def wait_for_providers():
                 return working
         except Exception as e:
             logger.warning("Health check error: %s", e)
-
-        logger.info(
-            "All providers down. Next check in %ds...", CHECK_INTERVAL
-        )
-        await _heartbeat_sleep(CHECK_INTERVAL, "Waiting for providers")
+        logger.info("All providers down. Next check in %ds...", CHECK_INTERVAL)
+        await heartbeat_sleep(CHECK_INTERVAL, "Waiting for providers", logger)
 
 
-_stats: dict[str, int] = {"skipped": 0, "ok": 0, "failed": 0}
-_progress_total: int = 0
-_progress_done: int = 0
-_last_heartbeat: float = time.time()
-_in_progress: set[str] = set()
-_in_progress_lock = asyncio.Lock()
-
-
-async def _heartbeat_sleep(seconds: int, msg: str = "Waiting..."):
-    """Sleep for `seconds`, logging a heartbeat every 60s."""
-    global _last_heartbeat
-    for _ in range(seconds):
-        await asyncio.sleep(1)
-        now = time.time()
-        if now - _last_heartbeat >= 60:
+async def heartbeat_sleep(seconds: int, msg: str, logger: logging.Logger):
+    if seconds <= 60:
+        await asyncio.sleep(seconds)
+        return
+    logger.info("[heartbeat] %s (%ds)", msg, seconds)
+    while seconds > 0:
+        chunk = min(60, seconds)
+        await asyncio.sleep(chunk)
+        seconds -= chunk
+        if seconds > 0:
             logger.info("[heartbeat] %s (%ds left)", msg, seconds)
-            _last_heartbeat = now
-        seconds -= 1
 
 
 async def download_track_with_retry(
     client: AsyncSpotiFLAC,
     track: TrackMetadata,
     sem: asyncio.Semaphore,
+    state: RunState,
+    logger: logging.Logger,
 ):
-    global _progress_done
-    track_url = f"https://open.spotify.com/track/{track.id}"
-
     for attempt in range(1 + MAX_RETRIES):
         try:
             async with sem:
-                if track_file_exists(track):
-                    _stats["skipped"] += 1
-                    _progress_done += 1
+                if track.id in state.in_progress:
+                    state.skipped += 1
+                    state.done += 1
                     logger.info(
-                        "[%d/%d] SKIP %s — already on disk",
-                        _progress_done, _progress_total, track.title,
+                        "[%d/%d] SKIP %s — already downloading",
+                        state.done, state.total, track.title,
                     )
                     return
-                async with _in_progress_lock:
-                    if track.id in _in_progress:
-                        _stats["skipped"] += 1
-                        _progress_done += 1
-                        logger.info(
-                            "[%d/%d] SKIP %s — already downloading in another task",
-                            _progress_done, _progress_total, track.title,
-                        )
-                        return
-                    _in_progress.add(track.id)
+                state.in_progress.add(track.id)
                 try:
+                    url = f"https://open.spotify.com/track/{track.id}"
                     await asyncio.wait_for(
-                        client.download_track(track_url),
+                        client.download_track(url),
                         timeout=PER_TRACK_TIMEOUT,
                     )
                 finally:
-                    async with _in_progress_lock:
-                        _in_progress.discard(track.id)
-            _stats["ok"] += 1
-            _progress_done += 1
-            logger.info(
-                "[%d/%d] OK %s",
-                _progress_done, _progress_total, track.title,
-            )
+                    state.in_progress.discard(track.id)
+            state.ok += 1
+            state.done += 1
+            logger.info("[%d/%d] OK %s", state.done, state.total, track.title)
             return
         except asyncio.TimeoutError:
             logger.warning(
                 "TIMEOUT %s (attempt %d/%d)",
-                track.title,
-                attempt + 1,
-                1 + MAX_RETRIES,
+                track.title, attempt + 1, 1 + MAX_RETRIES,
             )
         except Exception as e:
             logger.warning(
                 "FAIL %s (attempt %d/%d): %s",
-                track.title,
-                attempt + 1,
-                1 + MAX_RETRIES,
-                e,
+                track.title, attempt + 1, 1 + MAX_RETRIES, e,
             )
         await asyncio.sleep(min(30, 2**attempt))
 
-    _stats["failed"] += 1
-    _progress_done += 1
-    logger.error(
-        "[%d/%d] GAVE UP %s after %d attempts",
-        _progress_done, _progress_total, track.title, 1 + MAX_RETRIES,
-    )
+    state.failed += 1
+    state.done += 1
+    logger.error("[%d/%d] GAVE UP %s", state.done, state.total, track.title)
 
 
-async def download_playlist(client: AsyncSpotiFLAC, url: str):
-    _stats.update(skipped=0, ok=0, failed=0)
+async def download_playlist(
+    client: AsyncSpotiFLAC,
+    url: str,
+    state: RunState,
+    logger: logging.Logger,
+):
     logger.info("Fetching playlist: %s", url)
     info, tracks = await client.get_playlist(url)
-    logger.info(
-        "Playlist '%s' — %d tracks", info.get("name", "?"), len(tracks)
-    )
+    logger.info("Playlist '%s' — %d tracks", info.get("name", "?"), len(tracks))
 
     seen_ids: set[str] = set()
-    unique_tracks: list[TrackMetadata] = []
+    unique: list[TrackMetadata] = []
     dup_counts: dict[str, int] = {}
     for t in tracks:
         if t.id in seen_ids:
             dup_counts[t.id] = dup_counts.get(t.id, 1) + 1
         else:
             seen_ids.add(t.id)
-            unique_tracks.append(t)
+            unique.append(t)
     if dup_counts:
-        dup_titles = {
-            t.title: c
-            for t in tracks
-            if (c := dup_counts.get(t.id))
-        }
-        logger.warning(
-            "Dropped %d duplicate track IDs from playlist",
-            len(tracks) - len(unique_tracks),
-        )
+        dup_titles = {t.title: c for t in tracks if (c := dup_counts.get(t.id))}
+        logger.warning("Dropped %d duplicate track IDs", len(tracks) - len(unique))
         lines = [f"  {title} x{count}" for title, count in dup_titles.items()]
-        joined = "\n".join(lines)
-        logger.warning("Duplicates:\n%s", joined)
+        logger.warning("Duplicates:\n%s", "\n".join(lines))
         dup_path = Path(__file__).parent / "duplicates.log"
         with open(dup_path, "w") as f:
-            f.write(joined + "\n")
-        logger.warning("Full list written to %s", dup_path)
-    global _progress_total, _progress_done
-    _progress_total = len(unique_tracks)
-    _progress_done = 0
-    logger.info("Unique tracks to process: %d", _progress_total)
+            f.write("\n".join(lines) + "\n")
+        logger.warning("Full list -> %s", dup_path)
+
+    state.total = len(unique)
+    logger.info("Unique tracks to process: %d", state.total)
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
-    tasks = [download_track_with_retry(client, t, sem) for t in unique_tracks]
+    tasks = [download_track_with_retry(client, t, sem, state, logger) for t in unique]
     await asyncio.gather(*tasks)
 
-    s = _stats
     logger.info(
         "SUMMARY — %d skipped, %d downloaded, %d failed",
-        s["skipped"], s["ok"], s["failed"],
+        state.skipped, state.ok, state.failed,
     )
 
 
@@ -321,12 +206,14 @@ async def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
-        handlers=[
-            logging.FileHandler(log_path),
-            logging.StreamHandler(),
-        ],
+        handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
     )
+    logger = logging.getLogger("spoty_loop")
     logger.info("Logging to %s", log_path)
+
+    bridge_community_session(logger)
+    cfg = load_config(logger)
+
     logging.getLogger("httpx").setLevel(logging.WARNING)
     for name in list(logging.root.manager.loggerDict):
         if name.startswith("SpotiFLAC"):
@@ -334,46 +221,45 @@ async def main():
 
     logger.info("SpotiLoop starting")
     logger.info("  Playlist: %s", url)
-    logger.info("  Output:   %s", OUTPUT_DIR)
+    logger.info("  Output:   %s", cfg["output_dir"])
     logger.info("  Services: %s", SERVICES)
     logger.info("  Max parallel: %d", MAX_CONCURRENT)
-    logger.info(
-        "  Health check interval: %ds (%.1f min)",
-        CHECK_INTERVAL,
-        CHECK_INTERVAL / 60,
-    )
 
     while True:
         try:
-            logger.info("--- Stage: waiting for providers ---")
-            working = await wait_for_providers()
-            logger.info("--- Stage: downloading playlist ---")
-            async with AsyncSpotiFLAC(
-                output_dir=OUTPUT_DIR,
-                services=working,
-                quality=QUALITY,
-                filename_format=FILENAME_FORMAT,
-                use_artist_subfolders=USE_ARTIST_SUBFOLDERS,
-                use_album_subfolders=USE_ALBUM_SUBFOLDERS,
-                first_artist_only=FIRST_ARTIST_ONLY,
-                embed_lyrics=EMBED_LYRICS,
-            ) as client:
-                await download_playlist(client, url)
-            s = _stats
-            if s["ok"] == 0:
-                logger.info(
-                    "All providers failed — going back to health check loop..."
-                )
-                await asyncio.sleep(5)
-                continue
-            logger.info("All tracks processed. Exiting.")
-            return
+            working = await wait_for_providers(logger)
+            while True:
+                state = RunState()
+                async with AsyncSpotiFLAC(
+                    output_dir=cfg["output_dir"],
+                    services=working,
+                    quality=cfg["quality"],
+                    filename_format=cfg["filename_format"],
+                    use_artist_subfolders=cfg["use_artist_subfolders"],
+                    use_album_subfolders=cfg["use_album_subfolders"],
+                    first_artist_only=cfg["first_artist_only"],
+                    embed_lyrics=cfg["embed_lyrics"],
+                    enrich_providers=["deezer", "apple", "tidal", "soundcloud"],
+                ) as client:
+                    await download_playlist(client, url, state, logger)
+
+                if state.failed == 0:
+                    logger.info("All tracks processed. Exiting.")
+                    return
+                if state.ok == 0:
+                    logger.warning(
+                        "All %d failed (server likely down). Waiting 5 min...",
+                        state.failed,
+                    )
+                    await heartbeat_sleep(300, "Waiting before retry", logger)
+                else:
+                    logger.warning(
+                        "%d failed. Retrying in 60s...", state.failed,
+                    )
+                    await heartbeat_sleep(60, "Waiting before retry", logger)
         except Exception as e:
-            logger.error(
-                "Session crashed: %s. Restarting in 30s...", e, exc_info=True
-            )
-            logger.info("Restarting in 30s...")
-            await _heartbeat_sleep(30, "Restarting after crash")
+            logger.error("Session crashed: %s", e, exc_info=True)
+            await heartbeat_sleep(30, "Restarting after crash", logger)
 
 
 if __name__ == "__main__":

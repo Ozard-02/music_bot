@@ -1,0 +1,8 @@
+{
+  "downloadPath": "/home/espo/Music",
+  "filenameTemplate": "{artist} - {title}",
+  "folderTemplate": "{album_artist}/{album}",
+  "useFirstArtistOnly": true,
+  "embedLyrics": true,
+  "tidalQuality": "LOSSLESS"
+}
