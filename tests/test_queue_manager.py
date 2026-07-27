@@ -222,20 +222,22 @@ class TestQueueManager:
         qm.enqueue("link", "url-a")
         assert qm.find_existing("link", "url-b") is None
 
-    def test_purge_queued_removes_only_queued(self, queue_manager: QueueManager):
+    def test_purge_all_removes_everything(self, queue_manager: QueueManager):
         qm = queue_manager
         qm.enqueue("link", "a")
         item = qm.dequeue()
         qm.mark_done(item["id"], 1, 0, 0)
         qm.enqueue("link", "b")
-        count = qm.purge_queued()
-        assert count == 1
+        count = qm.purge_all()
+        assert count == 2
         s = qm.get_status()
         assert s["queued"] == 0
-        assert s["done"] == 1
+        assert s["done"] == 0
+        assert s["running"] == 0
+        assert s["failed"] == 0
 
-    def test_purge_queued_zero_when_empty(self, queue_manager: QueueManager):
-        assert queue_manager.purge_queued() == 0
+    def test_purge_all_zero_when_empty(self, queue_manager: QueueManager):
+        assert queue_manager.purge_all() == 0
 
     def test_restart_resets_running_to_queued(self, tmp_path):
         """Simulate bot restart — stranded 'running' items become 'queued'."""

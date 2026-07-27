@@ -193,13 +193,13 @@ class TestHandleMessage:
 
 class TestPurgeCmd:
     @pytest.mark.asyncio
-    async def test_purges_queued_items(self):
+    async def test_purges_all_items(self):
         qm = MagicMock()
-        qm.purge_queued.return_value = 3
+        qm.purge_all.return_value = 3
         update = _make_update(text="/purge")
         context = _make_context(qm=qm)
         await purge_cmd(update, context)
-        qm.purge_queued.assert_called_once()
+        qm.purge_all.assert_called_once()
         update.message.reply_html.assert_awaited_once()
         text = update.message.reply_html.call_args[0][0]
         assert "Purged" in text
@@ -209,7 +209,7 @@ class TestPurgeCmd:
     @pytest.mark.asyncio
     async def test_purge_singular(self):
         qm = MagicMock()
-        qm.purge_queued.return_value = 1
+        qm.purge_all.return_value = 1
         update = _make_update()
         context = _make_context(qm=qm)
         await purge_cmd(update, context)

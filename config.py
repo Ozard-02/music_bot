@@ -7,17 +7,13 @@ from pathlib import Path
 
 
 # Download engine
-SERVICES = ["qobuz", "tidal", "amazon"]
+SERVICES = ["qobuz", "amazon"]
 MAX_CONCURRENT = 3
 PER_TRACK_TIMEOUT = 180
 PER_TRACK_RETRIES = 3
-MAX_RETRY_DURATION = 86400  # 24h
-CHECK_INTERVAL = 300
 
 # Queue
 MAX_QUEUE_RETRIES = 50
-
-DEFAULT_CONFIG_PATH = Path(__file__).parent / "config.default.json"
 
 
 def load_config(logger: logging.Logger) -> dict:
@@ -26,10 +22,7 @@ def load_config(logger: logging.Logger) -> dict:
         with open(path) as f:
             cfg = json.load(f)
     except FileNotFoundError:
-        logger.warning(
-            "Config not found at %s — see %s for reference, falling back to defaults",
-            path, DEFAULT_CONFIG_PATH,
-        )
+        logger.warning("Config not found at %s, using defaults", path)
         cfg = {}
     except json.JSONDecodeError as e:
         logger.warning("Config parse error at %s: %s, using defaults", path, e)

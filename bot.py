@@ -119,8 +119,8 @@ async def mkplaylist_cmd(update: Update, context):
 @require_auth
 async def purge_cmd(update: Update, context):
     qm: QueueManager = context.application.bot_data["queue_manager"]
-    count = await asyncio.to_thread(qm.purge_queued)
-    await update.message.reply_html(f"🗑️ <b>Purged {count} queued item{'s' if count != 1 else ''}</b>")
+    count = await asyncio.to_thread(qm.purge_all)
+    await update.message.reply_html(f"🗑️ <b>Purged {count} item{'s' if count != 1 else ''}</b>")
 
 
 @require_auth
