@@ -52,7 +52,9 @@
 - [x] **`downloader.py`** — extracted `run_url(url) -> dict{ok, skipped, failed, failed_tracks}`
   - [x] Handles tracks, albums, playlists
   - [x] `_download_once` takes optional `services` param; CLI retry loop passes `wait_for_providers()` result (only healthy providers used)
-  - [x] `RunState.failed_tracks` list captures per-track (id, title, error) on GAVE UP
+  - [x] Uses `client.download_track(url)` directly for all URL types (tracks, albums, playlists) — SpotiFLAC handles collection downloads internally with `is_album=True`, avoiding per-track re-resolution that caused wrong tracks
+  - [x] Removed `download_single_track`, `download_collection`, `_download_track_with_retry` — SpotiFLAC internal retry/timeout/parallelism used instead
+  - [x] Passes `track_max_retries`, `timeout_s`, `max_concurrent_downloads` to `AsyncSpotiFLAC`
   - [x] Standalone `main()` still works for CLI use
 
 ## Docker

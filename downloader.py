@@ -10,24 +10,12 @@ import asyncio
 import logging
 import sys
 import time
-from dataclasses import dataclass, field
 
 from config import (
     SERVICES, MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
     MAX_RETRY_DURATION, CHECK_INTERVAL,
     load_config, setup_logger, bridge_community_session,
 )
-
-
-@dataclass
-class RunState:
-    skipped: int = 0
-    ok: int = 0
-    failed: int = 0
-    total: int = 0
-    done: int = 0
-    in_progress: set = field(default_factory=set)
-    failed_tracks: list = field(default_factory=list)
 
 
 async def wait_for_providers(logger: logging.Logger) -> list[str]:
@@ -49,108 +37,6 @@ async def heartbeat_sleep(seconds: int, msg: str, logger: logging.Logger):
     await asyncio.sleep(seconds)
 
 
-async def download_single_track(
-    client: AsyncSpotiFLAC,
-    url: str,
-    state: RunState,
-    logger: logging.Logger,
-):
-    state.total = 1
-    try:
-        track = await client.get_track_metadata(url)
-    except Exception as e:
-        logger.error("Failed to get track metadata: %s", e)
-        state.failed += 1
-        state.done += 1
-        return
-
-    sem = asyncio.Semaphore(1)
-    await _download_track_with_retry(client, track, sem, state, logger)
-
-
-async def download_collection(
-    client: AsyncSpotiFLAC,
-    url: str,
-    state: RunState,
-    logger: logging.Logger,
-):
-    logger.info("Fetching: %s", url)
-    info, tracks = await client.get_playlist(url)
-    logger.info("Collection '%s' — %d tracks", info.get("name", "?"), len(tracks))
-
-    seen_ids: set[str] = set()
-    unique: list[TrackMetadata] = []
-    dup_counts: dict[str, int] = {}
-    for t in tracks:
-        if t.id in seen_ids:
-            dup_counts[t.id] = dup_counts.get(t.id, 1) + 1
-        else:
-            seen_ids.add(t.id)
-            unique.append(t)
-    if dup_counts:
-        logger.warning("Dropped %d duplicate track IDs — %d unique remain",
-                       len(tracks) - len(unique), len(unique))
-
-    state.total = len(unique)
-    logger.info("Unique tracks to process: %d", state.total)
-
-    sem = asyncio.Semaphore(MAX_CONCURRENT)
-    tasks = [_download_track_with_retry(client, t, sem, state, logger) for t in unique]
-    await asyncio.gather(*tasks)
-
-
-async def _download_track_with_retry(
-    client: AsyncSpotiFLAC,
-    track: TrackMetadata,
-    sem: asyncio.Semaphore,
-    state: RunState,
-    logger: logging.Logger,
-):
-    last_error: str | None = None
-    for attempt in range(1 + PER_TRACK_RETRIES):
-        try:
-            async with sem:
-                if track.id in state.in_progress:
-                    state.skipped += 1
-                    state.done += 1
-                    logger.info(
-                        "[%d/%d] SKIP %s — already downloading",
-                        state.done, state.total, track.title,
-                    )
-                    return
-                state.in_progress.add(track.id)
-                try:
-                    url = f"https://open.spotify.com/track/{track.id}"
-                    await asyncio.wait_for(
-                        client.download_track(url),
-                        timeout=PER_TRACK_TIMEOUT,
-                    )
-                finally:
-                    state.in_progress.discard(track.id)
-            state.ok += 1
-            state.done += 1
-            logger.info("[%d/%d] OK %s", state.done, state.total, track.title)
-            return
-        except asyncio.TimeoutError:
-            last_error = "Timeout"
-            logger.warning(
-                "TIMEOUT %s (attempt %d/%d)",
-                track.title, attempt + 1, 1 + PER_TRACK_RETRIES,
-            )
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(
-                "FAIL %s (attempt %d/%d): %s",
-                track.title, attempt + 1, 1 + PER_TRACK_RETRIES, e,
-            )
-        await asyncio.sleep(min(30, 2**attempt))
-
-    state.failed += 1
-    state.done += 1
-    state.failed_tracks.append((track.id, track.title, last_error or "Unknown"))
-    logger.error("[%d/%d] GAVE UP %s", state.done, state.total, track.title)
-
-
 async def _download_once(url: str, cfg: dict, logger: logging.Logger, services: list[str] | None = None) -> dict:
     """One download pass — single attempt, no retry loop."""
     if services is None:
@@ -158,7 +44,6 @@ async def _download_once(url: str, cfg: dict, logger: logging.Logger, services: 
     from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
-    state = RunState()
     async with AsyncSpotiFLAC(
         output_dir=cfg["output_dir"],
         services=services,
@@ -169,21 +54,36 @@ async def _download_once(url: str, cfg: dict, logger: logging.Logger, services: 
         first_artist_only=cfg["first_artist_only"],
         embed_lyrics=cfg["embed_lyrics"],
         enrich_providers=["deezer", "apple", "tidal", "soundcloud"],
+        track_max_retries=PER_TRACK_RETRIES,
+        timeout_s=PER_TRACK_TIMEOUT,
+        max_concurrent_downloads=MAX_CONCURRENT,
     ) as client:
         parsed = parse_spotify_url(url)
-        if parsed["type"] == "track":
-            await download_single_track(client, url, state, logger)
-        else:
-            await download_collection(client, url, state, logger)
-    logger.info(
-        "PASS — %d skipped, %d ok, %d failed",
-        state.skipped, state.ok, state.failed,
-    )
+
+        total = 0
+        if parsed["type"] != "track":
+            info, tracks = await client.get_playlist(url)
+            seen = set()
+            unique = [t for t in tracks if not (t.id in seen or seen.add(t.id))]
+            total = len(unique)
+            logger.info("Collection '%s' — %d tracks (%d unique)",
+                        info.get("name", "?"), len(tracks), total)
+
+        try:
+            failed_list = await client.download_track(url)
+        except Exception as e:
+            logger.error("Download failed: %s", e)
+            return {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": []}
+
+        failed = len(failed_list)
+        ok = (total or 1) - failed
+
+    logger.info("PASS — %d ok, %d failed", ok, failed)
     return {
-        "ok": state.ok,
-        "skipped": state.skipped,
-        "failed": state.failed,
-        "failed_tracks": state.failed_tracks,
+        "ok": ok,
+        "skipped": 0,
+        "failed": failed,
+        "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
     }
 
 

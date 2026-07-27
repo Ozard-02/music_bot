@@ -85,6 +85,7 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 26. **M3U8 dedup** — `build_m3u8_lines()` deduplicates by `track.id` to match downloader behavior.
 27. **use healthy providers** — `wait_for_providers()` result now passed to `_download_once()` as `services=` param, instead of hardcoded `SERVICES`. Dead Tidal v1 no longer polled on every track.
 28. **stranded running items** — `_init_db()` resets `running` → `queued` on startup so items in-flight during a kill are recovered on restart.
+29. **album download fix** — `client.download_track(url)` now used directly for albums/playlists, not per-track `download_track`. SpotiFLAC handles collection with `is_album=True`, preventing providers from re-resolving individual tracks and returning wrong matches.
 
 ## Remaining
 
