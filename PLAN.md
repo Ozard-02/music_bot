@@ -83,6 +83,8 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 24. **Duplicate prevention** — `queue_manager.find_existing()` checks for active jobs with same input before enqueueing. Bot warns "Already queued as #N".
 25. **`/purge` command** — `queue_manager.purge_queued()` deletes all queued items. Bot confirms count.
 26. **M3U8 dedup** — `build_m3u8_lines()` deduplicates by `track.id` to match downloader behavior.
+27. **use healthy providers** — `wait_for_providers()` result now passed to `_download_once()` as `services=` param, instead of hardcoded `SERVICES`. Dead Tidal v1 no longer polled on every track.
+28. **stranded running items** — `_init_db()` resets `running` → `queued` on startup so items in-flight during a kill are recovered on restart.
 
 ## Remaining
 

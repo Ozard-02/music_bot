@@ -237,6 +237,25 @@ class TestQueueManager:
     def test_purge_queued_zero_when_empty(self, queue_manager: QueueManager):
         assert queue_manager.purge_queued() == 0
 
+    def test_restart_resets_running_to_queued(self, tmp_path):
+        """Simulate bot restart — stranded 'running' items become 'queued'."""
+        db = str(tmp_path / "test_restart.db")
+        qm1 = QueueManager(db)
+        qm1.enqueue("link", "url1")
+        qm1.enqueue("link", "url2")
+        item = qm1.dequeue()  # url1 becomes running
+        assert qm1.get_status()["running"] == 1
+        del qm1  # simulate kill — no explicit close
+
+        qm2 = QueueManager(db)  # simulate restart
+        s = qm2.get_status()
+        assert s["running"] == 0
+        assert s["queued"] == 2
+        restarted = qm2.dequeue()
+        assert restarted is not None
+        assert restarted["query"] == "url1"
+        assert restarted["started_at"] is not None  # fresh timestamp
+
     def test_concurrent_enqueue(self, queue_manager: QueueManager):
         qm = queue_manager
         errors = []
