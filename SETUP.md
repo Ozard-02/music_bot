@@ -24,7 +24,7 @@ Existing files are detected by SpotiFLAC's internal `_file_exists()` — no re-d
 ## Usage
 
 ```bash
-cd /home/espo/spoty_loop
+cd spoty_loop
 ./downloader.py "https://open.spotify.com/playlist/..."
 ```
 

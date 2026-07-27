@@ -34,7 +34,7 @@
   - [ ] Copy `spoty_loop/` into container
   - [ ] CMD: run `bot.py`
 - [ ] **`docker-compose.yml`** — single service
-  - [ ] Mount `~/Music:/home/espo/Music`
+  - [ ] Mount `~/Music:~/Music`
   - [ ] Mount `~/.spotiflac:/root/.spotiflac`
   - [ ] Env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`
 - [ ] **`requirements.txt`** — add `python-telegram-bot`, `aiofiles`
