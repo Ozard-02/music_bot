@@ -24,7 +24,8 @@ main()
 │           some failed → 60s wait
 │        on crash → 30s → restart outer loop
 ├─ spoty_loop.log: full log
-└─ duplicates.log: repeated track IDs per run
+├─ duplicates.log: repeated track IDs per run
+└─ config.default.json: reference config (6 keys we use, not copied)
 ```
 
 ## SpotiFLAC patch
