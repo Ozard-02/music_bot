@@ -151,15 +151,17 @@ async def _download_track_with_retry(
     logger.error("[%d/%d] GAVE UP %s", state.done, state.total, track.title)
 
 
-async def _download_once(url: str, cfg: dict, logger: logging.Logger) -> dict:
+async def _download_once(url: str, cfg: dict, logger: logging.Logger, services: list[str] | None = None) -> dict:
     """One download pass — single attempt, no retry loop."""
+    if services is None:
+        services = SERVICES
     from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
     state = RunState()
     async with AsyncSpotiFLAC(
         output_dir=cfg["output_dir"],
-        services=SERVICES,
+        services=services,
         quality=cfg["quality"],
         filename_format=cfg["filename_format"],
         use_artist_subfolders=cfg["use_artist_subfolders"],
@@ -192,7 +194,7 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger, single_pass: bool
     single_pass=False — full retry loop (24h cap). Use for standalone CLI.
     """
     if single_pass:
-        return await _download_once(url, cfg, logger)
+        return await _download_once(url, cfg, logger, services=SERVICES)
 
     deadline = time.monotonic() + MAX_RETRY_DURATION
 
@@ -202,7 +204,7 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger, single_pass: bool
     while True:
         try:
             working = await wait_for_providers(logger)
-            result = await _download_once(url, cfg, logger)
+            result = await _download_once(url, cfg, logger, services=working)
             if result["failed"] == 0:
                 return result
             if _past():

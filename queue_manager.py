@@ -56,6 +56,10 @@ class QueueManager:
                 CREATE INDEX IF NOT EXISTS idx_failed_tracks_item
                 ON failed_tracks(item_id)
             """)
+            # Reset items stranded in 'running' from a killed process
+            conn.execute(
+                "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
+            )
 
     def enqueue(self, input_type: str, query: str) -> int:
         with self._lock:

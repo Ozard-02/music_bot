@@ -20,7 +20,7 @@
 - [x] **`queue_manager.py`** — SQLite persistence
   - [x] `queue` table: id, input_type, query, status, timestamps, result counts, error
   - [x] `failed_tracks` table: per-track failure logging with FK → queue
-  - [x] Survives restarts
+  - [x] Survives restarts: `_init_db()` resets stranded `running` items → `queued` on startup
   - [x] Methods: `enqueue()`, `find_existing()`, `dequeue()`, `requeue()`, `mark_done()`, `mark_failed()`, `purge_queued()`, `log_failed_track()`, `get_failed_tracks()`, `get_status()`, `get_history()`
 
 ### Worker
@@ -51,7 +51,7 @@
 ### Refactor
 - [x] **`downloader.py`** — extracted `run_url(url) -> dict{ok, skipped, failed, failed_tracks}`
   - [x] Handles tracks, albums, playlists
-  - [x] `_download_once` does single health check (no blocking); CLI retry loop calls `wait_for_providers()`
+  - [x] `_download_once` takes optional `services` param; CLI retry loop passes `wait_for_providers()` result (only healthy providers used)
   - [x] `RunState.failed_tracks` list captures per-track (id, title, error) on GAVE UP
   - [x] Standalone `main()` still works for CLI use
 
