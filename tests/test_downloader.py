@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from downloader import _download_once
+from downloader import run_url
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ class TestDownloadOnce:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await _download_once("https://spotify.com/track/abc123", config, logger)
+            result = await run_url("https://spotify.com/track/abc123", config, logger)
 
             assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": []}
             client.download_track.assert_awaited_once_with("https://spotify.com/track/abc123")
@@ -66,7 +66,7 @@ class TestDownloadOnce:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await _download_once("https://spotify.com/track/abc123", config, logger)
+            result = await run_url("https://spotify.com/track/abc123", config, logger)
 
             assert result["ok"] == 0
             assert result["failed"] == 1
@@ -85,7 +85,7 @@ class TestDownloadOnce:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await _download_once("https://spotify.com/album/alb123", config, logger)
+            result = await run_url("https://spotify.com/album/alb123", config, logger)
 
             assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": []}
             client.get_playlist.assert_awaited_once()
@@ -104,7 +104,7 @@ class TestDownloadOnce:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await _download_once("https://spotify.com/album/alb123", config, logger)
+            result = await run_url("https://spotify.com/album/alb123", config, logger)
 
             assert result["ok"] == 1
             assert result["failed"] == 1
@@ -120,7 +120,7 @@ class TestDownloadOnce:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await _download_once("https://spotify.com/track/abc123", config, logger)
+            result = await run_url("https://spotify.com/track/abc123", config, logger)
 
             assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": []}
 
@@ -141,7 +141,7 @@ class TestDownloadOnce:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await _download_once("https://spotify.com/album/alb123", config, logger)
+            result = await run_url("https://spotify.com/album/alb123", config, logger)
 
             assert result["ok"] == 2  # unique count, not raw count
             assert result["failed"] == 0

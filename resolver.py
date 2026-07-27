@@ -35,7 +35,7 @@ def format_help() -> str:
         "Use a dash with spaces ( \u2014 ) between the two parts.\n\n"
         "<b>Commands:</b>\n"
         "/status \u2014 queue status and recent items\n"
-        "/purge \u2014 remove all queued items\n"
+        "/purge \u2014 remove all items\n"
         "/mkplaylist &lt;url&gt; [name] \u2014 build .m3u8 from playlist"
     )
 

@@ -70,7 +70,7 @@ QueueManager(db_path)
   requeue(id)                               # increment retries, set 'queued'
   mark_done(id, ok, skipped, failed)
   mark_failed(id, error)
-  purge_queued() → count                    # DELETE all queued
+  purge_all() → count                       # DELETE all rows
   log_failed_track(item_id, title, error)   # per-track failures
   get_failed_tracks(item_id=None, limit=50)
   get_status() → {queued, running, done, failed, next_id}

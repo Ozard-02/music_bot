@@ -61,7 +61,7 @@ class Worker:
 
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
-                None, run_url_sync, url, self._cfg, self._logger, True,
+                None, run_url_sync, url, self._cfg, self._logger,
             )
 
             if result["failed"] > 0:

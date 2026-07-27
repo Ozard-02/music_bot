@@ -173,11 +173,11 @@ class QueueManager:
         row = cursor.fetchone()
         return row["id"] if row else None
 
-    def purge_queued(self) -> int:
+    def purge_all(self) -> int:
         with self._lock:
             conn = self._connect()
             with conn:
-                cursor = conn.execute("DELETE FROM queue WHERE status='queued'")
+                cursor = conn.execute("DELETE FROM queue")
                 return cursor.rowcount
 
     def get_history(self, limit: int = 10) -> list[dict]:
