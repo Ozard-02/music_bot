@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from telegram import Bot
 
-from config import MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
+from config import MAX_PARALLEL_JOBS, MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
 from queue_manager import QueueManager
 from resolver import resolve_search
 from downloader import run_url_sync
@@ -24,6 +24,7 @@ class Worker:
         cfg: dict,
         logger: logging.Logger,
         wake_event: asyncio.Event,
+        max_parallel: int = MAX_PARALLEL_JOBS,
     ):
         self._queue = queue
         self._bot = bot
@@ -32,15 +33,18 @@ class Worker:
         self._logger = logger
         self._wake_event = wake_event
         self._poll = 5
+        self._sem = asyncio.Semaphore(max_parallel)
+        self._tasks: set[asyncio.Task] = set()
 
     async def run(self):
-        self._logger.info("Worker started")
+        self._logger.info("Worker started (max_parallel=%d)", self._sem._value)
         while True:
             try:
                 item = await asyncio.to_thread(self._queue.dequeue)
                 if item:
                     self._poll = 5
-                    await self._process(item)
+                    await self._sem.acquire()
+                    asyncio.create_task(self._run_with_sem(item))
                 else:
                     self._poll = min(300, self._poll * 2)
             except Exception as e:
@@ -53,6 +57,22 @@ class Worker:
                 pass
             else:
                 self._wake_event.clear()
+
+    async def _run_with_sem(self, item: dict):
+        task = asyncio.current_task()
+        self._tasks.add(task)
+        try:
+            await self._process(item)
+        finally:
+            self._tasks.discard(task)
+            self._sem.release()
+            self._wake_event.set()
+
+    async def shutdown(self):
+        for t in list(self._tasks):
+            t.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
 
     async def _process(self, item: dict):
         self._logger.info("Processing #%d: %s", item["id"], item["query"])
