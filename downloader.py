@@ -65,7 +65,11 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger):
 
 async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logger) -> dict:
     seen = set()
-    unique = [t for t in tracks if not (t.id in seen or seen.add(t.id))]
+    unique = []
+    for t in tracks:
+        if t.id not in seen:
+            seen.add(t.id)
+            unique.append(t)
     total = len(unique)
 
     existing = []

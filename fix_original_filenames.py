@@ -12,40 +12,18 @@ Usage:
     python fix_original_filenames.py --dry-run  # preview only
 """
 
-import json
 import logging
 import os
-import re
 import sys
 from pathlib import Path
 
 from mutagen.flac import FLAC
 
+from config import load_config
+from m3u8 import sanitize
+
 MUSIC_DIR = os.path.expanduser("~/Music")
 log = logging.getLogger("fix_original_filenames")
-
-
-def load_cfg() -> dict:
-    path = os.path.expanduser("~/.spotiflac/config.json")
-    try:
-        with open(path) as f:
-            cfg = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        cfg = {}
-    folder_template = cfg.get("folderTemplate", "{album_artist}/{album}")
-    return {
-        "output_dir": cfg.get("downloadPath", MUSIC_DIR),
-        "filename_format": cfg.get("filenameTemplate", "{artist} - {title}"),
-        "first_artist_only": cfg.get("useFirstArtistOnly", True),
-    }
-
-
-def sanitize(text: str, fallback: str = "Unknown") -> str:
-    if not text:
-        return fallback
-    cleaned = re.sub(r"/", "\u2215", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned or fallback
 
 
 def target_rel_path(audio: FLAC, cfg: dict) -> str | None:
@@ -68,7 +46,7 @@ def target_rel_path(audio: FLAC, cfg: dict) -> str | None:
 
 def main(dry_run: bool = False):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    cfg = load_cfg()
+    cfg = load_config(log)
     log.info("Config: output_dir=%s, filename_format=%s, first_artist_only=%s",
              cfg["output_dir"], cfg["filename_format"], cfg["first_artist_only"])
 
