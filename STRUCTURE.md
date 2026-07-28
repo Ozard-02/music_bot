@@ -25,12 +25,15 @@ run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry po
 │  ├─ if path exists → early return {ok=0, skipped=1}
 │  └─ else → client.download_track(url)
 └─ if "album"|"playlist":
-   ├─ get_playlist(url) → info + tracks
+   ├─ get_playlist(url) → (info, tracks)  (info ignored for collection downloads)
    ├─ dedup by track.id
-   ├─ pre-check: construct path for each track → split into existing/missing
+   ├─ pre-check: construct path for each track via track_relative_path()
+   │  → split into existing/missing
    ├─ if all exist → early return {ok=0, skipped=N}
    ├─ log "Pre-check: N/M exist (X new)"
-   └─ client._downloader._run_once_async(url, target_tracks=missing)
+   └─ download each missing track in parallel:
+      asyncio.gather(*[download_track(t.external_url) for t in missing])
+      with asyncio.Semaphore(MAX_CONCURRENT) limiting concurrency
 
 run_url_sync(url, cfg, logger) → dict   # sync wrapper (asyncio.run)
 ```

@@ -29,6 +29,7 @@ def _mock_track(track_id: str, title: str, **kwargs):
     t = MagicMock()
     t.id = track_id
     t.title = title
+    t.external_url = f"https://open.spotify.com/track/{track_id}"
     t.first_artist = kwargs.get("first_artist", "Artist")
     t.artists = kwargs.get("artists", "Artist")
     t.album_artist = kwargs.get("album_artist", "AlbumArtist")
@@ -184,7 +185,9 @@ class TestRunUrl:
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
         assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": []}
-        client.download_track.assert_awaited_once_with(self.ALBUM_URL)
+        assert client.download_track.await_count == 2
+        client.download_track.assert_any_call(t1.external_url)
+        client.download_track.assert_any_call(t2.external_url)
 
     @pytest.mark.asyncio
     async def test_album_partial_exist(self, tmp_path):
@@ -225,7 +228,8 @@ class TestRunUrl:
         assert result["ok"] == 1
         assert result["skipped"] == 1
         assert result["failed"] == 0
-        client.download_track.assert_awaited_once()
+        assert client.download_track.await_count == 1
+        client.download_track.assert_any_call(t2.external_url)
 
     @pytest.mark.asyncio
     async def test_album_partial_failure(self, config, logger):
@@ -239,8 +243,8 @@ class TestRunUrl:
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
                 playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
-                download_return=failed,
             )
+            client.download_track = AsyncMock(side_effect=[[], failed])
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
@@ -290,4 +294,6 @@ class TestRunUrl:
 
         assert result["ok"] == 2
         assert result["failed"] == 0
-        client.download_track.assert_awaited_once()
+        assert client.download_track.await_count == 2
+        client.download_track.assert_any_call(t1.external_url)
+        client.download_track.assert_any_call(t2.external_url)
