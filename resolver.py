@@ -59,19 +59,23 @@ async def resolve_search(
     best_album = _best_album_match(albums, a)
 
     if best_track and best_album:
-        track_album = getattr(best_track, "album", "")
-        if b.lower() == track_album.lower():
-            return (best_track.external_url, best_track.title, "track")
-        album_artist = best_album.get("artists", "")
-        if a.lower() in album_artist.lower():
-            return (best_album["external_url"], best_album["name"], "album")
+        return _pick_between_track_and_album(best_track, best_album, b, a)
+    if best_track:
         return (best_track.external_url, best_track.title, "track")
-    elif best_track:
-        return (best_track.external_url, best_track.title, "track")
-    elif best_album:
+    if best_album:
         return (best_album["external_url"], best_album["name"], "album")
-    else:
-        raise ValueError(f"No results found for '{query}'")
+    raise ValueError(f"No results found for '{query}'")
+
+
+def _pick_between_track_and_album(track, album, second_part: str, first_part: str) -> tuple[str, str, str]:
+    """Both a track and an album matched — decide which the user meant."""
+    track_album = getattr(track, "album", "") or ""
+    if second_part.lower() == track_album.lower():
+        return (track.external_url, track.title, "track")
+    album_artist = album.get("artists", "") or ""
+    if first_part.lower() in album_artist.lower():
+        return (album["external_url"], album["name"], "album")
+    return (track.external_url, track.title, "track")
 
 
 def _best_track_match(tracks: list, artist_hint: str):

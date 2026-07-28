@@ -12,8 +12,10 @@ from m3u8 import track_relative_path
 
 
 async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
-    from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
+    from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+
+    parsed = parse_spotify_url(url)
 
     async with AsyncSpotiFLAC(
         output_dir=cfg["output_dir"],
@@ -29,71 +31,82 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
         timeout_s=PER_TRACK_TIMEOUT,
         max_concurrent_downloads=MAX_CONCURRENT,
     ) as client:
-        parsed = parse_spotify_url(url)
-        is_single = parsed["type"] == "track"
+        if parsed["type"] == "track":
+            return await _run_single(client, url, cfg, logger)
+        return await _run_collection(client, url, cfg, logger)
 
-        existing_count = 0
-        total = 0
-        missing_tracks: list[TrackMetadata] | None = None
 
-        if is_single:
-            track = await client.get_track_metadata(url)
-            rel = track_relative_path(track, cfg)
-            full = Path(cfg["output_dir"]) / rel
-            if full.exists():
-                logger.info("Pre-check: %s exists — skipping", rel)
-                return {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": []}
-            total = 1
-            missing_tracks = [track]
+async def _run_single(client, url: str, cfg: dict, logger: logging.Logger) -> dict:
+    from SpotiFLAC import TrackMetadata
+
+    track = await client.get_track_metadata(url)
+    rel = track_relative_path(track, cfg)
+    full = Path(cfg["output_dir"]) / rel
+    if full.exists():
+        logger.info("Pre-check: %s exists — skipping", rel)
+        return {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": []}
+
+    try:
+        failed_list = await client.download_track(url)
+    except Exception as e:
+        logger.error("Download failed: %s", e)
+        return {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": []}
+
+    failed = len(failed_list)
+    ok = 1 - failed
+    logger.info("PASS — %d ok, 0 skipped, %d failed", ok, failed)
+    return {
+        "ok": ok,
+        "skipped": 0,
+        "failed": failed,
+        "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
+    }
+
+
+async def _run_collection(client, url: str, cfg: dict, logger: logging.Logger) -> dict:
+    from SpotiFLAC import TrackMetadata
+
+    info, tracks = await client.get_playlist(url)
+    seen = set()
+    unique = [t for t in tracks if not (t.id in seen or seen.add(t.id))]
+    total = len(unique)
+
+    existing: list[TrackMetadata] = []
+    missing: list[TrackMetadata] = []
+    for t in unique:
+        rel = track_relative_path(t, cfg)
+        full = Path(cfg["output_dir"]) / rel
+        if full.exists():
+            existing.append(t)
         else:
-            info, tracks = await client.get_playlist(url)
-            seen = set()
-            unique = [t for t in tracks if not (t.id in seen or seen.add(t.id))]
-            total = len(unique)
+            missing.append(t)
 
-            existing: list[TrackMetadata] = []
-            missing: list[TrackMetadata] = []
-            for t in unique:
-                rel = track_relative_path(t, cfg)
-                full = Path(cfg["output_dir"]) / rel
-                if full.exists():
-                    existing.append(t)
-                else:
-                    missing.append(t)
+    existing_count = len(existing)
+    logger.info(
+        "Pre-check: %d/%d tracks exist on disk (%d new)",
+        existing_count, total, len(missing),
+    )
 
-            existing_count = len(existing)
-            logger.info(
-                "Pre-check: %d/%d tracks exist on disk (%d new)",
-                existing_count, total, len(missing),
-            )
+    if not missing:
+        logger.info("All %d tracks already on disk — nothing to do", total)
+        return {"ok": 0, "skipped": total, "failed": 0, "failed_tracks": []}
 
-            if not missing:
-                logger.info("All %d tracks already on disk — nothing to do", total)
-                return {"ok": 0, "skipped": total, "failed": 0, "failed_tracks": []}
+    try:
+        failed_list = await client._downloader._run_once_async(
+            url, target_tracks=missing,
+        )
+    except Exception as e:
+        logger.error("Download failed: %s", e)
+        return {
+            "ok": 0,
+            "skipped": existing_count,
+            "failed": len(missing),
+            "failed_tracks": [],
+        }
 
-            missing_tracks = missing
-
-        try:
-            if is_single:
-                failed_list = await client.download_track(url)
-            else:
-                failed_list = await client._downloader._run_once_async(
-                    url, target_tracks=missing_tracks,
-                )
-        except Exception as e:
-            logger.error("Download failed: %s", e)
-            return {
-                "ok": 0,
-                "skipped": existing_count,
-                "failed": len(missing_tracks) if missing_tracks else 1,
-                "failed_tracks": [],
-            }
-
-        failed = len(failed_list)
-        downloaded = len(missing_tracks) - failed
-        ok = downloaded
-        skipped = existing_count
-
+    failed = len(failed_list)
+    ok = len(missing) - failed
+    skipped = existing_count
     logger.info("PASS — %d ok, %d skipped, %d failed", ok, skipped, failed)
     return {
         "ok": ok,
