@@ -79,7 +79,9 @@ def write_m3u8(name: str, lines: list[str], cfg: dict):
 def write_missing_log(name: str, missing: list, cfg: dict) -> Path | None:
     if not missing:
         return None
-    out = Path(cfg["output_dir"]) / f"{sanitize_filename(name)}_missing.txt"
+    temp_dir = Path(cfg["output_dir"]) / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    out = temp_dir / f"{sanitize_filename(name)}_missing.txt"
     lines = [f"Missing ({len(missing)}):"]
     for artist, title, rel in missing:
         lines.append(f"  \u2022 {artist} - {title} \u2192 {rel}")

@@ -38,7 +38,7 @@ def _mock_track(track_id: str, title: str, **kwargs):
 
 
 def _make_client(track_return=None, playlist_return=None,
-                 download_return=None, downloader_return=None):
+                 download_return=None):
     client = AsyncMock()
     if track_return is not None:
         client.get_track_metadata = AsyncMock(return_value=track_return)
@@ -47,9 +47,6 @@ def _make_client(track_return=None, playlist_return=None,
     if playlist_return is not None:
         client.get_playlist = AsyncMock(return_value=playlist_return)
     client.download_track = AsyncMock(return_value=download_return or [])
-    down = MagicMock()
-    down._run_once_async = AsyncMock(return_value=downloader_return or [])
-    client._downloader = down
     return client
 
 
@@ -155,7 +152,7 @@ class TestRunUrl:
             patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
-            client = _make_client(playlist_return=({"name": "Test Album"}, [t1, t2]))
+            client = _make_client(playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]))
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
@@ -163,7 +160,7 @@ class TestRunUrl:
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
         assert result == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": []}
-        client._downloader._run_once_async.assert_not_called()
+        client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_album_all_new(self, config, logger):
@@ -175,8 +172,8 @@ class TestRunUrl:
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
-                playlist_return=({"name": "Test Album"}, [t1, t2]),
-                downloader_return=[],
+                playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+                download_return=[],
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -187,7 +184,7 @@ class TestRunUrl:
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
         assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": []}
-        client._downloader._run_once_async.assert_awaited_once()
+        client.download_track.assert_awaited_once_with(self.ALBUM_URL)
 
     @pytest.mark.asyncio
     async def test_album_partial_exist(self, tmp_path):
@@ -216,8 +213,8 @@ class TestRunUrl:
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
-                playlist_return=({"name": "Test Album"}, [t1, t2]),
-                downloader_return=[],
+                playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+                download_return=[],
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -228,7 +225,7 @@ class TestRunUrl:
         assert result["ok"] == 1
         assert result["skipped"] == 1
         assert result["failed"] == 0
-        client._downloader._run_once_async.assert_awaited_once()
+        client.download_track.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_album_partial_failure(self, config, logger):
@@ -241,8 +238,8 @@ class TestRunUrl:
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
-                playlist_return=({"name": "Test Album"}, [t1, t2]),
-                downloader_return=failed,
+                playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+                download_return=failed,
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -282,8 +279,8 @@ class TestRunUrl:
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
-                playlist_return=({"name": "Test"}, [t1, t2, t1]),
-                downloader_return=[],
+                playlist_return=({"name": "Test", "type": "album"}, [t1, t2, t1]),
+                download_return=[],
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -293,3 +290,4 @@ class TestRunUrl:
 
         assert result["ok"] == 2
         assert result["failed"] == 0
+        client.download_track.assert_awaited_once()
