@@ -60,19 +60,22 @@
 ## Docker
 - [ ] **`Dockerfile`** — container image
   - [ ] `python:3.14-slim` base
+  - [ ] Install `chromium` + `chromium-driver` (SpotiFLAC needs a real browser for
+        Qobuz session auto-verification via `nodriver` CDP)
+  - [ ] `ENV CHROME_PATH=/usr/bin/chromium`
   - [ ] Install SpotiFLAC + python-telegram-bot
   - [ ] Copy `spoty_loop/` into container
   - [ ] CMD: run `bot.py`
 - [ ] **`docker-compose.yml`** — single service
   - [ ] Mount `~/Music:~/Music`
-  - [ ] Mount `~/.spotiflac:/root/.spotiflac`
+  - [ ] Mount `~/.spotiflac:/root/.spotiflac` (session persists across restarts)
   - [ ] Env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`
 - [ ] **`requirements.txt`** — `python-telegram-bot` (done)
 
 ---
 
 ## Tests
-- [x] **119 tests** across bot, downloader, m3u8, queue_manager, resolver, worker
+- [x] **120 tests** across bot, downloader, m3u8, queue_manager, resolver, worker
   - [x] All mock-based, no network, no real SpotiFLAC calls
   - [x] Run: `pytest tests/ -v`
 
