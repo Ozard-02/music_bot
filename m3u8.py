@@ -49,10 +49,11 @@ def track_relative_path(track: TrackMetadata, cfg: dict) -> str:
     return str(rel)
 
 
-def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str], int]:
+def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str], int, list[tuple[str, str, str]]]:
     lines = ["#EXTM3U"]
     count = 0
     seen_ids: set[str] = set()
+    missing: list[tuple[str, str, str]] = []
     for t in tracks:
         if t.id in seen_ids:
             continue
@@ -63,12 +64,25 @@ def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str],
             count += 1
             lines.append(f"#EXTINF:{t.duration_seconds or 0:.0f},{t.first_artist} - {t.title}")
             lines.append(rel)
-    return lines, count
+        else:
+            missing.append((t.first_artist, t.title, rel))
+    return lines, count, missing
 
 
 def write_m3u8(name: str, lines: list[str], cfg: dict):
     out = Path(cfg["output_dir"]) / f"{sanitize_filename(name)}.m3u8"
     out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out
+
+
+def write_missing_log(name: str, missing: list, cfg: dict) -> Path | None:
+    if not missing:
+        return None
+    out = Path(cfg["output_dir"]) / f"{sanitize_filename(name)}_missing.txt"
+    lines = [f"Missing ({len(missing)}):"]
+    for artist, title, rel in missing:
+        lines.append(f"  \u2022 {artist} - {title} \u2192 {rel}")
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out
 
@@ -79,7 +93,7 @@ async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None)
         raise ValueError(f"Not a playlist URL: {url}")
 
     if cfg is None:
-        cfg = load_config()
+        cfg = load_config(logging.getLogger("m3u8"))
 
     async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
         info, tracks = await client.get_playlist(url)
@@ -87,14 +101,17 @@ async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None)
     playlist_name = name or info.get("name", "playlist")
     tracks = list(tracks)
 
-    lines, included_count = build_m3u8_lines(tracks, cfg)
+    lines, included_count, missing = build_m3u8_lines(tracks, cfg)
     path = write_m3u8(playlist_name, lines, cfg)
+    missing_log = write_missing_log(playlist_name, missing, cfg)
 
     return {
         "path": str(path),
         "playlist_name": playlist_name,
-        "total_tracks": len(tracks),
+        "total_tracks": included_count + len(missing),
         "exist_on_disk": included_count,
+        "missing_count": len(missing),
+        "missing_log_path": str(missing_log) if missing_log else None,
     }
 
 

@@ -106,12 +106,13 @@ async def mkplaylist_cmd(update: Update, context):
             None,
             lambda: asyncio.run(build_m3u8(url, name)),
         )
-        await msg.edit_text(
-            f"✅ <b>{result['playlist_name']}</b>\n"
-            f"{result['exist_on_disk']}/{result['total_tracks']} tracks on disk\n"
-            f"<code>{result['path']}</code>",
-            parse_mode="HTML",
-        )
+        missing = result.get("missing_count", 0)
+        parts = [f"✅ <b>{result['playlist_name']}</b>",
+                 f"{result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
+        if missing:
+            parts.append(f"❌ {missing} missing — see <code>{result['missing_log_path']}</code>")
+        parts.append(f"<code>{result['path']}</code>")
+        await msg.edit_text("\n".join(parts), parse_mode="HTML")
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
 

@@ -6,7 +6,7 @@
 
 ```
 Constants: SERVICES, MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
-           MAX_QUEUE_RETRIES, MAX_RETRY_DURATION, CHECK_INTERVAL
+           MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
 
 load_config(logger) → dict               # read ~/.spotiflac/config.json
 setup_logger(log_path) → logger          # file+stream, suppress SpotiFLAC/httpx
@@ -17,30 +17,21 @@ bridge_community_session(logger)         # copy desktop Tidal session
 
 ```
 run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry point
-├─ single_pass=True → _download_once()                # for queue worker
-│  ├─ RunState(failed_tracks=[])
-│  ├─ AsyncSpotiFLAC(services=SERVICES, ...)
-│  ├─ parse_spotify_url(url):
-│  │  ├─ "track" → download_single_track()
-│  │  └─ "album"|"playlist" → download_collection()
-│  │     ├─ dedup by track.id
-│  │     ├─ Semaphore(3)
-│  │     └─ _download_track_with_retry()
-│  │        ├─ in_progress guard per track ID
-│  │        ├─ client.download_track() (180s timeout, 3 retries)
-│  │        ├─ captures last_error on each failure
-│  │        ├─ appends (id, title, error) to state.failed_tracks on GAVE UP
-│  │        └─ [N/M] progress log per outcome
-│  └─ return summary dict (includes failed_tracks list)
-│
-└─ single_pass=False → outer retry loop             # for standalone CLI
-   └─ wait_for_providers() → _download_once() → retry if any failed
+├─ parse_spotify_url(url)
+├─ if "track":
+│  ├─ get_track_metadata(url)
+│  ├─ construct path via track_relative_path()
+│  ├─ if path exists → early return {ok=0, skipped=1}
+│  └─ else → client.download_track(url)
+└─ if "album"|"playlist":
+   ├─ get_playlist(url) → info + tracks
+   ├─ dedup by track.id
+   ├─ pre-check: construct path for each track → split into existing/missing
+   ├─ if all exist → early return {ok=0, skipped=N}
+   ├─ log "Pre-check: N/M exist (X new)"
+   └─ client._downloader._run_once_async(url, target_tracks=missing)
 
-run_url_sync(url, cfg, logger, single_pass) → dict   # sync wrapper for thread pools
-
-main()                                              ← standalone CLI
-├─ setup_logger(), bridge_community_session(), load_config()  (from config.py)
-└─ run_url(url) → exit 1 if any failed
+run_url_sync(url, cfg, logger) → dict   # sync wrapper (asyncio.run)
 ```
 
 ## Bot system
@@ -108,7 +99,7 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
   _process(item):
     "link"   → url = item.query
     "search" → AsyncSpotiFLAC → resolve_search() → url
-    run_url_sync(url, single_pass=True) via executor → result
+    run_url_sync(url) via executor (asyncio.wait_for, timeout=MAX_DOWNLOAD_TIMEOUT) → result
     ├─ if any failed → log_failed_track() per track → _handle_failure()
     │  ├─ age >24h → mark_failed("Timed out")
     │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries")
