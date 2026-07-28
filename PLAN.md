@@ -57,36 +57,38 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 
 ## Done
 
-1. **Pre-check before download** — `downloader.py` now constructs the expected file path for each track and checks disk before calling SpotiFLAC. Existing tracks are counted as `skipped`, only missing tracks are passed to `client._downloader._run_once_async(url, target_tracks=missing)`. Early exit if all tracks exist on disk. Saves API calls and avoids confusing `[SOURCE]` lines for already-downloaded tracks.
-2. **Environment** — uv venv, SpotiFLAC installed, nodriver patched (utf-8 header).
-2. **Session bridge** — copy desktop `community_session.json` → module path (fixes Cloudflare).
-3. **`downloader.py`** — retry loop with 3-parallel downloads, 180s timeout, 3 retries, crash-restart.
-4. **Services reorder** — `SERVICES = ["qobuz", "tidal", "amazon"]` (Qobuz primary).
-5. **SpotiFLAC child loggers** — iterate all `SpotiFLAC.*` loggers → WARNING level.
-6. **Dedup** — filter duplicates by `track.id` before download, write to `duplicates.log`.
-7. **Skip race fix** — per-track `_in_progress` guard inside semaphore prevents parallel-dup downloads.
-8. **Loop until complete** — inner retry loop runs until zero failures.
-9. **Removed `track_file_exists`** — SpotiFLAC handles skip detection internally.
-10. **Removed dead code** — `_safe_folder`, `_get_first_artist`, `_scan_dir`, unused imports cleaned up.
-11. **MusicBrainz tag fix** — patched `SpotiFLAC/core/tagger.py` to strip `MUSICBRAINZ_*` tags.
-12. **`fix_mb_tags.py`** — one-time script to strip existing `MUSICBRAINZ_*` tags from all FLACs.
-13. **Cover fix** — `enrich_providers` excludes qobuz.
-14. **`fix_covers.py`** — one-time script to re-embed Spotify cover art into all FLACs.
-15. **Refactor** — `RunState` dataclass, clean imports, specific exception handling.
-16. **`run_url()` extracted** — shared between CLI and bot worker. Handles tracks, albums, playlists.
-17. **SQLite queue** — `queue_manager.py` with enqueue/dequeue/status/history.
-18. **Search resolver** — `resolver.py` parses `"X - Y"` via Spotify search, picks best match.
-19. **Telegram bot** — `bot.py` with /start, /help, /status, link+text handlers, whitelist.
-20. **Background worker** — `worker.py` polls queue, resolves searches, downloads, notifies.
-21. **`wait_for_providers` fix** — `_download_once` does single health check (no blocking). CLI retry loop calls `wait_for_providers()` at loop top.
-22. **`failed_tracks` table** — `queue_manager.py` logs per-track failures with `log_failed_track()`. Captured in `RunState` and persisted from worker.
-23. **`m3u8.py`** — standalone script to generate `.m3u8` for a Spotify playlist. Scans `~/Music` for already-downloaded tracks, writes relative paths. Importable for bot use later.
-24. **Duplicate prevention** — `queue_manager.find_existing()` checks for active jobs with same input before enqueueing. Bot warns "Already queued as #N".
-25. **`/purge` command** — `queue_manager.purge_queued()` deletes all queued items. Bot confirms count.
-26. **M3U8 dedup** — `build_m3u8_lines()` deduplicates by `track.id` to match downloader behavior.
-27. **use healthy providers** — `wait_for_providers()` result now passed to `_download_once()` as `services=` param, instead of hardcoded `SERVICES`. Dead Tidal v1 no longer polled on every track.
-28. **stranded running items** — `_init_db()` resets `running` → `queued` on startup so items in-flight during a kill are recovered on restart.
-29. **album download fix** — `client.download_track(url)` now used directly for albums/playlists, not per-track `download_track`. SpotiFLAC handles collection with `is_album=True`, preventing providers from re-resolving individual tracks and returning wrong matches.
+1. **Pre-check before download** — `downloader.py` constructs expected file paths via `track_relative_path()` before calling SpotiFLAC. Existing tracks sorted into skipped, only missing passed to `_run_once_async(target_tracks=...)`. Early exit when everything exists.
+2. **Download timeout** — `MAX_DOWNLOAD_TIMEOUT = 7200` kills stuck downloads in `worker.py` via `asyncio.wait_for`.
+3. **Amazon first** — `SERVICES = ["amazon", "qobuz"]` matching `autoOrder` in SpotiFLAC config. `PER_TRACK_TIMEOUT` reduced 180 → 100s.
+4. **Environment** — uv venv, SpotiFLAC installed, nodriver patched (utf-8 header).
+5. **Session bridge** — copy desktop `community_session.json` → module path (fixes Cloudflare).
+6. **`downloader.py`** — retry loop with 3-parallel downloads, 180s timeout, 3 retries, crash-restart.
+7. **Services reorder** — `SERVICES = ["qobuz", "tidal", "amazon"]` (Qobuz primary).
+8. **SpotiFLAC child loggers** — iterate all `SpotiFLAC.*` loggers → WARNING level.
+9. **Dedup** — filter duplicates by `track.id` before download, write to `duplicates.log`.
+10. **Skip race fix** — per-track `_in_progress` guard inside semaphore prevents parallel-dup downloads.
+11. **Loop until complete** — inner retry loop runs until zero failures.
+12. **Removed `track_file_exists`** — SpotiFLAC handles skip detection internally.
+13. **Removed dead code** — `_safe_folder`, `_get_first_artist`, `_scan_dir`, unused imports cleaned up.
+14. **MusicBrainz tag fix** — patched `SpotiFLAC/core/tagger.py` to strip `MUSICBRAINZ_*` tags.
+15. **`fix_mb_tags.py`** — one-time script to strip existing `MUSICBRAINZ_*` tags from all FLACs.
+16. **Cover fix** — `enrich_providers` excludes qobuz.
+17. **`fix_covers.py`** — one-time script to re-embed Spotify cover art into all FLACs.
+18. **Refactor** — `RunState` dataclass, clean imports, specific exception handling.
+19. **`run_url()` extracted** — shared between CLI and bot worker. Handles tracks, albums, playlists.
+20. **SQLite queue** — `queue_manager.py` with enqueue/dequeue/status/history.
+21. **Search resolver** — `resolver.py` parses `"X - Y"` via Spotify search, picks best match.
+22. **Telegram bot** — `bot.py` with /start, /help, /status, link+text handlers, whitelist.
+23. **Background worker** — `worker.py` polls queue, resolves searches, downloads, notifies.
+24. **`wait_for_providers` fix** — `_download_once` does single health check (no blocking). CLI retry loop calls `wait_for_providers()` at loop top.
+25. **`failed_tracks` table** — `queue_manager.py` logs per-track failures with `log_failed_track()`. Captured in `RunState` and persisted from worker.
+26. **`m3u8.py`** — standalone script to generate `.m3u8` for a Spotify playlist. Scans `~/Music` for already-downloaded tracks, writes relative paths. Importable for bot use later.
+27. **Duplicate prevention** — `queue_manager.find_existing()` checks for active jobs with same input before enqueueing. Bot warns "Already queued as #N".
+28. **`/purge` command** — `queue_manager.purge_queued()` deletes all queued items. Bot confirms count.
+29. **M3U8 dedup** — `build_m3u8_lines()` deduplicates by `track.id` to match downloader behavior.
+30. **use healthy providers** — `wait_for_providers()` result now passed to `_download_once()` as `services=` param, instead of hardcoded `SERVICES`. Dead Tidal v1 no longer polled on every track.
+31. **stranded running items** — `_init_db()` resets `running` → `queued` on startup so items in-flight during a kill are recovered on restart.
+32. **album download fix** — `client.download_track(url)` now used directly for albums/playlists, not per-track `download_track`. SpotiFLAC handles collection with `is_album=True`, preventing providers from re-resolving individual tracks and returning wrong matches.
 
 ## Remaining
 

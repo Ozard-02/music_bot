@@ -7,9 +7,9 @@ from pathlib import Path
 
 
 # Download engine
-SERVICES = ["qobuz", "amazon"]
+SERVICES = ["amazon", "qobuz"]
 MAX_CONCURRENT = 3
-PER_TRACK_TIMEOUT = 180
+PER_TRACK_TIMEOUT = 100
 PER_TRACK_RETRIES = 3
 
 # Queue

@@ -5,8 +5,9 @@
 ### `config.py` — shared constants + setup utilities
 
 ```
-Constants: SERVICES, MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
-           MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
+Constants: SERVICES=["amazon","qobuz"], MAX_CONCURRENT=3,
+           PER_TRACK_TIMEOUT=100, PER_TRACK_RETRIES=3,
+           MAX_QUEUE_RETRIES=50, MAX_DOWNLOAD_TIMEOUT=7200
 
 load_config(logger) → dict               # read ~/.spotiflac/config.json
 setup_logger(log_path) → logger          # file+stream, suppress SpotiFLAC/httpx
