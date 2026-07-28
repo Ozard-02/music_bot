@@ -32,48 +32,20 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
         max_concurrent_downloads=MAX_CONCURRENT,
     ) as client:
         if parsed["type"] == "track":
-            return await _run_single(client, url, cfg, logger)
-        return await _run_collection(client, url, cfg, logger)
+            track = await client.get_track_metadata(url)
+            tracks = [track]
+        else:
+            _, tracks = await client.get_playlist(url)
+        return await _download_tracks(client, tracks, cfg, logger)
 
 
-async def _run_single(client, url: str, cfg: dict, logger: logging.Logger) -> dict:
-    from SpotiFLAC import TrackMetadata
-
-    track = await client.get_track_metadata(url)
-    rel = track_relative_path(track, cfg)
-    full = Path(cfg["output_dir"]) / rel
-    if full.exists():
-        logger.info("Pre-check: %s exists — skipping", rel)
-        return {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": []}
-
-    try:
-        failed_list = await client.download_track(url)
-    except Exception as e:
-        logger.error("Download failed: %s", e)
-        return {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": []}
-
-    failed = len(failed_list)
-    ok = 1 - failed
-    logger.info("PASS — %d ok, 0 skipped, %d failed", ok, failed)
-    return {
-        "ok": ok,
-        "skipped": 0,
-        "failed": failed,
-        "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
-    }
-
-
-async def _run_collection(client, url: str, cfg: dict, logger: logging.Logger) -> dict:
-    from SpotiFLAC import TrackMetadata
-
-    _, tracks = await client.get_playlist(url)
-
+async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logger) -> dict:
     seen = set()
     unique = [t for t in tracks if not (t.id in seen or seen.add(t.id))]
     total = len(unique)
 
-    existing: list[TrackMetadata] = []
-    missing: list[TrackMetadata] = []
+    existing = []
+    missing = []
     for t in unique:
         rel = track_relative_path(t, cfg)
         full = Path(cfg["output_dir"]) / rel
@@ -93,9 +65,9 @@ async def _run_collection(client, url: str, cfg: dict, logger: logging.Logger) -
         return {"ok": 0, "skipped": total, "failed": 0, "failed_tracks": []}
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
-    failed_list: list[TrackMetadata] = []
+    failed_list = []
 
-    async def _dl(track: TrackMetadata):
+    async def _dl(track):
         async with sem:
             try:
                 fl = await client.download_track(track.external_url)

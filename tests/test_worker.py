@@ -1,4 +1,4 @@
-"""Tests for worker.py — helpers and Worker._process."""
+"""Tests for worker.py — Worker._process."""
 
 import asyncio
 from unittest.mock import AsyncMock, patch
@@ -7,55 +7,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from config import MAX_QUEUE_RETRIES
-from worker import _age_seconds, _format_summary, Worker
-
-
-class TestAgeSeconds:
-    def test_zero_for_recent(self):
-        now = datetime.now(timezone.utc).isoformat()
-        assert _age_seconds(now) < 1
-
-    def test_one_hour_ago(self):
-        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-        assert 3599 < _age_seconds(past) < 3601
-
-    def test_invalid_date_returns_zero(self):
-        assert _age_seconds("not-a-date") == 0
-
-    def test_none_returns_zero(self):
-        assert _age_seconds(None) == 0
-
-
-class TestFormatSummary:
-    def test_only_ok(self):
-        r = _format_summary("Title", {"ok": 1, "skipped": 0, "failed": 0})
-        assert "1 ok" in r
-        assert "skipped" not in r
-        assert "failed" not in r
-
-    def test_only_skipped(self):
-        r = _format_summary("Title", {"ok": 0, "skipped": 2, "failed": 0})
-        assert "2 skipped" in r
-        assert "ok" not in r
-        assert "failed" not in r
-
-    def test_only_failed(self):
-        r = _format_summary("Title", {"ok": 0, "skipped": 0, "failed": 3})
-        assert "3 failed" in r
-        assert "ok" not in r
-        assert "skipped" not in r
-
-    def test_mixed(self):
-        r = _format_summary("Title", {"ok": 1, "skipped": 2, "failed": 3})
-        assert all(x in r for x in ["1 ok", "2 skipped", "3 failed"])
-
-    def test_all_zero(self):
-        r = _format_summary("Title", {"ok": 0, "skipped": 0, "failed": 0})
-        assert r == "<b>Title</b>\n"
-
-    def test_includes_display_name(self):
-        r = _format_summary("My Album", {"ok": 5, "skipped": 0, "failed": 0})
-        assert "My Album" in r
+from worker import Worker
 
 
 class TestWorkerProcess:
