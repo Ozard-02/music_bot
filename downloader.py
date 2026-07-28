@@ -25,7 +25,7 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
         use_album_subfolders=cfg["use_album_subfolders"],
         first_artist_only=cfg["first_artist_only"],
         embed_lyrics=cfg["embed_lyrics"],
-        enrich_providers=["deezer", "soundcloud", "apple"],
+        enrich_providers=["apple", "deezer", "soundcloud"],
         track_max_retries=PER_TRACK_RETRIES,
         timeout_s=PER_TRACK_TIMEOUT,
         max_concurrent_downloads=MAX_CONCURRENT,
@@ -90,7 +90,7 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
 
     if not missing:
         logger.info("All %d tracks already on disk — nothing to do", total)
-        return {"ok": 0, "skipped": total, "failed": 0, "failed_tracks": []}
+        return {"ok": 0, "skipped": total, "failed": 0, "failed_tracks": [], "total": total}
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
     failed_list = []
@@ -117,6 +117,7 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
         "skipped": skipped,
         "failed": failed,
         "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
+        "total": total,
     }
 
 

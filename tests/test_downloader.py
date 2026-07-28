@@ -70,7 +70,7 @@ class TestRunUrl:
             from downloader import run_url
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": []}
+        assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "total": 1}
         client.download_track.assert_awaited_once_with(self.TRACK_URL)
 
     @pytest.mark.asyncio
@@ -103,7 +103,7 @@ class TestRunUrl:
             from downloader import run_url
             result = await run_url(self.TRACK_URL, cfg, logger)
 
-        assert result == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": []}
+        assert result == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "total": 1}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -160,7 +160,7 @@ class TestRunUrl:
             from downloader import run_url
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": []}
+        assert result == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "total": 2}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -184,7 +184,7 @@ class TestRunUrl:
             cfg = {**config, "output_dir": "/tmp/does-not-exist-xyz"}
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": []}
+        assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "total": 2}
         assert client.download_track.await_count == 2
         client.download_track.assert_any_call(t1.external_url)
         client.download_track.assert_any_call(t2.external_url)
@@ -271,7 +271,7 @@ class TestRunUrl:
             from downloader import run_url
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")]}
+        assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "total": 1}
 
     @pytest.mark.asyncio
     async def test_album_dedup_counts_unique(self, config, logger):

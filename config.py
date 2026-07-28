@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 # Download engine
-SERVICES = ["amazon", "qobuz"]
+SERVICES = ["amazon", "qobuz", "deezer"]
 MAX_CONCURRENT = 3
 PER_TRACK_TIMEOUT = 100
 PER_TRACK_RETRIES = 3

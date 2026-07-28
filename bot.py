@@ -11,6 +11,7 @@ from pathlib import Path
 
 def _load_env(path: str | Path):
     """Simple .env loader — no dependency needed."""
+    """Simple .env loader — no dependency needed."""
     path = Path(path)
     if not path.exists():
         return
@@ -160,6 +161,20 @@ async def post_init(application: Application):
     cfg = application.bot_data["cfg"]
     logger: logging.Logger = application.bot_data["logger"]
     wake_event: asyncio.Event = application.bot_data["wake_event"]
+
+    # Clean up leftover .part files from interrupted downloads
+    output = Path(cfg["output_dir"])
+    if output.exists():
+        cleaned = 0
+        for p in output.rglob("*enc.part"):
+            try:
+                p.unlink()
+                cleaned += 1
+            except OSError:
+                pass
+        if cleaned:
+            logger.info("Cleaned up %d leftover .part file(s)", cleaned)
+
     worker = Worker(qm, application.bot, ALLOWED_USER_ID, cfg, logger, wake_event)
     application.bot_data["worker"] = worker
     task = asyncio.create_task(worker.run())
