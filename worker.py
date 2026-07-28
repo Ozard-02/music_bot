@@ -34,22 +34,30 @@ class Worker:
         self._wake_event = wake_event
         self._poll = 5
         self._sem = asyncio.Semaphore(max_parallel)
+        self._max_parallel = max_parallel
+        self._shutdown = False
         self._tasks: set[asyncio.Task] = set()
 
     async def run(self):
-        self._logger.info("Worker started (max_parallel=%d)", self._sem._value)
-        while True:
+        self._logger.info("Worker started (max_parallel=%d)", self._max_parallel)
+        while not self._shutdown:
+            slot = False
             try:
+                await self._sem.acquire()
+                slot = True
                 item = await asyncio.to_thread(self._queue.dequeue)
                 if item:
                     self._poll = 5
-                    await self._sem.acquire()
                     asyncio.create_task(self._run_with_sem(item))
+                    slot = False
                 else:
                     self._poll = min(300, self._poll * 2)
             except Exception as e:
                 self._logger.error("Worker error: %s", e)
                 self._poll = min(300, self._poll * 2)
+            finally:
+                if slot:
+                    self._sem.release()
 
             try:
                 await asyncio.wait_for(self._wake_event.wait(), timeout=self._poll)
@@ -69,6 +77,10 @@ class Worker:
             self._wake_event.set()
 
     async def shutdown(self):
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self._wake_event.set()
         for t in list(self._tasks):
             t.cancel()
         if self._tasks:
@@ -78,6 +90,15 @@ class Worker:
         self._logger.info("Processing #%d: %s", item["id"], item["query"])
         try:
             url, display = await self._resolve(item)
+
+            # Track cumulative progress across restarts
+            db_item = await asyncio.to_thread(self._queue.get_item, item["id"])
+            if db_item and db_item["total"] == 0:
+                initial_skipped, total = await self._pre_check(url)
+                await asyncio.to_thread(
+                    self._queue.store_cumulative_tracking,
+                    item["id"], total, initial_skipped,
+                )
 
             loop = asyncio.get_running_loop()
             result = await asyncio.wait_for(
@@ -92,20 +113,26 @@ class Worker:
                     )
 
             if result["failed"] == 0:
+                db_item = await asyncio.to_thread(self._queue.get_item, item["id"])
+                if db_item and db_item["initial_skipped"]:
+                    cumulative_ok = db_item["total"] - db_item["initial_skipped"]
+                    cumulative_skipped = db_item["initial_skipped"]
+                else:
+                    cumulative_ok = result["ok"]
+                    cumulative_skipped = result["skipped"]
+
                 await asyncio.to_thread(
                     self._queue.mark_done,
                     item["id"],
-                    result["ok"],
-                    result["skipped"],
-                    result["failed"],
+                    cumulative_ok,
+                    cumulative_skipped,
+                    0,
                 )
                 parts = []
-                if result["ok"]:
-                    parts.append(f"✅ {result['ok']} ok")
-                if result["skipped"]:
-                    parts.append(f"⏭ {result['skipped']} skipped")
-                if result["failed"]:
-                    parts.append(f"❌ {result['failed']} failed")
+                if cumulative_ok:
+                    parts.append(f"✅ {cumulative_ok} ok")
+                if cumulative_skipped:
+                    parts.append(f"⏭ {cumulative_skipped} skipped")
                 await self._bot.send_message(
                     chat_id=self._chat_id,
                     text=f"<b>{display}</b>\n{' | '.join(parts)}",
@@ -131,6 +158,36 @@ class Worker:
             self._logger.info("Resolved #%d: %s → %s", item["id"], item["query"], display)
             return url, display
         return item["query"], item["query"]
+
+    async def _pre_check(self, url: str) -> tuple[int, int]:
+        from SpotiFLAC import AsyncSpotiFLAC
+        from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+        from m3u8 import track_relative_path
+        from pathlib import Path
+
+        parsed = parse_spotify_url(url)
+        async with AsyncSpotiFLAC(output_dir=self._cfg["output_dir"]) as client:
+            if parsed["type"] == "track":
+                track = await client.get_track_metadata(url)
+                tracks = [track]
+            else:
+                _, tracks = await client.get_playlist(url)
+
+        seen = set()
+        unique = []
+        for t in tracks:
+            if t.id not in seen:
+                seen.add(t.id)
+                unique.append(t)
+
+        existing = 0
+        for t in unique:
+            rel = track_relative_path(t, self._cfg)
+            full = Path(self._cfg["output_dir"]) / rel
+            if full.exists():
+                existing += 1
+
+        return existing, len(unique)
 
     async def _handle_failure(self, item: dict, display: str, result: dict):
         retries = item.get("retries", 0)

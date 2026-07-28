@@ -65,6 +65,8 @@ QueueManager(db_path)
   enqueue(type, query) → id
   find_existing(type, query) → id | None   # duplicate check
   dequeue() → item | None                   # atomically set status='running'
+  get_item(id) → item | None                # fetch current DB row
+  store_cumulative_tracking(item_id, total, initial_skipped)  # first-pass tracking
   requeue(id)                               # increment retries, set 'queued'
   mark_done(id, ok, skipped, failed)
   mark_failed(id, error)
@@ -75,7 +77,8 @@ QueueManager(db_path)
   get_history(limit) → [item, ...]
 
 Tables:
-  queue       — id, input_type, query, status, retries, created_at, ...
+  queue       — id, input_type, query, status, retries, created_at,
+                total, initial_skipped, result_*, completed_at, error
   failed_tracks — id, item_id (FK→queue), track_title, error, failed_at
 ```
 
@@ -103,15 +106,18 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     dequeue → process → wait_for(wake_event, timeout=_poll)
     * when bot enqueues a new item, it sets wake_event
     * worker wakes instantly (even during 300s idle), clears event, polls
+  _pre_check(url) → (initial_skipped, total)  # one-time track listing + file count
   _process(item):
     "link"   → url = item.query
     "search" → AsyncSpotiFLAC → resolve_search() → url
+    ├─ if DB total==0 (first pass): _pre_check() → store_cumulative_tracking()
     run_url_sync(url) via executor (asyncio.wait_for, timeout=MAX_DOWNLOAD_TIMEOUT) → result
+    ├─ includes "total" in result dict
     ├─ if any failed → log_failed_track() per track → _handle_failure()
     │  ├─ age >24h → mark_failed("Timed out")
     │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries")
     │  └─ else → requeue()
-    └─ if all ok → mark_done() → send summary
+    └─ if all ok → compute cumulative_ok = total - initial_skipped → mark_done() → send summary
     on exception → mark_failed() → send error
 ```
 

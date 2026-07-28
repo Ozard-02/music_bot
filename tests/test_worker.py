@@ -27,7 +27,10 @@ class TestWorkerProcess:
         qm.enqueue("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url_sync", return_value={"ok": 5, "skipped": 2, "failed": 0}):
+        with (
+            patch("worker.Worker._pre_check", new=AsyncMock(return_value=(2, 7))),
+            patch("worker.run_url_sync", return_value={"ok": 5, "skipped": 2, "failed": 0, "total": 7}),
+        ):
             await worker._process(item)
 
         s = qm.get_status()
@@ -46,7 +49,10 @@ class TestWorkerProcess:
         qm.enqueue("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url_sync", return_value={"ok": 3, "skipped": 0, "failed": 0}):
+        with (
+            patch("worker.Worker._pre_check", new=AsyncMock(return_value=(0, 3))),
+            patch("worker.run_url_sync", return_value={"ok": 3, "skipped": 0, "failed": 0, "total": 3}),
+        ):
             await worker._process(item)
 
         msg = bot.send_message.call_args[1]["text"]
@@ -58,7 +64,10 @@ class TestWorkerProcess:
         qm.enqueue("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3}):
+        with (
+            patch("worker.Worker._pre_check", new=AsyncMock(return_value=(0, 3))),
+            patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3, "total": 3}),
+        ):
             await worker._process(item)
 
         s = qm.get_status()
@@ -80,7 +89,10 @@ class TestWorkerProcess:
             qm.requeue(item["id"])
         item = qm.dequeue()
 
-        with patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3}):
+        with (
+            patch("worker.Worker._pre_check", new=AsyncMock(return_value=(0, 3))),
+            patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3, "total": 3}),
+        ):
             await worker._process(item)
 
         s = qm.get_status()
@@ -96,7 +108,10 @@ class TestWorkerProcess:
         qm.enqueue("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url_sync", side_effect=RuntimeError("Connection failed")):
+        with (
+            patch("worker.Worker._pre_check", new=AsyncMock(return_value=(0, 3))),
+            patch("worker.run_url_sync", side_effect=RuntimeError("Connection failed")),
+        ):
             await worker._process(item)
 
         s = qm.get_status()
@@ -113,13 +128,17 @@ class TestWorkerProcess:
         qm.enqueue("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url_sync", return_value={
-            "ok": 0, "skipped": 0, "failed": 2,
-            "failed_tracks": [
-                ("id1", "Broken Song", "Qobuz 500"),
-                ("id2", "Another Fail", "Tidal 410"),
-            ],
-        }):
+        with (
+            patch("worker.Worker._pre_check", new=AsyncMock(return_value=(0, 2))),
+            patch("worker.run_url_sync", return_value={
+                "ok": 0, "skipped": 0, "failed": 2,
+                "failed_tracks": [
+                    ("id1", "Broken Song", "Qobuz 500"),
+                    ("id2", "Another Fail", "Tidal 410"),
+                ],
+                "total": 2,
+            }),
+        ):
             await worker._process(item)
 
         tracks = qm.get_failed_tracks(item_id=item["id"])
@@ -136,7 +155,10 @@ class TestWorkerProcess:
         old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
         item["created_at"] = old
 
-        with patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3}):
+        with (
+            patch("worker.Worker._pre_check", new=AsyncMock(return_value=(0, 3))),
+            patch("worker.run_url_sync", return_value={"ok": 0, "skipped": 0, "failed": 3, "total": 3}),
+        ):
             await worker._process(item)
 
         s = qm.get_status()
