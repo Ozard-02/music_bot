@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import traceback
 from datetime import datetime, timezone
 
 from telegram import Bot
@@ -9,7 +10,7 @@ from telegram import Bot
 from config import MAX_PARALLEL_JOBS, MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
 from queue_manager import QueueManager
 from resolver import resolve_search
-from downloader import run_url_sync
+from downloader import run_url
 
 
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
@@ -100,11 +101,17 @@ class Worker:
                     item["id"], total, initial_skipped,
                 )
 
-            loop = asyncio.get_running_loop()
-            result = await asyncio.wait_for(
-                loop.run_in_executor(None, run_url_sync, url, self._cfg, self._logger),
-                timeout=MAX_DOWNLOAD_TIMEOUT,
-            )
+            try:
+                result = await asyncio.wait_for(
+                    run_url(url, self._cfg, self._logger),
+                    timeout=MAX_DOWNLOAD_TIMEOUT,
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Download crashed #%d: %s\n%s",
+                    item["id"], e, traceback.format_exc(),
+                )
+                raise
 
             if result["failed"] > 0:
                 for _track_id, title, err in result.get("failed_tracks", []):
