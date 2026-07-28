@@ -88,7 +88,10 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 29. **M3U8 dedup** — `build_m3u8_lines()` deduplicates by `track.id` to match downloader behavior.
 30. **use healthy providers** — `wait_for_providers()` result now passed to `_download_once()` as `services=` param, instead of hardcoded `SERVICES`. Dead Tidal v1 no longer polled on every track.
 31. **stranded running items** — `_init_db()` resets `running` → `queued` on startup so items in-flight during a kill are recovered on restart.
-32. **album download fix** — `client.download_track(url)` now used directly for albums/playlists, not per-track `download_track`. SpotiFLAC handles collection with `is_album=True`, preventing providers from re-resolving individual tracks and returning wrong matches.
+32. **album download fix** — `client.download_track(url)` used for album/playlist as single batch. _Later reverted — see #34._
+33. **per-track parallel download for collections** — `_run_collection` downloads missing tracks individually via `client.download_track(track.external_url)` with `asyncio.Semaphore(MAX_CONCURRENT)` instead of a single batch call. Gives SpotiFLAC per-track metadata for correct path resolution. Pre-check (skip existing) still runs upfront.
+34. **removed Retry Failed Tracks folder** — deleted `_move_playlist_files()`, `os`/`re`/`shutil` imports. No more playlist-named directory or file-moving logic. Non-flac/non-m3u8 aux files go to `~/Music/temp/`.
+35. **120 tests** — 3 new tests for per-track download assertions (album_all_new, album_partial_exist, album_dedup_counts_unique).
 
 ## Remaining
 
