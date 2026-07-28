@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from telegram import Bot
 
-from config import MAX_QUEUE_RETRIES
+from config import MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
 from queue_manager import QueueManager
 from resolver import resolve_search
 from downloader import run_url_sync
@@ -60,8 +60,9 @@ class Worker:
             url, display = await self._resolve(item)
 
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None, run_url_sync, url, self._cfg, self._logger,
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, run_url_sync, url, self._cfg, self._logger),
+                timeout=MAX_DOWNLOAD_TIMEOUT,
             )
 
             if result["failed"] > 0:

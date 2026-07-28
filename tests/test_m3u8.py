@@ -102,8 +102,9 @@ class TestBuildM3u8Lines:
             make_track(track_id="1", title="Song A", first_artist="Artist A", album="Album", album_artist="Artist A", duration_seconds=200),
             make_track(track_id="2", title="Song B", first_artist="Artist B", album="Album", album_artist="Artist B", duration_seconds=150),
         ]
-        lines, count = build_m3u8_lines(tracks, cfg)
+        lines, count, missing = build_m3u8_lines(tracks, cfg)
         assert count == 2
+        assert len(missing) == 0
         assert lines[0] == "#EXTM3U"
         assert "#EXTINF:200,Artist A - Song A" in lines
         assert "Artist A/Album/Artist A - Song A.flac" in lines
@@ -118,8 +119,9 @@ class TestBuildM3u8Lines:
             make_track(track_id="1", title="Song A", first_artist="Artist A", album="Album", album_artist="Artist A"),
             make_track(track_id="2", title="Song B", first_artist="Artist B", album="Album", album_artist="Artist B"),
         ]
-        lines, count = build_m3u8_lines(tracks, cfg)
+        lines, count, missing = build_m3u8_lines(tracks, cfg)
         assert count == 2
+        assert len(missing) == 0
         assert lines.count("Artist A/Album/Artist A - Song A.flac") == 1
 
     def test_some_tracks_exist(self, tmp_path):
@@ -134,8 +136,10 @@ class TestBuildM3u8Lines:
         track_a.parent.mkdir(parents=True)
         track_a.touch()
 
-        lines, count = build_m3u8_lines(tracks, cfg)
+        lines, count, missing = build_m3u8_lines(tracks, cfg)
         assert count == 1
+        assert len(missing) == 1
+        assert missing[0][:2] == ("Artist B", "Song B")
         assert "Artist A/Album X/Artist A - Song A.flac" in lines
         assert "Artist B/Album Y/Artist B - Song B.flac" not in lines
 
@@ -143,15 +147,17 @@ class TestBuildM3u8Lines:
     def test_no_tracks_exist(self, mock_exists):
         cfg = {"output_dir": "/music", "first_artist_only": True, "filename_format": "{artist} - {title}"}
         tracks = [make_track(), make_track(track_id="2")]
-        lines, count = build_m3u8_lines(tracks, cfg)
+        lines, count, missing = build_m3u8_lines(tracks, cfg)
         assert count == 0
+        assert len(missing) == 2
         assert lines == ["#EXTM3U"]
 
     @patch("m3u8.Path.exists", return_value=True)
     def test_empty_track_list(self, mock_exists):
         cfg = {"output_dir": "/music", "first_artist_only": True, "filename_format": "{artist} - {title}"}
-        lines, count = build_m3u8_lines([], cfg)
+        lines, count, missing = build_m3u8_lines([], cfg)
         assert count == 0
+        assert len(missing) == 0
         assert lines == ["#EXTM3U"]
 
 
@@ -235,6 +241,8 @@ class TestBuildM3u8Async:
         assert result["playlist_name"] == "Test Playlist"
         assert result["total_tracks"] == 1
         assert result["exist_on_disk"] == 1
+        assert result["missing_count"] == 0
+        assert result["missing_log_path"] is None
         assert Path(result["path"]).exists()
         content = Path(result["path"]).read_text(encoding="utf-8")
         assert "#EXTM3U" in content

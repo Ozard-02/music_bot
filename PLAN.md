@@ -57,7 +57,8 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 
 ## Done
 
-1. **Environment** — uv venv, SpotiFLAC installed, nodriver patched (utf-8 header).
+1. **Pre-check before download** — `downloader.py` now constructs the expected file path for each track and checks disk before calling SpotiFLAC. Existing tracks are counted as `skipped`, only missing tracks are passed to `client._downloader._run_once_async(url, target_tracks=missing)`. Early exit if all tracks exist on disk. Saves API calls and avoids confusing `[SOURCE]` lines for already-downloaded tracks.
+2. **Environment** — uv venv, SpotiFLAC installed, nodriver patched (utf-8 header).
 2. **Session bridge** — copy desktop `community_session.json` → module path (fixes Cloudflare).
 3. **`downloader.py`** — retry loop with 3-parallel downloads, 180s timeout, 3 retries, crash-restart.
 4. **Services reorder** — `SERVICES = ["qobuz", "tidal", "amazon"]` (Qobuz primary).
