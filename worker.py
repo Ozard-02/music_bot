@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 
 from telegram import Bot
 
@@ -79,9 +78,17 @@ class Worker:
                     result["skipped"],
                     result["failed"],
                 )
-                summary = _format_summary(display, result)
+                parts = []
+                if result["ok"]:
+                    parts.append(f"✅ {result['ok']} ok")
+                if result["skipped"]:
+                    parts.append(f"⏭ {result['skipped']} skipped")
+                if result["failed"]:
+                    parts.append(f"❌ {result['failed']} failed")
                 await self._bot.send_message(
-                    chat_id=self._chat_id, text=summary, parse_mode="HTML",
+                    chat_id=self._chat_id,
+                    text=f"<b>{display}</b>\n{' | '.join(parts)}",
+                    parse_mode="HTML",
                 )
             else:
                 await self._handle_failure(item, display, result)
@@ -106,7 +113,12 @@ class Worker:
 
     async def _handle_failure(self, item: dict, display: str, result: dict):
         retries = item.get("retries", 0)
-        age = _age_seconds(item["created_at"])
+        try:
+            from datetime import datetime, timezone
+            created = datetime.fromisoformat(item["created_at"])
+            age = (datetime.now(timezone.utc) - created).total_seconds()
+        except (ValueError, TypeError, KeyError):
+            age = 0
 
         if age > MAX_QUEUE_AGE:
             await asyncio.to_thread(self._queue.mark_failed, item["id"], "Timed out in queue (>24h)")
@@ -121,26 +133,13 @@ class Worker:
             return
 
         await asyncio.to_thread(self._queue.requeue, item["id"])
-        summary = _format_summary(display, result)
-        msg = f"{summary}\n🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES})"
+        parts = []
+        if result["ok"]:
+            parts.append(f"✅ {result['ok']} ok")
+        if result["skipped"]:
+            parts.append(f"⏭ {result['skipped']} skipped")
+        if result["failed"]:
+            parts.append(f"❌ {result['failed']} failed")
+        msg = f"<b>{display}</b>\n{' | '.join(parts)}\n🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES})"
         await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
 
-
-def _age_seconds(created_at: str) -> float:
-    try:
-        created = datetime.fromisoformat(created_at)
-        now = datetime.now(timezone.utc)
-        return (now - created).total_seconds()
-    except (ValueError, TypeError):
-        return 0
-
-
-def _format_summary(display: str, result: dict) -> str:
-    parts = []
-    if result["ok"]:
-        parts.append(f"✅ {result['ok']} ok")
-    if result["skipped"]:
-        parts.append(f"⏭ {result['skipped']} skipped")
-    if result["failed"]:
-        parts.append(f"❌ {result['failed']} failed")
-    return f"<b>{display}</b>\n{' | '.join(parts)}"

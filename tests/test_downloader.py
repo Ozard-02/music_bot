@@ -271,7 +271,7 @@ class TestRunUrl:
             from downloader import run_url
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": []}
+        assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")]}
 
     @pytest.mark.asyncio
     async def test_album_dedup_counts_unique(self, config, logger):

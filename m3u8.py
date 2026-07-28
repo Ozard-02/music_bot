@@ -23,27 +23,22 @@ from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 from config import load_config
 
 
-_FS_UNSAFE = re.compile(r'[\\/*?:"<>|]')
-_WS = re.compile(r"\s+")
-
-
-def _sanitize(value: str, fallback: str = "Unknown") -> str:
-    if not value:
+def sanitize(text: str, fallback: str = "Unknown", replace_char: str | None = None) -> str:
+    if not text:
         return fallback
-    cleaned = _FS_UNSAFE.sub("", value)
-    cleaned = _WS.sub(" ", cleaned).strip()
+    if replace_char is not None:
+        cleaned = re.sub(r'[<>:"/\\|?*]', replace_char, text)
+    else:
+        cleaned = re.sub(r'[<>:"/\\|?*]', "", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned or fallback
 
 
-def sanitize_filename(name: str) -> str:
-    return re.sub(r'[<>:"/\\|?*]', "_", name).strip() or "playlist"
-
-
 def track_relative_path(track: TrackMetadata, cfg: dict) -> str:
-    artist = _sanitize(track.first_artist if cfg["first_artist_only"] else track.artists)
-    album_artist = _sanitize(track.album_artist)
-    album = _sanitize(track.album)
-    title = _sanitize(track.title)
+    artist = sanitize(track.first_artist if cfg["first_artist_only"] else track.artists)
+    album_artist = sanitize(track.album_artist)
+    album = sanitize(track.album)
+    title = sanitize(track.title)
     filename = cfg["filename_format"].format(artist=artist, title=title)
     rel = Path(album_artist) / album / f"{filename}.flac"
     return str(rel)
@@ -70,7 +65,7 @@ def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str],
 
 
 def write_m3u8(name: str, lines: list[str], cfg: dict):
-    out = Path(cfg["output_dir"]) / f"{sanitize_filename(name)}.m3u8"
+    out = Path(cfg["output_dir"]) / f"{sanitize(name, fallback='playlist', replace_char='_')}.m3u8"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out
@@ -81,7 +76,7 @@ def write_missing_log(name: str, missing: list, cfg: dict) -> Path | None:
         return None
     temp_dir = Path(cfg["output_dir"]) / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    out = temp_dir / f"{sanitize_filename(name)}_missing.txt"
+    out = temp_dir / f"{sanitize(name, fallback='playlist', replace_char='_')}_missing.txt"
     lines = [f"Missing ({len(missing)}):"]
     for artist, title, rel in missing:
         lines.append(f"  \u2022 {artist} - {title} \u2192 {rel}")

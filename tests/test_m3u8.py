@@ -10,7 +10,7 @@ import pytest
 from m3u8 import (
     build_m3u8_lines,
     load_config,
-    sanitize_filename,
+    sanitize,
     track_relative_path,
     write_m3u8,
 )
@@ -37,19 +37,19 @@ def make_track(
     return t
 
 
-class TestSanitizeFilename:
+class TestSanitize:
     def test_removes_special_chars(self):
-        assert sanitize_filename('My:Playlist/1') == 'My_Playlist_1'
+        assert sanitize('My:Playlist/1', fallback='playlist', replace_char='_') == 'My_Playlist_1'
 
     def test_strips_whitespace(self):
-        assert sanitize_filename('  Test  ') == 'Test'
+        assert sanitize('  Test  ', fallback='playlist', replace_char='_') == 'Test'
 
     def test_empty_fallback(self):
-        assert sanitize_filename('') == 'playlist'
-        assert sanitize_filename('   ') == 'playlist'
+        assert sanitize('', fallback='playlist', replace_char='_') == 'playlist'
+        assert sanitize('   ', fallback='playlist', replace_char='_') == 'playlist'
 
     def test_keeps_valid(self):
-        assert sanitize_filename('Summer Vibes 2024') == 'Summer Vibes 2024'
+        assert sanitize('Summer Vibes 2024', fallback='playlist', replace_char='_') == 'Summer Vibes 2024'
 
 
 class TestTrackRelativePath:
