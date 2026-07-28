@@ -161,11 +161,15 @@ async def post_init(application: Application):
     logger: logging.Logger = application.bot_data["logger"]
     wake_event: asyncio.Event = application.bot_data["wake_event"]
     worker = Worker(qm, application.bot, ALLOWED_USER_ID, cfg, logger, wake_event)
+    application.bot_data["worker"] = worker
     task = asyncio.create_task(worker.run())
     application.bot_data["worker_task"] = task
 
 
 async def post_stop(application: Application):
+    worker: Worker = application.bot_data.get("worker")
+    if worker:
+        await worker.shutdown()
     task = application.bot_data.get("worker_task")
     if task:
         task.cancel()
