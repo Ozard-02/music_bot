@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from telegram import Bot
 
@@ -114,7 +115,6 @@ class Worker:
     async def _handle_failure(self, item: dict, display: str, result: dict):
         retries = item.get("retries", 0)
         try:
-            from datetime import datetime, timezone
             created = datetime.fromisoformat(item["created_at"])
             age = (datetime.now(timezone.utc) - created).total_seconds()
         except (ValueError, TypeError, KeyError):
