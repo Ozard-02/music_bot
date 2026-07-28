@@ -39,17 +39,17 @@ def make_track(
 
 class TestSanitize:
     def test_removes_special_chars(self):
-        assert sanitize('My:Playlist/1', fallback='playlist', replace_char='_') == 'My_Playlist_1'
+        assert sanitize('My:Playlist/1', fallback='playlist') == 'My_Playlist_1'
 
     def test_strips_whitespace(self):
-        assert sanitize('  Test  ', fallback='playlist', replace_char='_') == 'Test'
+        assert sanitize('  Test  ', fallback='playlist') == 'Test'
 
     def test_empty_fallback(self):
-        assert sanitize('', fallback='playlist', replace_char='_') == 'playlist'
-        assert sanitize('   ', fallback='playlist', replace_char='_') == 'playlist'
+        assert sanitize('', fallback='playlist') == 'playlist'
+        assert sanitize('   ', fallback='playlist') == 'playlist'
 
     def test_keeps_valid(self):
-        assert sanitize('Summer Vibes 2024', fallback='playlist', replace_char='_') == 'Summer Vibes 2024'
+        assert sanitize('Summer Vibes 2024', fallback='playlist') == 'Summer Vibes 2024'
 
 
 class TestTrackRelativePath:
@@ -81,7 +81,7 @@ class TestTrackRelativePath:
             first_artist="M/A/R/R/S",
             title="Song? <Nice>",
         )
-        assert track_relative_path(t, cfg) == "ACDC/Greatest Hits Vol 1/MARRS - Song Nice.flac"
+        assert track_relative_path(t, cfg) == "AC_DC/Greatest Hits_ Vol 1/M_A_R_R_S - Song_ _Nice_.flac"
 
     def test_collapses_whitespace(self):
         cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}

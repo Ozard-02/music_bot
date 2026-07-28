@@ -28,6 +28,7 @@ run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry po
    ├─ get_playlist(url) → (info, tracks)  (info ignored for collection downloads)
    ├─ dedup by track.id
    ├─ pre-check: construct path for each track via track_relative_path()
+   │  (matches SpotiFLAC's filesystem — same `sanitize()` with `_` replacement)
    │  → split into existing/missing
    ├─ if all exist → early return {ok=0, skipped=N}
    ├─ log "Pre-check: N/M exist (X new)"
@@ -124,6 +125,9 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
   python m3u8.py <playlist_url> [playlist_name]
   build_m3u8(url, name, cfg) → {path, playlist_name, total_tracks, exist_on_disk}
   build_m3u8_lines(tracks, cfg) → (lines, count)  # dedup by track.id
+  sanitize(text, fallback="Unknown") — replaces <>:"/\|?* with _, collapses whitespace.
+    Matches SpotiFLAC's filesystem sanitization so pre-check paths match actual files.
+    Used by track_relative_path(), write_m3u8(), write_missing_log().
   ```
 
 - `config.default.json` — reference config (6 keys)
