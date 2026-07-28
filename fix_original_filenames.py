@@ -22,7 +22,6 @@ from mutagen.flac import FLAC
 from config import load_config
 from m3u8 import sanitize
 
-MUSIC_DIR = os.path.expanduser("~/Music")
 log = logging.getLogger("fix_original_filenames")
 
 
@@ -55,7 +54,7 @@ def main(dry_run: bool = False):
     skipped = 0
     errors = 0
 
-    for root, _dirs, files in os.walk(MUSIC_DIR):
+    for root, _dirs, files in os.walk(cfg["output_dir"]):
         for fn in files:
             if not fn.lower().endswith(".flac"):
                 continue
@@ -74,7 +73,7 @@ def main(dry_run: bool = False):
                 skipped += 1
                 continue
 
-            target = os.path.join(MUSIC_DIR, rel)
+            target = os.path.join(cfg["output_dir"], rel)
             if fpath == target:
                 continue
 
@@ -90,7 +89,7 @@ def main(dry_run: bool = False):
                 renamed += 1
 
                 parent = os.path.dirname(fpath)
-                while parent != MUSIC_DIR:
+                while parent != cfg["output_dir"]:
                     try:
                         os.rmdir(parent)
                     except OSError:
