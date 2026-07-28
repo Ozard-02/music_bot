@@ -101,11 +101,7 @@ async def mkplaylist_cmd(update: Update, context):
 
     msg = await update.message.reply_html("⏳ Scanning…")
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: asyncio.run(build_m3u8(url, name)),
-        )
+        result = await build_m3u8(url, name)
         missing = result.get("missing_count", 0)
         parts = [f"✅ <b>{result['playlist_name']}</b>",
                  f"{result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
