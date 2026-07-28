@@ -7,7 +7,7 @@ from pathlib import Path
 from config import (
     SERVICES, MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
 )
-from m3u8 import track_relative_path
+from m3u8 import spotiflac_track_relative_path, track_relative_path
 
 
 async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
@@ -36,6 +36,31 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
         else:
             _, tracks = await client.get_playlist(url)
         return await _download_tracks(client, tracks, cfg, logger)
+
+
+def _rename_after_download(track, cfg: dict, logger: logging.Logger):
+    spoti_rel = spotiflac_track_relative_path(track, cfg)
+    orig_rel = track_relative_path(track, cfg)
+    if spoti_rel == orig_rel:
+        return
+    spoti_path = Path(cfg["output_dir"]) / spoti_rel
+    orig_path = Path(cfg["output_dir"]) / orig_rel
+    if not spoti_path.exists():
+        return
+    if orig_path.exists():
+        logger.warning("Target exists, removing duplicate: %s", spoti_path)
+        spoti_path.unlink()
+        return
+    orig_path.parent.mkdir(parents=True, exist_ok=True)
+    spoti_path.rename(orig_path)
+    logger.info("Renamed %s -> %s", spoti_rel, orig_rel)
+    parent = spoti_path.parent
+    while parent != Path(cfg["output_dir"]):
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
 
 
 async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logger) -> dict:
@@ -72,6 +97,8 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
                 fl = await client.download_track(track.external_url)
                 if fl:
                     failed_list.extend(fl)
+                else:
+                    await asyncio.to_thread(_rename_after_download, track, cfg, logger)
             except Exception:
                 failed_list.append(track)
 

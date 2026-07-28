@@ -74,8 +74,38 @@
 
 ---
 
+## Preserve Original Symbols in Filenames
+
+SpotiFLAC replaces `<>:"/\\|?*` with `_` in filenames and directories. On Linux ext4, only `/` and `\0` are forbidden — everything else (`? : " < > | *`) is valid.
+
+### Proposed approach (no SpotiFLAC patches)
+
+1. **Fix `sanitize()`** — only replace `/` (use `∕` U+2215 as substitute), preserve all other chars
+2. **Post-download rename** — after SpotiFLAC saves (with `_`), move to original-symbols path
+3. **Pre-check** — looks at original-symbols path → finds already-downloaded files ✓
+
+### One-time rename script
+
+Scan all FLACs in `~/Music`, read `ALBUM`/`ARTIST`/`TITLE` Vorbis tags, reconstruct original-symbols paths, rename directories/files from `_`-paths.
+
+### Flow
+
+```
+pre-check: look for .../WHEN WE ALL FALL ASLEEP, WHERE DO WE GO?/bad guy.flac
+  → not found (SpotiFLAC saved with _) → download
+SpotiFLAC → saves to .../WHEN WE ALL FALL ASLEEP, WHERE DO WE GO_/bad guy.flac
+post-download rename → .../WHEN WE ALL FALL ASLEEP, WHERE DO WE GO?/bad guy.flac
+next time: pre-check finds it → skip ✓
+```
+
+### Status
+- [x] Fix `sanitize()` — only replace `/` with `∕`, preserve all other chars
+- [x] Add post-download rename in `_download_tracks()` — async via `asyncio.to_thread`
+- [x] One-time rename script — `fix_original_filenames.py` (reads Vorbis tags, renames files + empty dirs)
+- [ ] Test with real downloads
+
 ## Tests
-- [x] **120 tests** across bot, downloader, m3u8, queue_manager, resolver, worker
+- [x] **121 tests** across bot, downloader, m3u8, queue_manager, resolver, worker
   - [x] All mock-based, no network, no real SpotiFLAC calls
   - [x] Run: `pytest tests/ -v`
 

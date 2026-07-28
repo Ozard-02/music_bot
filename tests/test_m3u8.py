@@ -11,6 +11,8 @@ from m3u8 import (
     build_m3u8_lines,
     load_config,
     sanitize,
+    spotiflac_sanitize,
+    spotiflac_track_relative_path,
     track_relative_path,
     write_m3u8,
 )
@@ -38,8 +40,8 @@ def make_track(
 
 
 class TestSanitize:
-    def test_removes_special_chars(self):
-        assert sanitize('My:Playlist/1', fallback='playlist') == 'My_Playlist_1'
+    def test_replaces_slash_only(self):
+        assert sanitize('My:Playlist/1', fallback='playlist') == 'My:Playlist\u22151'
 
     def test_strips_whitespace(self):
         assert sanitize('  Test  ', fallback='playlist') == 'Test'
@@ -50,6 +52,24 @@ class TestSanitize:
 
     def test_keeps_valid(self):
         assert sanitize('Summer Vibes 2024', fallback='playlist') == 'Summer Vibes 2024'
+
+    def test_preserves_special_chars(self):
+        assert sanitize('Song? <Nice>', fallback='unknown') == 'Song? <Nice>'
+
+
+class TestSpotiflacSanitize:
+    def test_replaces_special_chars(self):
+        assert spotiflac_sanitize('My:Playlist/1', fallback='playlist') == 'My_Playlist_1'
+
+    def test_strips_whitespace(self):
+        assert spotiflac_sanitize('  Test  ', fallback='playlist') == 'Test'
+
+    def test_empty_fallback(self):
+        assert spotiflac_sanitize('', fallback='playlist') == 'playlist'
+        assert spotiflac_sanitize('   ', fallback='playlist') == 'playlist'
+
+    def test_keeps_valid(self):
+        assert spotiflac_sanitize('Summer Vibes 2024', fallback='playlist') == 'Summer Vibes 2024'
 
 
 class TestTrackRelativePath:
@@ -81,7 +101,7 @@ class TestTrackRelativePath:
             first_artist="M/A/R/R/S",
             title="Song? <Nice>",
         )
-        assert track_relative_path(t, cfg) == "AC_DC/Greatest Hits_ Vol 1/M_A_R_R_S - Song_ _Nice_.flac"
+        assert track_relative_path(t, cfg) == "AC\u2215DC/Greatest Hits: Vol 1/M\u2215A\u2215R\u2215R\u2215S - Song? <Nice>.flac"
 
     def test_collapses_whitespace(self):
         cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
@@ -92,6 +112,48 @@ class TestTrackRelativePath:
             title="  Hello   World  ",
         )
         assert track_relative_path(t, cfg) == "The Artist/My Album/Test - Hello World.flac"
+
+
+class TestSpotiflacTrackRelativePath:
+    def test_basic(self):
+        cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
+        t = make_track()
+        assert spotiflac_track_relative_path(t, cfg) == "Test Artist/Test Album/Test Artist - Test Track.flac"
+
+    def test_first_artist_only_off(self):
+        cfg = {"first_artist_only": False, "filename_format": "{artist} - {title}"}
+        t = make_track(artists="Artist A, Artist B", first_artist="Artist A")
+        assert spotiflac_track_relative_path(t, cfg) == "Test Artist/Test Album/Artist A, Artist B - Test Track.flac"
+
+    def test_custom_filename_template(self):
+        cfg = {"first_artist_only": True, "filename_format": "{title} - {artist}"}
+        t = make_track()
+        assert spotiflac_track_relative_path(t, cfg) == "Test Artist/Test Album/Test Track - Test Artist.flac"
+
+    def test_different_album_artist(self):
+        cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
+        t = make_track(album_artist="Various Artists")
+        assert spotiflac_track_relative_path(t, cfg) == "Various Artists/Test Album/Test Artist - Test Track.flac"
+
+    def test_replaces_unsafe_chars(self):
+        cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
+        t = make_track(
+            album_artist="AC/DC",
+            album="Greatest Hits: Vol 1",
+            first_artist="M/A/R/R/S",
+            title="Song? <Nice>",
+        )
+        assert spotiflac_track_relative_path(t, cfg) == "AC_DC/Greatest Hits_ Vol 1/M_A_R_R_S - Song_ _Nice_.flac"
+
+    def test_collapses_whitespace(self):
+        cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
+        t = make_track(
+            album_artist="  The   Artist  ",
+            album="  My   Album  ",
+            first_artist="  Test  ",
+            title="  Hello   World  ",
+        )
+        assert spotiflac_track_relative_path(t, cfg) == "The Artist/My Album/Test - Hello World.flac"
 
 
 class TestBuildM3u8Lines:
@@ -172,7 +234,7 @@ class TestWriteM3u8:
     def test_sanitizes_name(self, tmp_path):
         cfg = {"output_dir": str(tmp_path)}
         path = write_m3u8("Bad:Name/Test", ["#EXTM3U"], cfg)
-        assert "Bad_Name_Test.m3u8" in path.name
+        assert "Bad:Name\u2215Test.m3u8" in path.name
 
     def test_creates_parent_dirs(self, tmp_path):
         nested = tmp_path / "sub"

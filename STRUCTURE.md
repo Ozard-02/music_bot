@@ -27,14 +27,16 @@ run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry po
 └─ if "album"|"playlist":
    ├─ get_playlist(url) → (info, tracks)  (info ignored for collection downloads)
    ├─ dedup by track.id
-   ├─ pre-check: construct path for each track via track_relative_path()
-   │  (matches SpotiFLAC's filesystem — same `sanitize()` with `_` replacement)
-   │  → split into existing/missing
-   ├─ if all exist → early return {ok=0, skipped=N}
-   ├─ log "Pre-check: N/M exist (X new)"
-   └─ download each missing track in parallel:
-      asyncio.gather(*[download_track(t.external_url) for t in missing])
-      with asyncio.Semaphore(MAX_CONCURRENT) limiting concurrency
+    ├─ pre-check: construct path for each track via track_relative_path()
+    │  (uses original-symbols path via `sanitize()` — only `/` → `∕`)
+    │  → split into existing/missing
+    ├─ if all exist → early return {ok=0, skipped=N}
+    ├─ log "Pre-check: N/M exist (X new)"
+    └─ download each missing track in parallel:
+       asyncio.gather(*[download_track(t.external_url) for t in missing])
+       with asyncio.Semaphore(MAX_CONCURRENT) limiting concurrency
+       after each successful download → `_rename_after_download()`
+       (moves SpotiFLAC's `_`-path to original-symbols path)
 
 run_url_sync(url, cfg, logger) → dict   # sync wrapper (asyncio.run)
 ```
@@ -119,15 +121,20 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
 ## Helper scripts
 - `fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
 - `fix_covers.py` — re-embed Spotify cover art into all FLACs with Spotify track IDs
+- `fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
 - `m3u8.py` — generate .m3u8 for a Spotify playlist from tracks already on disk
 
   ```
   python m3u8.py <playlist_url> [playlist_name]
   build_m3u8(url, name, cfg) → {path, playlist_name, total_tracks, exist_on_disk}
   build_m3u8_lines(tracks, cfg) → (lines, count)  # dedup by track.id
-  sanitize(text, fallback="Unknown") — replaces <>:"/\|?* with _, collapses whitespace.
-    Matches SpotiFLAC's filesystem sanitization so pre-check paths match actual files.
-    Used by track_relative_path(), write_m3u8(), write_missing_log().
+  sanitize(text, fallback="Unknown") — replaces `/` with `∕` (U+2215), collapses whitespace.
+    Preserves all other characters (`? : " < > | *`). Used by track_relative_path(),
+    write_m3u8(), write_missing_log(), and downloader's pre-check.
+  spotiflac_sanitize(text, fallback="Unknown") — replaces <>:"/\|?* with _.
+    Matches SpotiFLAC's exact filesystem behavior. Used by spotiflac_track_relative_path().
+  track_relative_path(track, cfg) → str  — original-symbols path (via sanitize)
+  spotiflac_track_relative_path(track, cfg) → str  — SpotiFLAC's _-path
   ```
 
 - `config.default.json` — reference config (6 keys)
