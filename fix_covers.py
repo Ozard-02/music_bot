@@ -15,7 +15,8 @@ from pathlib import Path
 import httpx
 from mutagen.flac import FLAC, Picture
 
-MUSIC_DIR = os.path.expanduser("~/Music")
+from config import load_config
+
 MAX_CONCURRENT = 10
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -38,8 +39,11 @@ def _get_spotify_id(filepath: str) -> str | None:
 async def fix_covers(dry_run: bool = False):
     from SpotiFLAC.client import SpotifyMetadataClient
 
+    cfg = load_config(log)
+    output_dir = cfg["output_dir"]
+
     flacs = []
-    for root, _dirs, files in os.walk(MUSIC_DIR):
+    for root, _dirs, files in os.walk(output_dir):
         for fn in files:
             if fn.endswith(".flac"):
                 fpath = os.path.join(root, fn)

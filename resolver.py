@@ -51,7 +51,7 @@ async def resolve_search(
     parts = query.split(" - ", 1)
     a, b = parts[0].strip(), parts[1].strip()
 
-    results = await client.search(f"{a} {b}", limit=5)
+    results = await client.search(f"{a} {b}", limit=20)
     tracks = results.get("tracks", [])
     albums = results.get("albums", [])
 
@@ -60,10 +60,10 @@ async def resolve_search(
 
     if best_track and best_album:
         return _pick_between_track_and_album(best_track, best_album, b, a)
-    if best_track:
-        return (best_track.external_url, best_track.title, "track")
     if best_album:
         return (best_album["external_url"], best_album["name"], "album")
+    if best_track:
+        return (best_track.external_url, best_track.title, "track")
     raise ValueError(f"No results found for '{query}'")
 
 
@@ -72,6 +72,9 @@ def _pick_between_track_and_album(track, album, second_part: str, first_part: st
     track_album = getattr(track, "album", "") or ""
     if second_part.lower() == track_album.lower():
         return (track.external_url, track.title, "track")
+    album_name = album.get("name", "") or ""
+    if second_part.lower() in album_name.lower():
+        return (album["external_url"], album["name"], "album")
     album_artist = album.get("artists", "") or ""
     if first_part.lower() in album_artist.lower():
         return (album["external_url"], album["name"], "album")
