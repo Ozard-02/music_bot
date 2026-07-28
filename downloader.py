@@ -25,7 +25,7 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
         use_album_subfolders=cfg["use_album_subfolders"],
         first_artist_only=cfg["first_artist_only"],
         embed_lyrics=cfg["embed_lyrics"],
-        enrich_providers=["deezer", "apple", "soundcloud"],
+        enrich_providers=["deezer", "soundcloud", "apple"],
         track_max_retries=PER_TRACK_RETRIES,
         timeout_s=PER_TRACK_TIMEOUT,
         max_concurrent_downloads=MAX_CONCURRENT,
