@@ -92,6 +92,7 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 33. **per-track parallel download for collections** — `_run_collection` downloads missing tracks individually via `client.download_track(track.external_url)` with `asyncio.Semaphore(MAX_CONCURRENT)` instead of a single batch call. Gives SpotiFLAC per-track metadata for correct path resolution. Pre-check (skip existing) still runs upfront.
 34. **removed Retry Failed Tracks folder** — deleted `_move_playlist_files()`, `os`/`re`/`shutil` imports. No more playlist-named directory or file-moving logic. Non-flac/non-m3u8 aux files go to `~/Music/temp/`.
 35. **120 tests** — 3 new tests for per-track download assertions (album_all_new, album_partial_exist, album_dedup_counts_unique).
+36. **pre-check path mismatch fixed** — `sanitize()` now replaces `<>:"/\\|?*` with `_` (matching SpotiFLAC's filesystem behavior) instead of removing them. Paths like `WHEN WE ALL FALL ASLEEP, WHERE DO WE GO_/...` now match what SpotiFLAC actually writes to disk, so the pre-check correctly identifies existing files and skips them.
 
 ## Remaining
 
