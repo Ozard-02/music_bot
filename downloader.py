@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
+import shutil
 from pathlib import Path
 
 from config import (
@@ -67,6 +70,9 @@ async def _run_collection(client, url: str, cfg: dict, logger: logging.Logger) -
     from SpotiFLAC import TrackMetadata
 
     info, tracks = await client.get_playlist(url)
+    url_type = info.get("type", "")
+    collection_name = info.get("name", "")
+
     seen = set()
     unique = [t for t in tracks if not (t.id in seen or seen.add(t.id))]
     total = len(unique)
@@ -92,9 +98,7 @@ async def _run_collection(client, url: str, cfg: dict, logger: logging.Logger) -
         return {"ok": 0, "skipped": total, "failed": 0, "failed_tracks": []}
 
     try:
-        failed_list = await client._downloader._run_once_async(
-            url, target_tracks=missing,
-        )
+        failed_list = await client.download_track(url)
     except Exception as e:
         logger.error("Download failed: %s", e)
         return {
@@ -103,6 +107,9 @@ async def _run_collection(client, url: str, cfg: dict, logger: logging.Logger) -
             "failed": len(missing),
             "failed_tracks": [],
         }
+
+    if url_type == "playlist" and collection_name:
+        _move_playlist_files(cfg, collection_name, missing, failed_list, logger)
 
     failed = len(failed_list)
     ok = len(missing) - failed
@@ -114,6 +121,49 @@ async def _run_collection(client, url: str, cfg: dict, logger: logging.Logger) -
         "failed": failed,
         "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
     }
+
+
+def _move_playlist_files(
+    cfg: dict,
+    collection_name: str,
+    missing_tracks: list,
+    failed_list: list,
+    logger: logging.Logger,
+):
+    output_dir = Path(cfg["output_dir"])
+    safe_name = re.sub(r'[<>:"/\\|?*]', "_", collection_name.strip())
+    if not safe_name:
+        return
+    playlist_dir = output_dir / safe_name
+    if not playlist_dir.exists():
+        return
+
+    failed_ids = {t.id for t in failed_list} if failed_list else set()
+    moved = 0
+    for track in missing_tracks:
+        if track.id in failed_ids:
+            continue
+        rel = track_relative_path(track, cfg)
+        src = playlist_dir / rel
+        dst = output_dir / rel
+
+        if src.exists():
+            if dst.exists():
+                src.unlink()
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                moved += 1
+
+    for dirpath, dirnames, filenames in os.walk(playlist_dir, topdown=False):
+        if not dirnames and not filenames:
+            os.rmdir(dirpath)
+
+    if playlist_dir.exists() and not any(playlist_dir.iterdir()):
+        playlist_dir.rmdir()
+
+    if moved:
+        logger.info("Moved %d files out of %s/", moved, safe_name)
 
 
 def run_url_sync(url: str, cfg: dict, logger: logging.Logger) -> dict:
