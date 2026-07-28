@@ -6,7 +6,6 @@ from pathlib import Path
 
 from config import (
     SERVICES, MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
-    load_config, setup_logger, bridge_community_session,
 )
 from m3u8 import track_relative_path
 
