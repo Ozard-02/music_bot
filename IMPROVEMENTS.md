@@ -135,3 +135,4 @@ next time: pre-check finds it → skip ✓
 - [x] Removed `track_file_exists` — relies on SpotiFLAC internal skip detection
 - [x] MusicBrainz tag strip — patched tagger.py to avoid Navidrome misgrouping
 - [x] Cover fix — `enrich_providers` excludes qobuz; `fix_covers.py` re-embeds Spotify covers
+- [x] Add tidal to `enrich_providers` — Tidal provides 1280×1280 covers (vs SoundCloud 500×500)

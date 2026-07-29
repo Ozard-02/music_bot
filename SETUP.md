@@ -73,4 +73,4 @@ Config is read from `~/.spotiflac/config.json` (created by the desktop app). If 
 Qobuz metadata enrichment injects bogus `MUSICBRAINZ_ALBUMID` values that cause Navidrome to merge unrelated albums. `SpotiFLAC/core/tagger.py` is patched to strip all `MUSICBRAINZ_*` tags before writing. Run `fix_mb_tags.py` on existing files if you see misgrouped albums.
 
 ## Cover art note
-Qobuz enrichment returns wrong HD covers for some albums (e.g., Ditonellapiaga "Chimica"). `enrich_providers` in downloader.py excludes qobuz: `["deezer", "apple", "tidal", "soundcloud"]`. Run `fix_covers.py` on existing files with incorrect covers.
+Qobuz enrichment returns wrong HD covers for some albums (e.g., Ditonellapiaga "Chimica"). `enrich_providers` in downloader.py excludes qobuz, uses `["apple", "deezer", "tidal", "soundcloud"]` (priority order). Apple Music provides 3000×3000, Tidal 1280×1280, Deezer and SoundCloud lower resolutions. Run `fix_covers.py` on existing files with incorrect covers.
