@@ -167,7 +167,7 @@ services:
       - QUEUE_DB_PATH=/root/.spotiflac/queue.db
     volumes:
       - ~/Music:/root/Music                        # FLAC output
-      - ~/.spotyflac:/root/.spotiflac            # config + session + queue.db
+      - ~/.spotiflac:/root/.spotiflac            # config + session + queue.db
       - .:/app                                     # code (mount for testing)
     restart: unless-stopped
 ```
@@ -177,5 +177,5 @@ Excludes `.venv`, `__pycache__`, `.git`, `.env`, `*.log`, `*.db`, `AGENTS.md`.
 
 ### `bot.py` — `QUEUE_DB_PATH` env var
 One-line change: `QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", ...))` — points queue.db
-to the mounted `~/.spotyflac/` volume when running in Docker, falls back to project root
+to the mounted `~/.spotiflac/` volume when running in Docker, falls back to project root
 for bare-metal usage.

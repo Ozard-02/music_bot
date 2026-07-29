@@ -7,6 +7,6 @@ services:
       - QUEUE_DB_PATH=/root/.spotiflac/queue.db
     volumes:
       - ~/Music:/root/Music
-      - ~/.spotyflac:/root/.spotiflac
+      - ~/.spotiflac:/root/.spotiflac
       - .:/app
     restart: unless-stopped

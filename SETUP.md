@@ -35,12 +35,12 @@ python downloader.py "https://open.spotify.com/playlist/..."   # CLI one-shot
 docker compose up -d
 ```
 
-Requires `~/.spotyflac/` (created automatically on first run) and `~/Music/` on the host.
+Requires `~/.spotiflac/` (created automatically on first run) and `~/Music/` on the host.
 The `.env` file in the project root is passed via `env_file` to the container.
 
 ### TrueNAS (production)
 Same `docker-compose.yml` — just remove the `.:/app` volume mount so the baked-in code is used instead.
-Create a dataset for `~/.spotyflac/` and set permissions before starting.
+Create a dataset for `~/.spotiflac/` and set permissions before starting.
 
 Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 
