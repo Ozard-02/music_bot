@@ -14,8 +14,8 @@ PER_TRACK_RETRIES = 3
 
 # Queue
 MAX_PARALLEL_JOBS = 3
-MAX_QUEUE_RETRIES = 50
-MAX_DOWNLOAD_TIMEOUT = 7200  # 2h — kill stuck downloads
+MAX_QUEUE_RETRIES = 15
+MAX_DOWNLOAD_TIMEOUT = 3600  # 1h — kill stuck downloads
 
 
 def load_config(logger: logging.Logger) -> dict:

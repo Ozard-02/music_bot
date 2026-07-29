@@ -294,7 +294,9 @@ class TestBuildM3u8Async:
             patch("m3u8.AsyncSpotiFLAC") as mock_client_cls,
         ):
             mock_client = AsyncMock()
-            mock_client.get_playlist.return_value = ({"name": "Test Playlist"}, [track])
+            mc = AsyncMock()
+            mc.get_url_async.return_value = ("Test Playlist", [track], None, {"name": "Test Playlist"})
+            mock_client._get_metadata_client = MagicMock(return_value=mc)
             mock_client_cls.return_value.__aenter__.return_value = mock_client
 
             from m3u8 import build_m3u8
@@ -305,6 +307,7 @@ class TestBuildM3u8Async:
         assert result["exist_on_disk"] == 1
         assert result["missing_count"] == 0
         assert result["missing_log_path"] is None
+        assert result["cover_path"] is None
         assert Path(result["path"]).exists()
         content = Path(result["path"]).read_text(encoding="utf-8")
         assert "#EXTM3U" in content
@@ -321,7 +324,9 @@ class TestBuildM3u8Async:
             patch("m3u8.AsyncSpotiFLAC") as mock_client_cls,
         ):
             mock_client = AsyncMock()
-            mock_client.get_playlist.return_value = ({"name": "Spotify Name"}, [])
+            mc = AsyncMock()
+            mc.get_url_async.return_value = ("Spotify Name", [], None, {"name": "Spotify Name"})
+            mock_client._get_metadata_client = MagicMock(return_value=mc)
             mock_client_cls.return_value.__aenter__.return_value = mock_client
 
             from m3u8 import build_m3u8

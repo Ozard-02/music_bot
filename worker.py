@@ -145,6 +145,7 @@ class Worker:
                     text=f"<b>{display}</b>\n{' | '.join(parts)}",
                     parse_mode="HTML",
                 )
+                await self._auto_build_m3u8(item)
             else:
                 await self._handle_failure(item, display, result)
 
@@ -196,6 +197,28 @@ class Worker:
 
         return existing, len(unique)
 
+    async def _auto_build_m3u8(self, item: dict):
+        if item["input_type"] != "link":
+            return
+        from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+        parsed = parse_spotify_url(item["query"])
+        if parsed.get("type") != "playlist":
+            return
+        from m3u8 import build_m3u8
+        try:
+            result = await build_m3u8(item["query"], cfg=self._cfg)
+            parts = [f"📋 <b>{result['playlist_name']}</b>",
+                     f"{result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
+            if result.get("cover_path"):
+                parts.append("🖼️ Cover")
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                text=" | ".join(parts),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            self._logger.warning("Auto m3u8 failed for %s: %s", item["query"], e)
+
     async def _handle_failure(self, item: dict, display: str, result: dict):
         retries = item.get("retries", 0)
         try:
@@ -206,12 +229,14 @@ class Worker:
 
         if age > MAX_QUEUE_AGE:
             await asyncio.to_thread(self._queue.mark_failed, item["id"], "Timed out in queue (>24h)")
+            await self._auto_build_m3u8(item)
             msg = f"<b>{display}</b>\n⏰ In queue over 24h — gave up"
             await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
             return
 
         if retries >= MAX_QUEUE_RETRIES:
             await asyncio.to_thread(self._queue.mark_failed, item["id"], "Max retries exceeded")
+            await self._auto_build_m3u8(item)
             msg = f"<b>{display}</b>\n❌ Failed after {MAX_QUEUE_RETRIES} retries"
             await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
             return
