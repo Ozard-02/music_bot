@@ -16,11 +16,12 @@ import sys
 from pathlib import Path
 
 import httpx
-from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
+from SpotiFLAC import TrackMetadata
+from SpotiFLAC.client import SpotifyMetadataClient
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 from config import load_config
-from track_utils import sanitize, spotiflac_sanitize, track_relative_path, spotiflac_track_relative_path
+from track_utils import sanitize, track_relative_path
 
 
 def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str], int, list[tuple[str, str, str]]]:
@@ -78,9 +79,8 @@ async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None)
     if cfg is None:
         cfg = load_config(logging.getLogger("m3u8"))
 
-    async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
-        mc = client._get_metadata_client()
-        collection_name, tracks, cover_url, info = await mc.get_url_async(url)
+    mc = SpotifyMetadataClient()
+    collection_name, tracks, cover_url, info = await mc.get_url_async(url)
 
     playlist_name = name or info.get("name", collection_name)
     tracks = list(tracks)
