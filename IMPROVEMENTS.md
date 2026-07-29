@@ -118,10 +118,9 @@ next time: pre-check finds it → skip ✓
 - [x] Remove unused imports: `MAX_QUEUE_RETRIES` in `queue_manager.py:7`, `re` in `backfill_urls.py:4`, `spotiflac_sanitize`/`spotiflac_track_relative_path` in `m3u8.py:23`
 - [ ] Eliminate double-logging in `worker._process()` (inner try catches + re-raises, outer catches again — two log lines per crash)
 - [ ] Move `MAX_QUEUE_AGE` from `worker.py:17` to `config.py`
-- [ ] Import `sanitize` from `track_utils` in `fix_original_filenames.py` (currently via `m3u8` re-export chain)
+- [x] Import `sanitize` from `track_utils` in `fix_original_filenames.py` (was via `m3u8` re-export chain)
+- [x] Wrap `FLAC(path)` in `fix_mb_tags.py` with try/except for corrupted files
 - [ ] Add return type annotations to all `bot.py` handlers (9 functions)
-- [ ] Allow `?si=` query params in `resolver.py` regex (users copying browser URLs hit false "invalid")
-- [ ] Wrap `FLAC(path)` in `fix_mb_tags.py` with try/except for corrupted files
 - [ ] Centralize `MAX_CONCURRENT = 5` constant (defined independently in 3 scripts)
 
 ## Existing (done before bot)

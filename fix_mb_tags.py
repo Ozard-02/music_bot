@@ -25,7 +25,11 @@ for root, _dirs, files in os.walk(MUSIC_DIR):
         if not fn.lower().endswith(".flac"):
             continue
         path = os.path.join(root, fn)
-        audio = FLAC(path)
+        try:
+            audio = FLAC(path)
+        except Exception:
+            print(f"  SKIP (corrupted): {path}")
+            continue
         modified = False
         for tag in BAD_TAGS & set(audio):
             del audio[tag]

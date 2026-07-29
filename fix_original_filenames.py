@@ -20,7 +20,7 @@ from pathlib import Path
 from mutagen.flac import FLAC
 
 from config import load_config
-from m3u8 import sanitize
+from track_utils import sanitize
 
 log = logging.getLogger("fix_original_filenames")
 
