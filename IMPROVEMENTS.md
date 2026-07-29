@@ -60,16 +60,18 @@
 ## Docker
 - [x] **`Dockerfile`** — container image
   - [x] `python:3.14-slim` base
-  - [x] Install `chromium` + `chromium-driver` (SpotiFLAC needs a real browser for
+  - [x] Install `chromium` (SpotiFLAC needs a real browser for
         Qobuz session auto-verification via `nodriver` CDP)
   - [x] `ENV CHROME_PATH=/usr/bin/chromium`
+  - [x] `ENV CHROME_FLAGS="--no-sandbox --disable-dev-shm-usage"`
   - [x] Install SpotiFLAC + python-telegram-bot
   - [x] Copy `spoty_loop/` into container
   - [x] CMD: run `bot.py`
 - [x] **`docker-compose.yml`** — single service
-  - [x] Mount `~/Music:~/Music`
-  - [x] Mount `~/.spotiflac:/root/.spotiflac` (session persists across restarts)
-  - [x] Env vars: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`
+  - [x] Mount `~/Music:/root/Music` (FLAC output)
+  - [x] Mount `~/.spotyflac:/root/.spotiflac` (session + config + queue.db)
+  - [x] Mount `.:/app` (code, for testing — remove for production)
+  - [x] `env_file: .env` + `QUEUE_DB_PATH` env var
 - [x] **`.dockerignore`** — exclude venv, caches, logs, secrets
 - [x] **`bot.py`** — `QUEUE_DB_PATH` env var redirects queue.db to mounted volume
 - [x] **`requirements.txt`** — `python-telegram-bot` (done)

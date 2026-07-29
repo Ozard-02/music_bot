@@ -1,0 +1,12 @@
+services:
+  spoty-loop:
+    build: .
+    container_name: spoty-loop
+    env_file: .env
+    environment:
+      - QUEUE_DB_PATH=/root/.spotiflac/queue.db
+    volumes:
+      - ~/Music:/root/Music
+      - ~/.spotyflac:/root/.spotiflac
+      - .:/app
+    restart: unless-stopped
