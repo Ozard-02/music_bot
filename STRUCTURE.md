@@ -142,3 +142,38 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
 
 - `config.default.json` — reference config (6 keys)
 - `IMPROVEMENTS.md` — planned Docker + enhancements
+
+## Docker deployment files
+
+### `Dockerfile`
+```
+FROM python:3.14-slim
+├─ apt: chromium + chromium-driver (for nodriver CDP)
+├─ pip: spotiflac + python-telegram-bot
+├─ COPY . /app
+├─ ENV CHROME_PATH=/usr/bin/chromium
+├─ ENV QUEUE_DB_PATH=/root/.spotiflac/queue.db
+└─ CMD ["python", "bot.py"]
+```
+
+### `docker-compose.yml`
+```
+services:
+  spoty_loop:
+    build: .
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN
+      - TELEGRAM_ALLOWED_USER_ID
+    volumes:
+      - /mnt/pool/spoty_loop/spotiflac:/root/.spotiflac   # config + queue.db
+      - /mnt/pool/music:/root/Music                        # FLAC output
+```
+
+### `.dockerignore`
+Excludes `.venv`, `__pycache__`, `.git`, `.env`, `*.log`, `queue.db`, `.md` docs.
+
+### `bot.py` — `QUEUE_DB_PATH` env var
+One-line change: `QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", ...))` — points queue.db
+to the mounted `~/.spotiflac/` volume when running in Docker, falls back to project root
+for bare-metal usage.

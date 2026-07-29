@@ -27,6 +27,9 @@ User → Telegram Bot (bot.py)
 | `resolver.py` | `parse_input()` detects link vs "Artist - Album" search. `resolve_search()` queries Spotify via SpotiFLAC. |
 | `worker.py` | Background async loop — dequeues, resolves, calls `run_url()`, sends Telegram notification. |
 | `bot.py` | Telegram bot — /start, /help, /status, /purge, /mkplaylist, link handler, text handler. Chat ID whitelist. |
+| `Dockerfile` | Container image: python:3.14-slim + chromium + spotiflac + bot.py |
+| `docker-compose.yml` | Single-service compose with TrueNAS pool mounts and env vars |
+| `.dockerignore` | Excludes venv, caches, logs, .env from image |
 
 ### Resolver Logic
 
@@ -51,9 +54,16 @@ Requires env vars:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
 
-Run: `bot.py` (starts worker + polling in one process)
-
+### Bare-metal
+```bash
+python bot.py
+```
 Standalone CLI still works: `python downloader.py <spotify_url>`
+
+### Docker
+```bash
+docker compose up -d
+```
 
 ## Done
 
@@ -103,9 +113,9 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 44. **Refactor: remove dead code** — deleted `run_url_sync()`, fixed test patches → 7 previously-failing worker tests now pass (121/121).
 45. **Refactor: clean up lazy imports** — moved `parse_spotify_url`/`build_m3u8`/`track_relative_path`/`Path` to top-level imports in `worker.py`. Only `AsyncSpotiFLAC` stays lazy.
 46. **Suppress SpotiFLAC output noise** — `downloader.py:_silence_spotiflac()` context manager monkey-patches `SpotiFLAC.core.console.*` banner/error/fallback functions and `builtins.input` to no-ops during download. `config.py:setup_logger()` sets all `SpotiFLAC.*` loggers to `CRITICAL`. Kills SOURCE banners, tracebacks, interactive prompts (`Incolla qui il grant`), and fallback spam. 128 tests.
+47. **Docker deployment** — `Dockerfile` (python:3.14-slim + chromium + spotiflac), `.dockerignore`, `docker-compose.yml` with TrueNAS pool paths. `QUEUE_DB_PATH` env var redirects queue.db to the mounted `~/.spotiflac/` volume. Containerized and bare-metal both work.
 
 ## Remaining
 
-- **Docker** — `Dockerfile` + `docker-compose.yml` for containerized deployment.
 - **Tune parallelism** — adjust `MAX_CONCURRENT` (3→?) if rate-limited.
 - **Tidal v1 API retired** — permanent 410 error, requires SpotiFLAC update or tidal-web extension.
