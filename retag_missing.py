@@ -6,13 +6,11 @@ from pathlib import Path
 
 from mutagen.flac import FLAC, Picture
 
-from config import load_config
+from config import load_config, SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
 from track_utils import _get_jpeg_dimensions
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("retag_missing")
-
-MAX_CONCURRENT = 5
 
 
 TAGLESS_FILES = [
