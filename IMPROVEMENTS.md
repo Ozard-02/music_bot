@@ -116,12 +116,12 @@ next time: pre-check finds it → skip ✓
 - [x] Extract `_get_jpeg_dimensions()` to shared utility (triplicated in `backfill_urls.py`, `retag_missing.py`, `fix_covers.py`)
 - [x] Replace `client._get_metadata_client()` with public SpotiFLAC API in `m3u8.py:82`
 - [x] Remove unused imports: `MAX_QUEUE_RETRIES` in `queue_manager.py:7`, `re` in `backfill_urls.py:4`, `spotiflac_sanitize`/`spotiflac_track_relative_path` in `m3u8.py:23`
-- [ ] Eliminate double-logging in `worker._process()` (inner try catches + re-raises, outer catches again — two log lines per crash)
-- [ ] Move `MAX_QUEUE_AGE` from `worker.py:17` to `config.py`
+- [x] Eliminate double-logging in `worker._process()` (inner try removed, single catch)
+- [x] Move `MAX_QUEUE_AGE` from `worker.py:17` to `config.py`
 - [x] Import `sanitize` from `track_utils` in `fix_original_filenames.py` (was via `m3u8` re-export chain)
 - [x] Wrap `FLAC(path)` in `fix_mb_tags.py` with try/except for corrupted files
-- [ ] Add return type annotations to all `bot.py` handlers (9 functions)
-- [ ] Centralize `MAX_CONCURRENT = 5` constant (defined independently in 3 scripts)
+- [x] Add return type annotations to all `bot.py` handlers (9 functions)
+- [x] Centralize `MAX_CONCURRENT = 5` constant (defined independently in 3 scripts)
 
 ## Existing (done before bot)
 - [x] Skip-race fix: per-track-ID `_in_progress` guard inside semaphore

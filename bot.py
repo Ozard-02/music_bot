@@ -54,19 +54,19 @@ def require_auth(func):
 
 
 @require_auth
-async def start(update: Update, _context):
+async def start(update: Update, _context) -> None:
     await update.message.reply_html(
         "🎵 <b>SpotiLoop Bot</b>\n\n" + format_help()
     )
 
 
 @require_auth
-async def help_cmd(update: Update, _context):
+async def help_cmd(update: Update, _context) -> None:
     await update.message.reply_html(format_help())
 
 
 @require_auth
-async def status_cmd(update: Update, context):
+async def status_cmd(update: Update, context) -> None:
     qm: QueueManager = context.application.bot_data["queue_manager"]
     s = await asyncio.to_thread(qm.get_status)
     history = await asyncio.to_thread(qm.get_history, 5)
@@ -90,7 +90,7 @@ async def status_cmd(update: Update, context):
 
 
 @require_auth
-async def mkplaylist_cmd(update: Update, context):
+async def mkplaylist_cmd(update: Update, context) -> None:
     if not context.args:
         await update.message.reply_html(
             "Usage: /mkplaylist &lt;playlist_url&gt; [playlist_name]"
@@ -116,14 +116,14 @@ async def mkplaylist_cmd(update: Update, context):
 
 
 @require_auth
-async def purge_cmd(update: Update, context):
+async def purge_cmd(update: Update, context) -> None:
     qm: QueueManager = context.application.bot_data["queue_manager"]
     count = await asyncio.to_thread(qm.purge_all)
     await update.message.reply_html(f"🗑️ <b>Purged {count} item{'s' if count != 1 else ''}</b>")
 
 
 @require_auth
-async def handle_message(update: Update, context):
+async def handle_message(update: Update, context) -> None:
     text = update.message.text.strip()
     qm: QueueManager = context.application.bot_data["queue_manager"]
     logger: logging.Logger = context.application.bot_data["logger"]
@@ -157,7 +157,7 @@ async def handle_message(update: Update, context):
     )
 
 
-async def post_init(application: Application):
+async def post_init(application: Application) -> None:
     qm: QueueManager = application.bot_data["queue_manager"]
     cfg = application.bot_data["cfg"]
     logger: logging.Logger = application.bot_data["logger"]
@@ -199,7 +199,7 @@ async def post_init(application: Application):
     application.bot_data["worker_task"] = task
 
 
-async def post_stop(application: Application):
+async def post_stop(application: Application) -> None:
     worker: Worker = application.bot_data.get("worker")
     if worker:
         await worker.shutdown()
@@ -212,7 +212,7 @@ async def post_stop(application: Application):
             pass
 
 
-def main():
+def main() -> None:
     if not TOKEN:
         print("TELEGRAM_BOT_TOKEN not set")
         sys.exit(1)
