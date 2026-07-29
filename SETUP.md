@@ -23,9 +23,16 @@ Existing files are detected by SpotiFLAC's internal `_file_exists()` — no re-d
 
 ## Usage
 
+### Bare-metal
 ```bash
 cd spoty_loop
-./downloader.py "https://open.spotify.com/playlist/..."
+python bot.py          # Telegram bot
+python downloader.py "https://open.spotify.com/playlist/..."   # CLI one-shot
+```
+
+### Docker
+```bash
+docker compose up -d
 ```
 
 Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
@@ -36,8 +43,18 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 ## Files
 | File | Purpose |
 |------|---------|
-| `downloader.py` | Main script |
+| `bot.py` | Telegram bot entry point |
+| `downloader.py` | Core download engine |
+| `queue_manager.py` | SQLite queue persistence |
+| `worker.py` | Background queue processor |
+| `resolver.py` | Input parsing + Spotify search |
+| `m3u8.py` | M3U8 playlist generator |
+| `track_utils.py` | Shared path utilities |
+| `config.py` | Shared config, logging, session bridge |
 | `config.default.json` | Reference config (keys used by downloader) |
+| `Dockerfile` | Container image (python:3.14-slim + chromium) |
+| `docker-compose.yml` | Single-service Docker Compose |
+| `.dockerignore` | Excludes venv, caches, logs, secrets |
 | `fix_mb_tags.py` | Remove MUSICBRAINZ_* tags from existing FLACs |
 | `fix_covers.py` | Re-embed correct Spotify cover art into FLACs |
 | `spoty_loop.log` | Full log (all runs) |
