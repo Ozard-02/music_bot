@@ -72,6 +72,28 @@ class QueueManager:
                 )
                 return cursor.lastrowid
 
+    def enqueue_unique(self, input_type: str, query: str) -> tuple[int, bool]:
+        """Atomically check for existing + insert under a single lock.
+
+        Returns (item_id, is_new).  This closes the TOCTOU race between
+        find_existing() and enqueue() when called from separate handlers.
+        """
+        with self._lock:
+            conn = self._connect()
+            existing = conn.execute(
+                "SELECT id FROM queue WHERE input_type=? AND query=? "
+                "AND status IN ('queued', 'running')",
+                (input_type, query),
+            ).fetchone()
+            if existing is not None:
+                return existing["id"], False
+            now = datetime.now(timezone.utc).isoformat()
+            cursor = conn.execute(
+                "INSERT INTO queue (input_type, query, created_at) VALUES (?, ?, ?)",
+                (input_type, query, now),
+            )
+            return cursor.lastrowid, True
+
     def dequeue(self) -> dict | None:
         with self._lock:
             conn = self._connect()

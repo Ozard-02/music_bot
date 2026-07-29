@@ -1,5 +1,6 @@
 """Tests for bot.py — Telegram bot handlers."""
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,7 +31,6 @@ def _make_update(user_id: int = 12345, text: str = "") -> MagicMock:
 
 
 def _make_context(qm=None, logger=None) -> MagicMock:
-    import asyncio
     context = MagicMock()
     context.application.bot_data = {
         "queue_manager": qm or MagicMock(),
@@ -126,8 +126,7 @@ class TestHandleMessage:
     @pytest.mark.asyncio
     async def test_enqueues_link(self):
         qm = MagicMock()
-        qm.find_existing.return_value = None
-        qm.enqueue.return_value = 42
+        qm.enqueue_unique.return_value = (42, True)
         qm.get_status.return_value = {
             "queued": 3, "running": 1, "done": 0, "failed": 0,
         }
@@ -137,8 +136,8 @@ class TestHandleMessage:
         )
         context = _make_context(qm=qm)
         await handle_message(update, context)
-        qm.find_existing.assert_called_once()
-        qm.enqueue.assert_called_once()
+        qm.enqueue_unique.assert_called_once()
+        assert context.application.bot_data["wake_event"].is_set()
         update.message.reply_html.assert_awaited_once()
         text = update.message.reply_html.call_args[0][0]
         assert "Queued" in text
@@ -147,8 +146,7 @@ class TestHandleMessage:
     @pytest.mark.asyncio
     async def test_enqueues_search(self):
         qm = MagicMock()
-        qm.find_existing.return_value = None
-        qm.enqueue.return_value = 7
+        qm.enqueue_unique.return_value = (7, True)
         qm.get_status.return_value = {
             "queued": 1, "running": 0, "done": 0, "failed": 0,
         }
@@ -156,19 +154,23 @@ class TestHandleMessage:
         update = _make_update(text="Artist - Album")
         context = _make_context(qm=qm)
         await handle_message(update, context)
-        qm.find_existing.assert_called_once()
-        qm.enqueue.assert_called_once()
+        qm.enqueue_unique.assert_called_once()
+        assert context.application.bot_data["wake_event"].is_set()
         update.message.reply_html.assert_awaited_once()
+        text = update.message.reply_html.call_args[0][0]
+        assert "Queued" in text
+        assert "7" in text
 
     @pytest.mark.asyncio
     async def test_duplicate_shows_warning(self):
         qm = MagicMock()
-        qm.find_existing.return_value = 99
+        qm.enqueue_unique.return_value = (99, False)
 
         update = _make_update(text="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
         context = _make_context(qm=qm)
         await handle_message(update, context)
-        qm.enqueue.assert_not_called()
+        qm.enqueue_unique.assert_called_once()
+        assert not context.application.bot_data["wake_event"].is_set()
         update.message.reply_html.assert_awaited_once()
         text = update.message.reply_html.call_args[0][0]
         assert "Already queued" in text
@@ -214,8 +216,7 @@ class TestPurgeCmd:
         context = _make_context(qm=qm)
         await purge_cmd(update, context)
         text = update.message.reply_html.call_args[0][0]
-        assert "item" in text
-        assert "s" not in text.split("item")[0][-3:]  # singular
+        assert "1 item" in text
 
     @pytest.mark.asyncio
     async def test_ignores_unauthorized(self):

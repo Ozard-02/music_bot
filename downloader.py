@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
+from contextlib import contextmanager
 import logging
 from pathlib import Path
 
@@ -10,32 +12,71 @@ from config import (
 from track_utils import spotiflac_track_relative_path, track_relative_path
 
 
+@contextmanager
+def _silence_spotiflac():
+    import SpotiFLAC.core.console as _console
+    import SpotiFLAC.core.progress as _progress
+
+    _originals = {
+        "print_source_banner": _console.print_source_banner,
+        "print_api_failure": _console.print_api_failure,
+        "print_quality_fallback": _console.print_quality_fallback,
+        "print_track_header": _console.print_track_header,
+        "print_summary": _console.print_summary,
+        "print_official_source": _console.print_official_source,
+        "safe_tqdm_write": _progress.safe_tqdm_write,
+        "input": builtins.input,
+    }
+
+    _console.print_source_banner = lambda *a, **kw: None
+    _console.print_api_failure = lambda *a, **kw: None
+    _console.print_quality_fallback = lambda *a, **kw: None
+    _console.print_track_header = lambda *a, **kw: None
+    _console.print_summary = lambda *a, **kw: None
+    _console.print_official_source = lambda *a, **kw: None
+    _progress.safe_tqdm_write = lambda *a, **kw: None
+    builtins.input = lambda *a, **kw: ""
+
+    try:
+        yield
+    finally:
+        _console.print_source_banner = _originals["print_source_banner"]
+        _console.print_api_failure = _originals["print_api_failure"]
+        _console.print_quality_fallback = _originals["print_quality_fallback"]
+        _console.print_track_header = _originals["print_track_header"]
+        _console.print_summary = _originals["print_summary"]
+        _console.print_official_source = _originals["print_official_source"]
+        _progress.safe_tqdm_write = _originals["safe_tqdm_write"]
+        builtins.input = _originals["input"]
+
+
 async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
     from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
     parsed = parse_spotify_url(url)
 
-    async with AsyncSpotiFLAC(
-        output_dir=cfg["output_dir"],
-        services=SERVICES,
-        quality=cfg["quality"],
-        filename_format=cfg["filename_format"],
-        use_artist_subfolders=cfg["use_artist_subfolders"],
-        use_album_subfolders=cfg["use_album_subfolders"],
-        first_artist_only=cfg["first_artist_only"],
-        embed_lyrics=cfg["embed_lyrics"],
-        enrich_providers=["apple", "deezer", "soundcloud"],
-        track_max_retries=PER_TRACK_RETRIES,
-        timeout_s=PER_TRACK_TIMEOUT,
-        max_concurrent_downloads=MAX_CONCURRENT,
-    ) as client:
-        if parsed["type"] == "track":
-            track = await client.get_track_metadata(url)
-            tracks = [track]
-        else:
-            _, tracks = await client.get_playlist(url)
-        return await _download_tracks(client, tracks, cfg, logger)
+    with _silence_spotiflac():
+        async with AsyncSpotiFLAC(
+            output_dir=cfg["output_dir"],
+            services=SERVICES,
+            quality=cfg["quality"],
+            filename_format=cfg["filename_format"],
+            use_artist_subfolders=cfg["use_artist_subfolders"],
+            use_album_subfolders=cfg["use_album_subfolders"],
+            first_artist_only=cfg["first_artist_only"],
+            embed_lyrics=cfg["embed_lyrics"],
+            enrich_providers=["apple", "deezer", "soundcloud"],
+            track_max_retries=PER_TRACK_RETRIES,
+            timeout_s=PER_TRACK_TIMEOUT,
+            max_concurrent_downloads=MAX_CONCURRENT,
+        ) as client:
+            if parsed["type"] == "track":
+                track = await client.get_track_metadata(url)
+                tracks = [track]
+            else:
+                _, tracks = await client.get_playlist(url)
+            return await _download_tracks(client, tracks, cfg, logger)
 
 
 def _rename_after_download(track, cfg: dict, logger: logging.Logger):

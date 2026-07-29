@@ -1,28 +1,12 @@
 """Tests for downloader.py — download orchestration with pre-check."""
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
-@pytest.fixture
-def config():
-    return {
-        "output_dir": "/tmp/test_music",
-        "filename_format": "{artist} - {title}",
-        "use_artist_subfolders": True,
-        "use_album_subfolders": True,
-        "first_artist_only": True,
-        "embed_lyrics": True,
-        "quality": "LOSSLESS",
-    }
-
-
-@pytest.fixture
-def logger():
-    import logging
-    return logging.getLogger("test")
+from downloader import run_url
 
 
 def _mock_track(track_id: str, title: str, **kwargs):
@@ -67,7 +51,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.TRACK_URL, config, logger)
 
         assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "total": 1}
@@ -75,7 +58,6 @@ class TestRunUrl:
 
     @pytest.mark.asyncio
     async def test_track_already_exists(self, tmp_path):
-        import logging
         logger = logging.getLogger("test")
         cfg = {
             "output_dir": str(tmp_path),
@@ -100,7 +82,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.TRACK_URL, cfg, logger)
 
         assert result == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "total": 1}
@@ -119,7 +100,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.TRACK_URL, config, logger)
 
         assert result["ok"] == 0
@@ -128,7 +108,6 @@ class TestRunUrl:
 
     @pytest.mark.asyncio
     async def test_album_all_exist(self, tmp_path):
-        import logging
         logger = logging.getLogger("test")
         cfg = {
             "output_dir": str(tmp_path),
@@ -157,7 +136,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
         assert result == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "total": 2}
@@ -179,8 +157,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
-
             cfg = {**config, "output_dir": "/tmp/does-not-exist-xyz"}
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
@@ -200,7 +176,6 @@ class TestRunUrl:
             "embed_lyrics": True,
             "quality": "LOSSLESS",
         }
-        import logging
         logger = logging.getLogger("test")
 
         t1 = _mock_track("t1", "Song A", first_artist="ArtistA", album_artist="AA", album="AA")
@@ -222,7 +197,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
         assert result["ok"] == 1
@@ -248,7 +222,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.ALBUM_URL, config, logger)
 
         assert result["ok"] == 1
@@ -268,7 +241,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.TRACK_URL, config, logger)
 
         assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "total": 1}
@@ -289,7 +261,6 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            from downloader import run_url
             result = await run_url(self.ALBUM_URL, config, logger)
 
         assert result["ok"] == 2
