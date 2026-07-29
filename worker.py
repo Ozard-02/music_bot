@@ -92,17 +92,10 @@ class Worker:
         try:
             url, display = await self._resolve(item)
 
-            try:
-                result = await asyncio.wait_for(
-                    run_url(url, self._cfg, self._logger),
-                    timeout=MAX_DOWNLOAD_TIMEOUT,
-                )
-            except Exception as e:
-                self._logger.error(
-                    "Download crashed #%d: %s\n%s",
-                    item["id"], e, traceback.format_exc(),
-                )
-                raise
+            result = await asyncio.wait_for(
+                run_url(url, self._cfg, self._logger),
+                timeout=MAX_DOWNLOAD_TIMEOUT,
+            )
 
             if result["failed"] > 0:
                 for _track_id, title, err in result.get("failed_tracks", []):
