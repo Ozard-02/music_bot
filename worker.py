@@ -4,13 +4,14 @@ import asyncio
 import logging
 import traceback
 from datetime import datetime, timezone
-
 from telegram import Bot
 
 from config import MAX_PARALLEL_JOBS, MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
+from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from resolver import resolve_search
 from downloader import run_url
+from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
@@ -92,15 +93,6 @@ class Worker:
         try:
             url, display = await self._resolve(item)
 
-            # Track cumulative progress across restarts
-            db_item = await asyncio.to_thread(self._queue.get_item, item["id"])
-            if db_item and db_item["total"] == 0:
-                initial_skipped, total = await self._pre_check(url)
-                await asyncio.to_thread(
-                    self._queue.store_cumulative_tracking,
-                    item["id"], total, initial_skipped,
-                )
-
             try:
                 result = await asyncio.wait_for(
                     run_url(url, self._cfg, self._logger),
@@ -120,26 +112,18 @@ class Worker:
                     )
 
             if result["failed"] == 0:
-                db_item = await asyncio.to_thread(self._queue.get_item, item["id"])
-                if db_item and db_item["initial_skipped"]:
-                    cumulative_ok = db_item["total"] - db_item["initial_skipped"]
-                    cumulative_skipped = db_item["initial_skipped"]
-                else:
-                    cumulative_ok = result["ok"]
-                    cumulative_skipped = result["skipped"]
-
                 await asyncio.to_thread(
                     self._queue.mark_done,
                     item["id"],
-                    cumulative_ok,
-                    cumulative_skipped,
+                    result["ok"],
+                    result["skipped"],
                     0,
                 )
                 parts = []
-                if cumulative_ok:
-                    parts.append(f"✅ {cumulative_ok} ok")
-                if cumulative_skipped:
-                    parts.append(f"⏭ {cumulative_skipped} skipped")
+                if result["ok"]:
+                    parts.append(f"✅ {result['ok']} ok")
+                if result["skipped"]:
+                    parts.append(f"⏭ {result['skipped']} skipped")
                 await self._bot.send_message(
                     chat_id=self._chat_id,
                     text=f"<b>{display}</b>\n{' | '.join(parts)}",
@@ -167,44 +151,12 @@ class Worker:
             return url, display
         return item["query"], item["query"]
 
-    async def _pre_check(self, url: str) -> tuple[int, int]:
-        from SpotiFLAC import AsyncSpotiFLAC
-        from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
-        from m3u8 import track_relative_path
-        from pathlib import Path
-
-        parsed = parse_spotify_url(url)
-        async with AsyncSpotiFLAC(output_dir=self._cfg["output_dir"]) as client:
-            if parsed["type"] == "track":
-                track = await client.get_track_metadata(url)
-                tracks = [track]
-            else:
-                _, tracks = await client.get_playlist(url)
-
-        seen = set()
-        unique = []
-        for t in tracks:
-            if t.id not in seen:
-                seen.add(t.id)
-                unique.append(t)
-
-        existing = 0
-        for t in unique:
-            rel = track_relative_path(t, self._cfg)
-            full = Path(self._cfg["output_dir"]) / rel
-            if full.exists():
-                existing += 1
-
-        return existing, len(unique)
-
     async def _auto_build_m3u8(self, item: dict):
         if item["input_type"] != "link":
             return
-        from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
         parsed = parse_spotify_url(item["query"])
         if parsed.get("type") != "playlist":
             return
-        from m3u8 import build_m3u8
         try:
             result = await build_m3u8(item["query"], cfg=self._cfg)
             parts = [f"📋 <b>{result['playlist_name']}</b>",

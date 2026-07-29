@@ -7,7 +7,7 @@ from pathlib import Path
 from config import (
     SERVICES, MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
 )
-from m3u8 import spotiflac_track_relative_path, track_relative_path
+from track_utils import spotiflac_track_relative_path, track_relative_path
 
 
 async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
@@ -121,5 +121,3 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
     }
 
 
-def run_url_sync(url: str, cfg: dict, logger: logging.Logger) -> dict:
-    return asyncio.run(run_url(url, cfg, logger))

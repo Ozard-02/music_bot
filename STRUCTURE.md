@@ -38,7 +38,6 @@ run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry po
        after each successful download → `_rename_after_download()`
        (moves SpotiFLAC's `_`-path to original-symbols path)
 
-run_url_sync(url, cfg, logger) → dict   # sync wrapper (asyncio.run)
 ```
 
 ## Bot system
@@ -66,7 +65,6 @@ QueueManager(db_path)
   find_existing(type, query) → id | None   # duplicate check
   dequeue() → item | None                   # atomically set status='running'
   get_item(id) → item | None                # fetch current DB row
-  store_cumulative_tracking(item_id, total, initial_skipped)  # first-pass tracking
   requeue(id)                               # increment retries, set 'queued'
   mark_done(id, ok, skipped, failed)
   mark_failed(id, error)
@@ -78,7 +76,7 @@ QueueManager(db_path)
 
 Tables:
   queue       — id, input_type, query, status, retries, created_at,
-                total, initial_skipped, result_*, completed_at, error
+                result_*, completed_at, error
   failed_tracks — id, item_id (FK→queue), track_title, error, failed_at
 ```
 
@@ -106,24 +104,21 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     dequeue → process → wait_for(wake_event, timeout=_poll)
     * when bot enqueues a new item, it sets wake_event
     * worker wakes instantly (even during 300s idle), clears event, polls
-  _pre_check(url) → (initial_skipped, total)  # one-time track listing + file count
-   _auto_build_m3u8(item):
-     ├─ skip if input_type != "link"
-     ├─ skip if parse_spotify_url(item.query)["type"] != "playlist"
-     ├─ build_m3u8(item["query"], cfg=self._cfg) → notify via bot
-     └─ called after success, 24h timeout, max-retries failure (not on requeue)
-   _process(item):
-     "link"   → url = item.query
-     "search" → AsyncSpotiFLAC → resolve_search() → url
-     ├─ if DB total==0 (first pass): _pre_check() → store_cumulative_tracking()
-     run_url_sync(url) via executor (asyncio.wait_for, timeout=MAX_DOWNLOAD_TIMEOUT) → result
-     ├─ includes "total" in result dict
-     ├─ if any failed → log_failed_track() per track → _handle_failure()
-     │  ├─ age >24h → mark_failed("Timed out") + _auto_build_m3u8()
-     │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries") + _auto_build_m3u8()
-     │  └─ else → requeue()
-     └─ if all ok → compute cumulative_ok = total - initial_skipped → mark_done() → _auto_build_m3u8() → send summary
-     on exception → mark_failed() → send error
+  _auto_build_m3u8(item):
+    ├─ skip if input_type != "link"
+    ├─ skip if parsed type != "playlist"
+    ├─ build_m3u8(item["query"], cfg=self._cfg) → notify via bot
+    └─ called after success, 24h timeout, max-retries failure (not on requeue)
+  _process(item):
+    "link"   → url = item.query
+    "search" → AsyncSpotiFLAC → resolve_search() → url
+    run_url(url) via asyncio.wait_for(timeout=MAX_DOWNLOAD_TIMEOUT) → result
+    ├─ if any failed → log_failed_track() per track → _handle_failure()
+    │  ├─ age >24h → mark_failed("Timed out") + _auto_build_m3u8()
+    │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries") + _auto_build_m3u8()
+    │  └─ else → requeue()
+    └─ if all ok → mark_done(result["ok"], result["skipped"], 0) → _auto_build_m3u8() → send summary
+    on exception → mark_failed() → send error
 ```
 
 ## SpotiFLAC patch
@@ -134,20 +129,16 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
 - `fix_covers.py` — re-embed Spotify cover art into all FLACs with Spotify track IDs
 - `fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
 - `m3u8.py` — generate .m3u8 for a Spotify playlist from tracks already on disk, download cover sidecar
+- `track_utils.py` — shared path utilities (`sanitize`, `spotiflac_sanitize`, `track_relative_path`, `spotiflac_track_relative_path`)
 
   ```
   python m3u8.py <playlist_url> [playlist_name]
   build_m3u8(url, name=None, cfg=None) → {path, playlist_name, total_tracks, exist_on_disk, cover_path, missing_log_path}
   _download_cover(url, path) — httpx GET → write image to path
   build_m3u8_lines(tracks, cfg) → (lines, count)  # dedup by track.id
-  sanitize(text, fallback="Unknown") — replaces `/` with `∕` (U+2215), collapses whitespace.
-    Preserves all other characters (`? : " < > | *`). Used by track_relative_path(),
-    write_m3u8(), write_missing_log(), and downloader's pre-check.
-  spotiflac_sanitize(text, fallback="Unknown") — replaces <>:"/\|?* with _.
-    Matches SpotiFLAC's exact filesystem behavior. Used by spotiflac_track_relative_path().
-  track_relative_path(track, cfg) → str  — original-symbols path (via sanitize)
-  spotiflac_track_relative_path(track, cfg) → str  — SpotiFLAC's _-path
   ```
+
+  Path utilities live in `track_utils.py`; `m3u8.py` and `downloader.py` both import from there.
 
 - `config.default.json` — reference config (6 keys)
 - `IMPROVEMENTS.md` — planned Docker + enhancements

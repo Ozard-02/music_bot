@@ -7,9 +7,6 @@ from datetime import datetime, timezone
 from config import MAX_QUEUE_RETRIES
 
 
-_LATEST_SCHEMA = 2
-
-
 class QueueManager:
     def __init__(self, db_path: str):
         self._db_path = db_path
@@ -59,26 +56,11 @@ class QueueManager:
                 CREATE INDEX IF NOT EXISTS idx_failed_tracks_item
                 ON failed_tracks(item_id)
             """)
-            # Schema migrations
-            self._migrate(conn)
 
             # Reset items stranded in 'running' from a killed process
             conn.execute(
                 "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
             )
-
-    def _migrate(self, conn: sqlite3.Connection):
-        version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version < 2:
-            try:
-                conn.execute("ALTER TABLE queue ADD COLUMN total INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                conn.execute("ALTER TABLE queue ADD COLUMN initial_skipped INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            conn.execute("PRAGMA user_version = 2")
 
     def enqueue(self, input_type: str, query: str) -> int:
         with self._lock:
@@ -117,15 +99,6 @@ class QueueManager:
             cursor = conn.execute("SELECT * FROM queue WHERE id=?", (item_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
-
-    def store_cumulative_tracking(self, item_id: int, total: int, initial_skipped: int):
-        with self._lock:
-            conn = self._connect()
-            with conn:
-                conn.execute(
-                    "UPDATE queue SET total=?, initial_skipped=? WHERE id=?",
-                    (total, initial_skipped, item_id),
-                )
 
     def requeue(self, item_id: int):
         """Move item back to queued and increment retry count."""

@@ -12,7 +12,6 @@ Usage:
 import argparse
 import asyncio
 import logging
-import re
 import sys
 from pathlib import Path
 
@@ -21,44 +20,7 @@ from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 from config import load_config
-
-
-def sanitize(text: str, fallback: str = "Unknown") -> str:
-    if not text:
-        return fallback
-    cleaned = re.sub(r"/", "\u2215", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned or fallback
-
-
-def spotiflac_sanitize(text: str, fallback: str = "Unknown") -> str:
-    """Sanitize like SpotiFLAC does: replace <>:\"/\\|?* with _."""
-    if not text:
-        return fallback
-    cleaned = re.sub(r'[<>:"/\\|?*]', "_", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned or fallback
-
-
-def track_relative_path(track: TrackMetadata, cfg: dict) -> str:
-    artist = sanitize(track.first_artist if cfg["first_artist_only"] else track.artists)
-    album_artist = sanitize(track.album_artist)
-    album = sanitize(track.album)
-    title = sanitize(track.title)
-    filename = cfg["filename_format"].format(artist=artist, title=title)
-    rel = Path(album_artist) / album / f"{filename}.flac"
-    return str(rel)
-
-
-def spotiflac_track_relative_path(track: TrackMetadata, cfg: dict) -> str:
-    """Return the path SpotiFLAC would write (with _ replacements)."""
-    artist = spotiflac_sanitize(track.first_artist if cfg["first_artist_only"] else track.artists)
-    album_artist = spotiflac_sanitize(track.album_artist)
-    album = spotiflac_sanitize(track.album)
-    title = spotiflac_sanitize(track.title)
-    filename = cfg["filename_format"].format(artist=artist, title=title)
-    rel = Path(album_artist) / album / f"{filename}.flac"
-    return str(rel)
+from track_utils import sanitize, spotiflac_sanitize, track_relative_path, spotiflac_track_relative_path
 
 
 def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str], int, list[tuple[str, str, str]]]:

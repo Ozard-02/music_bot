@@ -11,7 +11,6 @@ from pathlib import Path
 
 def _load_env(path: str | Path):
     """Simple .env loader — no dependency needed."""
-    """Simple .env loader — no dependency needed."""
     path = Path(path)
     if not path.exists():
         return
