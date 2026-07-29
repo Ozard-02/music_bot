@@ -10,11 +10,13 @@ import pytest
 from m3u8 import (
     build_m3u8_lines,
     load_config,
+    write_m3u8,
+)
+from track_utils import (
     sanitize,
     spotiflac_sanitize,
     spotiflac_track_relative_path,
     track_relative_path,
-    write_m3u8,
 )
 
 
@@ -291,13 +293,11 @@ class TestBuildM3u8Async:
 
         with (
             patch("m3u8.parse_spotify_url", return_value={"type": "playlist", "id": "pl"}),
-            patch("m3u8.AsyncSpotiFLAC") as mock_client_cls,
+            patch("m3u8.SpotifyMetadataClient") as mock_client_cls,
         ):
-            mock_client = AsyncMock()
             mc = AsyncMock()
             mc.get_url_async.return_value = ("Test Playlist", [track], None, {"name": "Test Playlist"})
-            mock_client._get_metadata_client = MagicMock(return_value=mc)
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client_cls.return_value = mc
 
             from m3u8 import build_m3u8
             result = await build_m3u8("https://open.spotify.com/playlist/pl", cfg=cfg)
@@ -321,13 +321,11 @@ class TestBuildM3u8Async:
 
         with (
             patch("m3u8.parse_spotify_url", return_value={"type": "playlist", "id": "pl"}),
-            patch("m3u8.AsyncSpotiFLAC") as mock_client_cls,
+            patch("m3u8.SpotifyMetadataClient") as mock_client_cls,
         ):
-            mock_client = AsyncMock()
             mc = AsyncMock()
             mc.get_url_async.return_value = ("Spotify Name", [], None, {"name": "Spotify Name"})
-            mock_client._get_metadata_client = MagicMock(return_value=mc)
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client_cls.return_value = mc
 
             from m3u8 import build_m3u8
             result = await build_m3u8("url", name="My Custom Name", cfg=cfg)

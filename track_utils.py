@@ -3,8 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
-from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+from SpotiFLAC import TrackMetadata
 
 _RE_SPOTIFLAC = re.compile(r'[<>:"/\\|?*]')
 
@@ -42,46 +41,23 @@ def spotiflac_track_relative_path(track: TrackMetadata, cfg: dict) -> str:
     return _make_relative_path(track, cfg, spotiflac_mode=True)
 
 
-async def fetch_tracks(url: str, cfg: dict) -> list[TrackMetadata]:
-    parsed = parse_spotify_url(url)
-    async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
-        if parsed["type"] == "track":
-            track = await client.get_track_metadata(url)
-            return [track]
-        _, tracks = await client.get_playlist(url)
-    return list(tracks)
-
-
-def dedup_tracks(tracks: list[TrackMetadata]) -> list[TrackMetadata]:
-    seen: set[str] = set()
-    result = []
-    for t in tracks:
-        if t.id not in seen:
-            seen.add(t.id)
-            result.append(t)
-    return result
-
-
-def classify_tracks(
-    tracks: list[TrackMetadata], cfg: dict
-) -> tuple[list[TrackMetadata], list[TrackMetadata]]:
-    existing = []
-    missing = []
-    for t in tracks:
-        rel = track_relative_path(t, cfg)
-        if (Path(cfg["output_dir"]) / rel).exists():
-            existing.append(t)
-        else:
-            missing.append(t)
-    return existing, missing
-
-
-def remove_empty_parents(path: str | Path, stop_at: str | Path):
-    path = Path(path).parent
-    stop_at = Path(stop_at)
-    while path != stop_at:
-        try:
-            path.rmdir()
-            path = path.parent
-        except OSError:
+def _get_jpeg_dimensions(data: bytes) -> tuple[int, int]:
+    if data[:2] != b"\xff\xd8":
+        return (0, 0)
+    i = 2
+    while i < len(data) - 1:
+        if data[i] != 0xFF:
             break
+        marker = data[i + 1]
+        if marker in (0xC0, 0xC1, 0xC2):
+            if i + 10 > len(data):
+                break
+            h = (data[i + 5] << 8) | data[i + 6]
+            w = (data[i + 7] << 8) | data[i + 8]
+            return (w, h)
+        if marker in (0xD9,):
+            break
+        seg_len = ((data[i + 2] << 8) | data[i + 3]) & 0xFFFF
+        i += 2 + seg_len
+    return (0, 0)
+

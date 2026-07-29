@@ -1,38 +1,18 @@
 import asyncio
 import logging
 import os
-import re
+
 from pathlib import Path
 
 from mutagen.flac import FLAC
 
 from config import load_config
+from track_utils import _get_jpeg_dimensions
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("backfill_urls")
 
 MAX_CONCURRENT = 5
-
-
-def _get_jpeg_dimensions(data: bytes) -> tuple[int, int]:
-    if data[:2] != b"\xff\xd8":
-        return (0, 0)
-    i = 2
-    while i < len(data) - 1:
-        if data[i] != 0xFF:
-            break
-        marker = data[i + 1]
-        if marker in (0xC0, 0xC1, 0xC2):
-            if i + 10 > len(data):
-                break
-            h = (data[i + 5] << 8) | data[i + 6]
-            w = (data[i + 7] << 8) | data[i + 8]
-            return (w, h)
-        if marker in (0xD9,):
-            break
-        seg_len = ((data[i + 2] << 8) | data[i + 3]) & 0xFFFF
-        i += 2 + seg_len
-    return (0, 0)
 
 
 def _find_no_url_flacs(output_dir: str) -> list[tuple[str, str, str, str]]:

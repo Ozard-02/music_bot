@@ -134,11 +134,11 @@ class Worker:
                 await self._handle_failure(item, display, result)
 
         except Exception as e:
-            self._logger.error("Failed #%d: %s", item["id"], e)
+            self._logger.error("Failed #%d: %s\n%s", item["id"], e, traceback.format_exc())
             await asyncio.to_thread(self._queue.mark_failed, item["id"], str(e))
             await self._bot.send_message(
                 chat_id=self._chat_id,
-                text=f"<b>Failed</b> #{item['id']}: {item['query']}\n<code>{e}</code>",
+                text=f"<b>Failed</b> #{item['id']}: {item['query']}\nInternal error — check logs",
                 parse_mode="HTML",
             )
 

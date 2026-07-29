@@ -4,7 +4,6 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 
-from config import MAX_QUEUE_RETRIES
 
 
 class QueueManager:
