@@ -36,7 +36,7 @@ from worker import Worker
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
 
-QUEUE_DB = Path(__file__).parent / "queue.db"
+QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", str(Path(__file__).parent / "queue.db")))
 
 
 def _is_allowed(update: Update) -> bool:
