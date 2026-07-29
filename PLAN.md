@@ -96,6 +96,9 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 37. **Original symbols in filenames** — `sanitize()` now only replaces `/` with `∕` (U+2215), preserving all other special characters (`? : " < > | *`). Post-download rename converts SpotiFLAC's `_`-paths to original-symbols paths. One-time `fix_original_filenames.py` script migrates existing files. Pre-check looks at original-symbols paths → finds already-downloaded files. 121 tests.
 38. **Cumulative result tracking** — `worker.py:_process()` runs `_pre_check()` on first pass to count files already on disk (`initial_skipped` + `total`). These are stored in DB via `store_cumulative_tracking()`. On completion, `cumulative_ok = total - initial_skipped` is reported instead of per-pass values. Fixes misleading "1 ok | 13 skipped" after bot restarts. `downloader.py` returns `"total": N` in result dict.
 39. **`.part` file cleanup** — `bot.py:post_init()` deletes leftover `*.enc.part` files from interrupted downloads on startup.
+40. **Playlist cover sidecar** — `build_m3u8()` downloads cover as `{playlist}.jpg` next to `.m3u8` file via `httpx`. Uses `mc.get_url_async(url)` instead of `client.get_playlist(url)` to get `cover_url`. `_download_cover()` helper in `m3u8.py`. Old `.playlist_covers/` migrated to sidecar location on bot startup.
+41. **Auto m3u8 on playlist download** — `worker.py:_auto_build_m3u8()` runs after successful playlist download, after 24h timeout, and after max-retries failure. Checks `input_type == "link"` + `parse_spotify_url(...)["type"] == "playlist"`. Not run on requeue retries.
+42. **Retry/timeout tuning** — `MAX_QUEUE_RETRIES` 50→15, `MAX_DOWNLOAD_TIMEOUT` 7200→3600. Less patience for stuck items.
 
 ## Remaining
 

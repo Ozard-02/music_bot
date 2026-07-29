@@ -7,7 +7,7 @@
 ```
 Constants: SERVICES=["amazon","qobuz"], MAX_CONCURRENT=3,
            PER_TRACK_TIMEOUT=100, PER_TRACK_RETRIES=3,
-           MAX_QUEUE_RETRIES=50, MAX_DOWNLOAD_TIMEOUT=7200
+           MAX_QUEUE_RETRIES=15, MAX_DOWNLOAD_TIMEOUT=3600
 
 load_config(logger) → dict               # read ~/.spotiflac/config.json
 setup_logger(log_path) → logger          # file+stream, suppress SpotiFLAC/httpx
@@ -51,10 +51,10 @@ main()
 ├─ require_auth decorator — all handlers guarded by _is_allowed
 ├─ QueueManager(queue.db)
 ├─ creates asyncio.Event() — shared wake signal
-├─ Application.builder().post_init(post_init)  # starts Worker(wake_event)
+├─ Application.builder().post_init(post_init)  # migrates .playlist_covers/, starts Worker(wake_event)
 ├─ handlers: /start, /help, /status, /purge, /mkplaylist, text
 │  ├─ handle_message sets wake_event after enqueue → worker wakes instantly
-│  └─ mkplaylist_cmd uses run_in_executor (no wake needed)
+│  └─ mkplaylist_cmd runs build_m3u8 directly (async), shows "🖼️ Cover saved" if cover downloaded
 └─ run_polling()
 ```
 
@@ -107,18 +107,23 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     * when bot enqueues a new item, it sets wake_event
     * worker wakes instantly (even during 300s idle), clears event, polls
   _pre_check(url) → (initial_skipped, total)  # one-time track listing + file count
-  _process(item):
-    "link"   → url = item.query
-    "search" → AsyncSpotiFLAC → resolve_search() → url
-    ├─ if DB total==0 (first pass): _pre_check() → store_cumulative_tracking()
-    run_url_sync(url) via executor (asyncio.wait_for, timeout=MAX_DOWNLOAD_TIMEOUT) → result
-    ├─ includes "total" in result dict
-    ├─ if any failed → log_failed_track() per track → _handle_failure()
-    │  ├─ age >24h → mark_failed("Timed out")
-    │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries")
-    │  └─ else → requeue()
-    └─ if all ok → compute cumulative_ok = total - initial_skipped → mark_done() → send summary
-    on exception → mark_failed() → send error
+   _auto_build_m3u8(item):
+     ├─ skip if input_type != "link"
+     ├─ skip if parse_spotify_url(item.query)["type"] != "playlist"
+     ├─ build_m3u8(item["query"], cfg=self._cfg) → notify via bot
+     └─ called after success, 24h timeout, max-retries failure (not on requeue)
+   _process(item):
+     "link"   → url = item.query
+     "search" → AsyncSpotiFLAC → resolve_search() → url
+     ├─ if DB total==0 (first pass): _pre_check() → store_cumulative_tracking()
+     run_url_sync(url) via executor (asyncio.wait_for, timeout=MAX_DOWNLOAD_TIMEOUT) → result
+     ├─ includes "total" in result dict
+     ├─ if any failed → log_failed_track() per track → _handle_failure()
+     │  ├─ age >24h → mark_failed("Timed out") + _auto_build_m3u8()
+     │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries") + _auto_build_m3u8()
+     │  └─ else → requeue()
+     └─ if all ok → compute cumulative_ok = total - initial_skipped → mark_done() → _auto_build_m3u8() → send summary
+     on exception → mark_failed() → send error
 ```
 
 ## SpotiFLAC patch
@@ -128,11 +133,12 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
 - `fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
 - `fix_covers.py` — re-embed Spotify cover art into all FLACs with Spotify track IDs
 - `fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
-- `m3u8.py` — generate .m3u8 for a Spotify playlist from tracks already on disk
+- `m3u8.py` — generate .m3u8 for a Spotify playlist from tracks already on disk, download cover sidecar
 
   ```
   python m3u8.py <playlist_url> [playlist_name]
-  build_m3u8(url, name, cfg) → {path, playlist_name, total_tracks, exist_on_disk}
+  build_m3u8(url, name=None, cfg=None) → {path, playlist_name, total_tracks, exist_on_disk, cover_path, missing_log_path}
+  _download_cover(url, path) — httpx GET → write image to path
   build_m3u8_lines(tracks, cfg) → (lines, count)  # dedup by track.id
   sanitize(text, fallback="Unknown") — replaces `/` with `∕` (U+2215), collapses whitespace.
     Preserves all other characters (`? : " < > | *`). Used by track_relative_path(),

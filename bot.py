@@ -108,6 +108,8 @@ async def mkplaylist_cmd(update: Update, context):
                  f"{result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
         if missing:
             parts.append(f"❌ {missing} missing — see <code>{result['missing_log_path']}</code>")
+        if result.get("cover_path"):
+            parts.append(f"🖼️ Cover saved")
         parts.append(f"<code>{result['path']}</code>")
         await msg.edit_text("\n".join(parts), parse_mode="HTML")
     except Exception as e:
@@ -174,6 +176,23 @@ async def post_init(application: Application):
                 pass
         if cleaned:
             logger.info("Cleaned up %d leftover .part file(s)", cleaned)
+
+    # Migrate .playlist_covers/ to sidecar (Navidrome-compatible) location
+    covers_dir = output / ".playlist_covers"
+    if covers_dir.is_dir():
+        moved = 0
+        for f in list(covers_dir.iterdir()):
+            if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                dest = output / f.name
+                if not dest.exists():
+                    f.rename(dest)
+                    moved += 1
+        if moved:
+            logger.info("Migrated %d playlist cover(s) from .playlist_covers/", moved)
+        try:
+            covers_dir.rmdir()
+        except OSError:
+            pass
 
     worker = Worker(qm, application.bot, ALLOWED_USER_ID, cfg, logger, wake_event)
     application.bot_data["worker"] = worker

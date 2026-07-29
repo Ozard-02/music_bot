@@ -16,6 +16,7 @@ import re
 import sys
 from pathlib import Path
 
+import httpx
 from SpotiFLAC import AsyncSpotiFLAC, TrackMetadata
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
@@ -100,6 +101,13 @@ def write_missing_log(name: str, missing: list, cfg: dict) -> Path | None:
     return out
 
 
+async def _download_cover(url: str, path: Path) -> None:
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        path.write_bytes(resp.content)
+
+
 async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None):
     parsed = parse_spotify_url(url)
     if parsed["type"] != "playlist":
@@ -109,14 +117,25 @@ async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None)
         cfg = load_config(logging.getLogger("m3u8"))
 
     async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
-        info, tracks = await client.get_playlist(url)
+        mc = client._get_metadata_client()
+        collection_name, tracks, cover_url, info = await mc.get_url_async(url)
 
-    playlist_name = name or info.get("name", "playlist")
+    playlist_name = name or info.get("name", collection_name)
     tracks = list(tracks)
 
     lines, included_count, missing = build_m3u8_lines(tracks, cfg)
     path = write_m3u8(playlist_name, lines, cfg)
     missing_log = write_missing_log(playlist_name, missing, cfg)
+
+    cover_path = None
+    if cover_url:
+        cover_path = path.with_suffix(".jpg")
+        try:
+            await _download_cover(cover_url, cover_path)
+        except Exception:
+            logger = logging.getLogger("m3u8")
+            logger.warning("Failed to download cover for %s", playlist_name)
+            cover_path = None
 
     return {
         "path": str(path),
@@ -125,6 +144,7 @@ async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None)
         "exist_on_disk": included_count,
         "missing_count": len(missing),
         "missing_log_path": str(missing_log) if missing_log else None,
+        "cover_path": str(cover_path) if cover_path else None,
     }
 
 
