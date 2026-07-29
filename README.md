@@ -32,4 +32,4 @@ See [SETUP.md](SETUP.md) for details.
 
 ---
 
-*Auto-built and pushed via GitHub Actions on every push to `main`.*
+*Auto-built and pushed to `ghcr.io/ozard-02/music_loop:latest` on every push to `main`.*
