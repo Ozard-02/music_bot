@@ -1,0 +1,11 @@
+services:
+  spoty-loop:
+    image: ghcr.io/ozard-02/music_loop:latest
+    container_name: spoty-loop
+    env_file: .env
+    environment:
+      - QUEUE_DB_PATH=/root/.spotiflac/queue.db
+    volumes:
+      - /mnt/pool/navidrome/Music:/root/Music
+      - /mnt/pool/VM/spotiflac:/root/.spotiflac
+    restart: unless-stopped
