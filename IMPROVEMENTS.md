@@ -76,6 +76,13 @@
 - [x] **`bot.py`** — `QUEUE_DB_PATH` env var redirects queue.db to mounted volume
 - [x] **`requirements.txt`** — `python-telegram-bot` (done)
 
+### CI/CD
+- [x] **`.github/workflows/docker.yml`** — GitHub Actions
+  - [x] Trigger: push to `main`
+  - [x] Build image via `docker/build-push-action`
+  - [x] Push to `ghcr.io/ozard-02/music_loop:latest`
+  - [x] Auth via built-in `secrets.GITHUB_TOKEN`
+
 ---
 
 ## Preserve Original Symbols in Filenames

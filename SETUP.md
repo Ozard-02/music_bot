@@ -42,6 +42,13 @@ The `.env` file in the project root is passed via `env_file` to the container.
 Same `docker-compose.yml` — just remove the `.:/app` volume mount so the baked-in code is used instead.
 Create a dataset for `~/.spotiflac/` and set permissions before starting.
 
+### CI/CD auto-build
+On every `git push` to `main`, GitHub Actions builds the image and pushes it to
+`ghcr.io/ozard-02/music_loop:latest`. No manual `docker build` or `docker push` needed.
+
+**Auto-update on TrueNAS:** add a Watchtower sidecar container or check for updates
+periodically in the TrueNAS Apps UI.
+
 Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 
 ## Provider priority
