@@ -69,7 +69,7 @@
   - [x] CMD: run `bot.py`
 - [x] **`docker-compose.yml`** — single service
   - [x] Mount `~/Music:/root/Music` (FLAC output)
-  - [x] Mount `~/.spotyflac:/root/.spotiflac` (session + config + queue.db)
+  - [x] Mount `~/.spotiflac:/root/.spotiflac` (session + config + queue.db)
   - [x] Mount `.:/app` (code, for testing — remove for production)
   - [x] `env_file: .env` + `QUEUE_DB_PATH` env var
 - [x] **`.dockerignore`** — exclude venv, caches, logs, secrets
