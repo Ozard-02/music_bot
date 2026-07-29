@@ -102,6 +102,7 @@ Standalone CLI still works: `python downloader.py <spotify_url>`
 43. **Refactor: deduplicate path utils** — `m3u8.py` now imports `sanitize`/`track_relative_path` from `track_utils.py` instead of defining its own copies. Single source of truth.
 44. **Refactor: remove dead code** — deleted `run_url_sync()`, fixed test patches → 7 previously-failing worker tests now pass (121/121).
 45. **Refactor: clean up lazy imports** — moved `parse_spotify_url`/`build_m3u8`/`track_relative_path`/`Path` to top-level imports in `worker.py`. Only `AsyncSpotiFLAC` stays lazy.
+46. **Suppress SpotiFLAC output noise** — `downloader.py:_silence_spotiflac()` context manager monkey-patches `SpotiFLAC.core.console.*` banner/error/fallback functions and `builtins.input` to no-ops during download. `config.py:setup_logger()` sets all `SpotiFLAC.*` loggers to `CRITICAL`. Kills SOURCE banners, tracebacks, interactive prompts (`Incolla qui il grant`), and fallback spam. 128 tests.
 
 ## Remaining
 

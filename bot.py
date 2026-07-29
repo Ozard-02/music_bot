@@ -136,15 +136,16 @@ async def handle_message(update: Update, context) -> None:
         )
         return
 
-    existing = await asyncio.to_thread(qm.find_existing, input_type, value)
-    if existing is not None:
+    item_id, is_new = await asyncio.to_thread(
+        qm.enqueue_unique, input_type, value,
+    )
+    if not is_new:
         await update.message.reply_html(
-            f"⚠️ <b>Already queued as #{existing}</b>\n"
+            f"⚠️ <b>Already queued as #{item_id}</b>\n"
             f"<code>{value[:80]}</code>"
         )
         return
 
-    item_id = await asyncio.to_thread(qm.enqueue, input_type, value)
     context.application.bot_data["wake_event"].set()
     logger.info("Enqueued #%d: %s (%s)", item_id, value, input_type)
 

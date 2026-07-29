@@ -190,6 +190,48 @@ class TestQueueManager:
         tracks = qm.get_failed_tracks(item_id=item["id"])
         assert len(tracks) == 1
 
+    def test_enqueue_unique_creates_new(self, queue_manager: QueueManager):
+        qm = queue_manager
+        item_id, is_new = qm.enqueue_unique("link", "url")
+        assert is_new is True
+        assert item_id == 1
+        assert qm.find_existing("link", "url") == 1
+
+    def test_enqueue_unique_detects_duplicate(self, queue_manager: QueueManager):
+        qm = queue_manager
+        id1, _ = qm.enqueue_unique("link", "url")
+        id2, is_new = qm.enqueue_unique("link", "url")
+        assert is_new is False
+        assert id2 == id1
+
+    def test_enqueue_unique_allows_different_type(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue_unique("link", "url")
+        _id2, is_new = qm.enqueue_unique("search", "url")
+        assert is_new is True
+
+    def test_enqueue_unique_allows_different_query(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue_unique("link", "url-a")
+        _id2, is_new = qm.enqueue_unique("link", "url-b")
+        assert is_new is True
+
+    def test_enqueue_unique_after_done_allows_new(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue_unique("link", "url")
+        item = qm.dequeue()
+        qm.mark_done(item["id"], 1, 0, 0)
+        _, is_new = qm.enqueue_unique("link", "url")
+        assert is_new is True
+
+    def test_enqueue_unique_after_failed_allows_new(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue_unique("link", "url")
+        item = qm.dequeue()
+        qm.mark_failed(item["id"], "err")
+        _, is_new = qm.enqueue_unique("link", "url")
+        assert is_new is True
+
     def test_find_existing_returns_id_for_queued(self, queue_manager: QueueManager):
         qm = queue_manager
         qm.enqueue("link", "url")
@@ -278,3 +320,28 @@ class TestQueueManager:
         assert not errors
         s = qm.get_status()
         assert s["queued"] == 200
+
+    def test_concurrent_enqueue_unique(self, queue_manager: QueueManager):
+        """Verify all threads get same id and only one is_new=True."""
+        qm = queue_manager
+        results: list[tuple[int, bool]] = []
+        errors: list[Exception] = []
+
+        def add():
+            try:
+                results.append(qm.enqueue_unique("link", "same-key"))
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=add) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        assert len(results) == 8
+        item_ids = {r[0] for r in results}
+        is_new_flags = [r[1] for r in results]
+        assert len(item_ids) == 1, "all threads must get the same item_id"
+        assert sum(is_new_flags) == 1, "exactly one thread must get is_new=True"

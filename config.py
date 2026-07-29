@@ -5,6 +5,8 @@ import logging
 import os
 from pathlib import Path
 
+os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress bars
+
 
 # Download engine
 SERVICES = ["amazon", "qobuz", "deezer"]
@@ -56,9 +58,11 @@ def setup_logger(log_path: str | Path | None = None) -> logging.Logger:
     logger.info("Logging to %s", log_path)
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("nodriver").setLevel(logging.WARNING)
     for name in list(logging.root.manager.loggerDict):
         if name.startswith("SpotiFLAC"):
-            logging.getLogger(name).setLevel(logging.WARNING)
+            logging.getLogger(name).setLevel(logging.CRITICAL)
 
     return logger
 
