@@ -179,3 +179,9 @@ Excludes `.venv`, `__pycache__`, `.git`, `.env`, `*.log`, `*.db`, `AGENTS.md`.
 One-line change: `QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", ...))` — points queue.db
 to the mounted `~/.spotiflac/` volume when running in Docker, falls back to project root
 for bare-metal usage.
+
+## CI/CD
+
+### `.github/workflows/docker.yml`
+GitHub Actions workflow: on push to `main`, builds the Docker image and pushes to
+`ghcr.io/ozard-02/music_loop:latest` using the built-in `secrets.GITHUB_TOKEN`.

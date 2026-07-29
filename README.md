@@ -1,3 +1,4 @@
+![CI/CD](https://github.com/Ozard-02/music_loop/actions/workflows/docker.yml/badge.svg)
 # SpotyLoop
 
 Telegram bot that queues Spotify downloads through SpotiFLAC (Tidal/Qobuz/Amazon lossless providers).

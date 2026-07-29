@@ -114,6 +114,7 @@ docker compose up -d
 45. **Refactor: clean up lazy imports** — moved `parse_spotify_url`/`build_m3u8`/`track_relative_path`/`Path` to top-level imports in `worker.py`. Only `AsyncSpotiFLAC` stays lazy.
 46. **Suppress SpotiFLAC output noise** — `downloader.py:_silence_spotiflac()` context manager monkey-patches `SpotiFLAC.core.console.*` banner/error/fallback functions and `builtins.input` to no-ops during download. `config.py:setup_logger()` sets all `SpotiFLAC.*` loggers to `CRITICAL`. Kills SOURCE banners, tracebacks, interactive prompts (`Incolla qui il grant`), and fallback spam. 128 tests.
 47. **Docker deployment** — `Dockerfile` (python:3.14-slim + chromium + spotiflac), `.dockerignore`, `docker-compose.yml` with `~/.spotiflac` + `~/Music` mounts. `QUEUE_DB_PATH` env var redirects queue.db to the mounted volume. Containerized and bare-metal both work.
+48. **CI/CD auto-build** — GitHub Actions workflow: on push to `main`, builds image and pushes to `ghcr.io/ozard-02/music_loop:latest`. TrueNAS pulls the updated image automatically.
 
 ## Remaining
 
