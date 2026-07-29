@@ -29,3 +29,7 @@ docker compose up -d
 
 Requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID` in `.env`.
 See [SETUP.md](SETUP.md) for details.
+
+---
+
+*Auto-built and pushed via GitHub Actions on every push to `main`.*
