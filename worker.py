@@ -6,7 +6,7 @@ import traceback
 from datetime import datetime, timezone
 from telegram import Bot
 
-from config import MAX_PARALLEL_JOBS, MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT
+from config import MAX_PARALLEL_JOBS, MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT, MAX_QUEUE_AGE
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from resolver import resolve_search
@@ -14,7 +14,6 @@ from downloader import run_url
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 
-MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
 
 
 class Worker:
