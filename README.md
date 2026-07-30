@@ -1,4 +1,4 @@
-# SpotyLoop
+# MusicBot
 
 **⚠️ Educational purpose only.** Downloads copyrighted music. Know your local laws. See [Disclaimer](#disclaimer).
 
