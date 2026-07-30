@@ -66,6 +66,7 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 | `track_utils.py` | Shared path utilities |
 | `config.py` | Shared config, logging, session bridge |
 | `config.default.json` | Reference config (keys used by downloader) |
+| `.github/workflows/docker.yml` | CI/CD auto-build + push to GHCR |
 | `Dockerfile` | Container image (python:3.14-slim + chromium) |
 | `docker-compose.yml` | Single-service Docker Compose |
 | `.dockerignore` | Excludes venv, caches, logs, secrets |

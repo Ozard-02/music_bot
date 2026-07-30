@@ -184,4 +184,5 @@ for bare-metal usage.
 
 ### `.github/workflows/docker.yml`
 GitHub Actions workflow: on push to `main`, builds the Docker image and pushes to
-`ghcr.io/ozard-02/music_loop:latest` using the built-in `secrets.GITHUB_TOKEN`.
+`ghcr.io/ozard-02/music_loop:latest`. Auth uses `secrets.GHCR_TOKEN` (PAT with
+`write:packages` scope, stored as repo secret).
