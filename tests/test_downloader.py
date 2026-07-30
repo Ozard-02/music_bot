@@ -67,6 +67,7 @@ class TestRunUrl:
             "first_artist_only": True,
             "embed_lyrics": True,
             "quality": "LOSSLESS",
+            "services": ["qobuz", "deezer", "amazon"],
         }
         track = _mock_track("abc123", "Test Track", first_artist="Artist",
                             album_artist="AlbumArtist", album="Album")
@@ -117,6 +118,7 @@ class TestRunUrl:
             "first_artist_only": True,
             "embed_lyrics": True,
             "quality": "LOSSLESS",
+            "services": ["qobuz", "deezer", "amazon"],
         }
         t1 = _mock_track("t1", "Song A", first_artist="ArtistA",
                           album_artist="AA", album="AA")
@@ -167,6 +169,7 @@ class TestRunUrl:
 
     @pytest.mark.asyncio
     async def test_album_partial_exist(self, tmp_path):
+        logger = logging.getLogger("test")
         cfg = {
             "output_dir": str(tmp_path),
             "filename_format": "{artist} - {title}",
@@ -175,8 +178,8 @@ class TestRunUrl:
             "first_artist_only": True,
             "embed_lyrics": True,
             "quality": "LOSSLESS",
+            "services": ["qobuz", "deezer", "amazon"],
         }
-        logger = logging.getLogger("test")
 
         t1 = _mock_track("t1", "Song A", first_artist="ArtistA", album_artist="AA", album="AA")
         t2 = _mock_track("t2", "Song B", first_artist="ArtistB", album_artist="BB", album="BB")
