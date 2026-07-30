@@ -6,7 +6,7 @@
 
 Telegram bot that turns Spotify links into FLAC files via SpotiFLAC (Qobuz/Deezer/Amazon lossless providers).
 
-```mermaid
+```
 Telegram msg → SQLite queue → Worker → SpotiFLAC → FLAC on disk
 ```
 
