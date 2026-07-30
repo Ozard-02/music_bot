@@ -9,7 +9,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress
 
 
 # Download engine
-SERVICES = ["amazon", "qobuz", "deezer"]
+DEFAULT_SERVICES = ["qobuz", "deezer", "amazon"]
 MAX_CONCURRENT = 3
 PER_TRACK_TIMEOUT = 100
 PER_TRACK_RETRIES = 3
@@ -36,6 +36,9 @@ def load_config(logger: logging.Logger) -> dict:
         logger.warning("Config parse error at %s: %s, using defaults", path, e)
         cfg = {}
     folder_template = cfg.get("folderTemplate", "{album_artist}/{album}")
+    services = cfg.get("services", DEFAULT_SERVICES)
+    if isinstance(services, str):
+        services = [s.strip() for s in services.split(",")]
     return {
         "output_dir": cfg.get("downloadPath", os.path.expanduser("~/Music")),
         "filename_format": cfg.get("filenameTemplate", "{artist} - {title}"),
@@ -44,6 +47,7 @@ def load_config(logger: logging.Logger) -> dict:
         "first_artist_only": cfg.get("useFirstArtistOnly", True),
         "embed_lyrics": cfg.get("embedLyrics", True),
         "quality": cfg.get("tidalQuality", "LOSSLESS"),
+        "services": services,
     }
 
 

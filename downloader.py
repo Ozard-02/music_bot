@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 from config import (
-    SERVICES, MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
+    MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
 )
 from track_utils import spotiflac_track_relative_path, track_relative_path
 
@@ -59,7 +59,7 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
     with _silence_spotiflac():
         async with AsyncSpotiFLAC(
             output_dir=cfg["output_dir"],
-            services=SERVICES,
+            services=cfg["services"],
             quality=cfg["quality"],
             filename_format=cfg["filename_format"],
             use_artist_subfolders=cfg["use_artist_subfolders"],

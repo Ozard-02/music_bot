@@ -18,6 +18,7 @@ def config():
         "first_artist_only": True,
         "embed_lyrics": True,
         "quality": "LOSSLESS",
+        "services": ["qobuz", "deezer", "amazon"],
     }
 
 
