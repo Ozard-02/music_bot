@@ -8,7 +8,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir SpotiFLAC==1.5.5 nodriver
+RUN pip install --no-cache-dir SpotiFLAC pydoll-python nodriver
 
 COPY . .
 
