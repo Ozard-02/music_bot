@@ -19,6 +19,8 @@ MAX_PARALLEL_JOBS = 3
 MAX_QUEUE_RETRIES = 15
 MAX_DOWNLOAD_TIMEOUT = 3600  # 1h — kill stuck downloads
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
+RETRY_BACKOFF_BASE = 5    # seconds, doubles each retry
+MAX_RETRY_BACKOFF = 3600  # 1h cap
 SCRIPT_MAX_CONCURRENT = 5  # default for utility scripts
 
 

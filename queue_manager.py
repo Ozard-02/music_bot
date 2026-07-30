@@ -1,5 +1,6 @@
 """SQLite queue persistence for download jobs."""
 
+import math
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -56,6 +57,12 @@ class QueueManager:
                 ON failed_tracks(item_id)
             """)
 
+            # Schema migration: add retry_at for exponential backoff
+            try:
+                conn.execute("ALTER TABLE queue ADD COLUMN retry_at TEXT")
+            except sqlite3.OperationalError:
+                pass
+
             # Reset items stranded in 'running' from a killed process
             conn.execute(
                 "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
@@ -98,8 +105,10 @@ class QueueManager:
         with self._lock:
             conn = self._connect()
             with conn:
+                now = datetime.now(timezone.utc).isoformat()
                 cursor = conn.execute(
-                    "SELECT * FROM queue WHERE status='queued' ORDER BY id LIMIT 1"
+                    "SELECT * FROM queue WHERE status='queued' AND (retry_at IS NULL OR retry_at <= ?) ORDER BY id LIMIT 1",
+                    (now,),
                 )
                 row = cursor.fetchone()
                 if not row:
@@ -121,15 +130,34 @@ class QueueManager:
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def requeue(self, item_id: int):
-        """Move item back to queued and increment retry count."""
+    def requeue(self, item_id: int, delay: float = 0):
+        """Move item back to queued, increment retry count, and optionally set retry_at."""
         with self._lock:
             conn = self._connect()
             with conn:
-                conn.execute(
-                    "UPDATE queue SET status='queued', retries=retries+1 WHERE id=?",
-                    (item_id,),
-                )
+                if delay > 0:
+                    retry_at = datetime.now(timezone.utc).timestamp() + delay
+                    retry_at_iso = datetime.fromtimestamp(retry_at, tz=timezone.utc).isoformat()
+                    conn.execute(
+                        "UPDATE queue SET status='queued', retries=retries+1, retry_at=? WHERE id=?",
+                        (retry_at_iso, item_id),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE queue SET status='queued', retries=retries+1, retry_at=NULL WHERE id=?",
+                        (item_id,),
+                    )
+
+    def get_next_retry_at(self) -> datetime | None:
+        """Return the earliest retry_at of all queued items, or None."""
+        conn = self._connect()
+        cursor = conn.execute(
+            "SELECT MIN(retry_at) FROM queue WHERE status='queued' AND retry_at IS NOT NULL"
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            return datetime.fromisoformat(row[0])
+        return None
 
     def mark_done(self, item_id: int, ok: int, skipped: int, failed: int):
         with self._lock:

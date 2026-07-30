@@ -64,8 +64,9 @@ class TestWorkerProcess:
         s = qm.get_status()
         assert s["queued"] == 1
         assert s["running"] == 0
-        next_item = qm.dequeue()
-        assert next_item["retries"] == 1
+        item_from_db = qm.get_item(item["id"])
+        assert item_from_db["retries"] == 1
+        assert item_from_db["retry_at"] is not None
 
         bot.send_message.assert_awaited()
         msg = bot.send_message.call_args[1]["text"]

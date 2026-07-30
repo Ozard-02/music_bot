@@ -6,7 +6,14 @@ import traceback
 from datetime import datetime, timezone
 from telegram import Bot
 
-from config import MAX_PARALLEL_JOBS, MAX_QUEUE_RETRIES, MAX_DOWNLOAD_TIMEOUT, MAX_QUEUE_AGE
+from config import (
+    MAX_PARALLEL_JOBS,
+    MAX_QUEUE_RETRIES,
+    MAX_DOWNLOAD_TIMEOUT,
+    MAX_QUEUE_AGE,
+    RETRY_BACKOFF_BASE,
+    MAX_RETRY_BACKOFF,
+)
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from resolver import resolve_search
@@ -52,7 +59,12 @@ class Worker:
                     asyncio.create_task(self._run_with_sem(item))
                     slot = False
                 else:
-                    self._poll = min(300, self._poll * 2)
+                    next_retry = await asyncio.to_thread(self._queue.get_next_retry_at)
+                    if next_retry:
+                        remaining = (next_retry - datetime.now(timezone.utc)).total_seconds()
+                        self._poll = max(5, min(300, remaining))
+                    else:
+                        self._poll = min(300, self._poll * 2)
             except Exception as e:
                 self._logger.error("Worker error: %s", e)
                 self._poll = min(300, self._poll * 2)
@@ -185,7 +197,8 @@ class Worker:
             await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
             return
 
-        await asyncio.to_thread(self._queue.requeue, item["id"])
+        delay = min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries))
+        await asyncio.to_thread(self._queue.requeue, item["id"], delay)
         parts = []
         if result["ok"]:
             parts.append(f"✅ {result['ok']} ok")
@@ -193,6 +206,7 @@ class Worker:
             parts.append(f"⏭ {result['skipped']} skipped")
         if result["failed"]:
             parts.append(f"❌ {result['failed']} failed")
-        msg = f"<b>{display}</b>\n{' | '.join(parts)}\n🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES})"
+        when = f"retry in {delay}s" if delay > 0 else "retrying now"
+        msg = f"<b>{display}</b>\n{' | '.join(parts)}\n🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES}, {when})"
         await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
 
