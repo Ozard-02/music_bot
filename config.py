@@ -15,7 +15,7 @@ PER_TRACK_TIMEOUT = 100
 PER_TRACK_RETRIES = 3
 
 # Queue
-MAX_PARALLEL_JOBS = 1
+MAX_PARALLEL_JOBS = 3
 MAX_QUEUE_RETRIES = 15
 MAX_DOWNLOAD_TIMEOUT = 3600  # 1h — kill stuck downloads
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
