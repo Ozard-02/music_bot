@@ -115,6 +115,10 @@ docker compose up -d
 46. **Suppress SpotiFLAC output noise** — `downloader.py:_silence_spotiflac()` context manager monkey-patches `SpotiFLAC.core.console.*` banner/error/fallback functions and `builtins.input` to no-ops during download. `config.py:setup_logger()` sets all `SpotiFLAC.*` loggers to `CRITICAL`. Kills SOURCE banners, tracebacks, interactive prompts (`Incolla qui il grant`), and fallback spam. 128 tests.
 47. **Docker deployment** — `Dockerfile` (python:3.14-slim + chromium + pydoll-python + spotiflac), `.dockerignore`, `docker-compose.yml` with `~/.spotiflac` + `~/Music` mounts. `QUEUE_DB_PATH` env var redirects queue.db to the mounted volume. Containerized and bare-metal both work.
 48. **CI/CD auto-build** — GitHub Actions workflow: on push to `main`, builds image and pushes to `ghcr.io/ozard-02/music_loop:latest`. Auth via `secrets.GHCR_TOKEN` (PAT with `write:packages` scope). TrueNAS pulls the updated image automatically.
+49. **Spotify `-` → `‑` (non-breaking hyphen) path fix** — pre-check used `sanitize()` to replace `-` with Unicode `‑`, but SpotiFLAC writes literal `-`. Reverted: `sanitize()` now preserves `-`. Pre-check paths now match what SpotiFLAC actually writes.
+50. **`BaseException` catch for SpotiFLAC `sys.exit(0)`** — SpotiFLAC calls `sys.exit(0)` on success in some code paths, which raises `SystemExit`. Changed `except Exception` → `except BaseException` chain to prevent silent crash. Worker interprets `SystemExit` as success.
+51. **Silent metadata failure detection** — SpotiFLAC's `download_track(url)` returns `[]` (not exception) when metadata resolution fails. Added file-existence check in `_dl`: if `download_track` returns `[]` and no file appears on disk, counts as failure with "SILENT FAIL" log. Added post-download `(disk: N/total)` sanity line.
+52. **All platforms verified** — bare-metal (Arch Linux), Docker on laptop (macOS), Docker on TrueNAS SCALE all tested working.
 
 ## Remaining
 

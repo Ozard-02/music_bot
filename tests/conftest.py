@@ -1,6 +1,7 @@
 """Shared fixtures for spoty_loop tests."""
 
 import logging
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,8 +11,11 @@ from queue_manager import QueueManager
 
 @pytest.fixture
 def config():
+    _path = Path("/tmp/test_music")
+    if _path.exists():
+        shutil.rmtree(_path)
     return {
-        "output_dir": "/tmp/test_music",
+        "output_dir": str(_path),
         "filename_format": "{artist} - {title}",
         "use_artist_subfolders": True,
         "use_album_subfolders": True,

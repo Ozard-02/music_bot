@@ -28,6 +28,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from config import setup_logger, load_config, bridge_community_session
+from downloader import rescan_library
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from resolver import parse_input, format_help
@@ -120,6 +121,26 @@ async def purge_cmd(update: Update, context) -> None:
     qm: QueueManager = context.application.bot_data["queue_manager"]
     count = await asyncio.to_thread(qm.purge_all)
     await update.message.reply_html(f"🗑️ <b>Purged {count} item{'s' if count != 1 else ''}</b>")
+
+
+@require_auth
+async def rescan_cmd(update: Update, context) -> None:
+    cfg = context.application.bot_data["cfg"]
+    msg = await update.message.reply_html("🔍 Scanning library covers…")
+
+    async def progress(current, total, text):
+        await msg.edit_text(f"🔍 <b>Rescan</b> {current}/{total}\n{text}")
+
+    try:
+        result = await rescan_library(cfg, logging.getLogger("spoty_loop"), progress=progress)
+        await msg.edit_text(
+            f"✅ <b>Rescan complete</b>\n"
+            f"  Fixed: {result['ok']}\n"
+            f"  Skipped: {result['skipped']}\n"
+            f"  Failed: {result['failed']}"
+        )
+    except Exception as e:
+        await msg.edit_text(f"❌ Rescan error: {e}")
 
 
 @require_auth
@@ -250,6 +271,7 @@ def main() -> None:
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("purge", purge_cmd))
     application.add_handler(CommandHandler("mkplaylist", mkplaylist_cmd))
+    application.add_handler(CommandHandler("rescan", rescan_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot starting...")

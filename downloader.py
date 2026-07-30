@@ -4,12 +4,13 @@ import asyncio
 import builtins
 from contextlib import contextmanager
 import logging
+import re
 from pathlib import Path
 
 from config import (
-    MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES,
+    MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES, SCRIPT_MAX_CONCURRENT,
 )
-from track_utils import spotiflac_track_relative_path, track_relative_path
+from track_utils import spotiflac_track_relative_path, track_relative_path, _get_jpeg_dimensions
 
 
 @contextmanager
@@ -85,6 +86,74 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
             return await _download_tracks(client, tracks, cfg, logger)
 
 
+_SPOTIFY_COVER_UPGRADE = re.compile(r"(ab67616d0000)1e02")
+
+
+def _upgrade_cover_url(url: str) -> str:
+    """Upgrade Spotify CDN URL from 300×300 (1e02) to 640×640 (b273)."""
+    return _SPOTIFY_COVER_UPGRADE.sub(r"\g<1>b273", url)
+
+
+_TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
+
+
+def _get_spotify_id_from_file(fpath: Path) -> str | None:
+    from mutagen.flac import FLAC
+    try:
+        audio = FLAC(str(fpath))
+    except Exception:
+        return None
+    for tag in ("URL", "comment"):
+        val = audio.get(tag, [None])[0]
+        if val:
+            m = _TRACK_ID_RE.search(val)
+            if m:
+                return m.group(1)
+    return None
+
+
+async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
+    import httpx
+    from mutagen.flac import FLAC, Picture
+
+    rel = track_relative_path(track, cfg)
+    fpath = Path(cfg["output_dir"]) / rel
+    if not fpath.exists():
+        return
+
+    cover_url = getattr(track, "cover_url", None)
+    if not cover_url:
+        return
+
+    cover_url = _upgrade_cover_url(cover_url)
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as http:
+            resp = await http.get(cover_url)
+            if resp.status_code != 200:
+                return
+
+        data = resp.content
+
+        def _embed():
+            audio = FLAC(str(fpath))
+            pic = Picture()
+            pic.data = data
+            pic.type = 3
+            pic.mime = "image/jpeg"
+            w, h = _get_jpeg_dimensions(data)
+            pic.width, pic.height = w, h
+            pic.depth = 0
+            audio.clear_pictures()
+            audio.add_picture(pic)
+            audio.save()
+
+        await asyncio.to_thread(_embed)
+        logger.debug("Cover overwritten for %s", rel)
+    except Exception:
+        logger.debug("Cover overwrite failed for %s", rel)
+
+
 def _rename_after_download(track, cfg: dict, logger: logging.Logger):
     spoti_rel = spotiflac_track_relative_path(track, cfg)
     orig_rel = track_relative_path(track, cfg)
@@ -150,6 +219,7 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
                     failed_list.extend(fl)
                 else:
                     await asyncio.to_thread(_rename_after_download, track, cfg, logger)
+                    await _fix_cover(track, cfg, logger)
             except Exception:
                 failed_list.append(track)
 
@@ -166,5 +236,84 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
         "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
         "total": total,
     }
+
+
+async def rescan_library(
+    cfg: dict,
+    logger: logging.Logger,
+    progress=None,
+) -> dict:
+    from SpotiFLAC.client import SpotifyMetadataClient
+    from SpotiFLAC.core.progress import ProgressManager
+    import httpx
+    from mutagen.flac import FLAC, Picture
+
+    ProgressManager._event_queue = None
+    ProgressManager._worker_task = None
+
+    output_dir = Path(cfg["output_dir"])
+    flacs = list(output_dir.rglob("*.flac"))
+    total = len(flacs)
+
+    if progress:
+        await progress(0, total, f"Scanning {total} FLACs…")
+    logger.info("Rescan: found %d FLACs", total)
+
+    spotify = SpotifyMetadataClient()
+    sem = asyncio.Semaphore(SCRIPT_MAX_CONCURRENT)
+    ok = failed = skipped = 0
+
+    async def process(fpath: Path):
+        nonlocal ok, failed, skipped
+        async with sem:
+            try:
+                sid = _get_spotify_id_from_file(fpath)
+                if not sid:
+                    skipped += 1
+                    return
+
+                track = await spotify.get_track_async(sid)
+                if not track or not track.cover_url:
+                    skipped += 1
+                    return
+
+                cover_url = _upgrade_cover_url(track.cover_url)
+
+                async with httpx.AsyncClient(timeout=10) as http:
+                    resp = await http.get(cover_url)
+                    if resp.status_code != 200:
+                        failed += 1
+                        return
+
+                data = resp.content
+
+                def _embed():
+                    audio = FLAC(str(fpath))
+                    pic = Picture()
+                    pic.data = data
+                    pic.type = 3
+                    pic.mime = "image/jpeg"
+                    w, h = _get_jpeg_dimensions(data)
+                    pic.width, pic.height = w, h
+                    pic.depth = 0
+                    audio.clear_pictures()
+                    audio.add_picture(pic)
+                    audio.save()
+
+                await asyncio.to_thread(_embed)
+                ok += 1
+            except Exception:
+                failed += 1
+
+        done = ok + failed + skipped
+        if progress and done % 10 == 0:
+            await progress(done, total, f"{ok} fixed, {failed} failed")
+
+    await asyncio.gather(*[process(f) for f in flacs])
+
+    if progress:
+        await progress(total, total, f"Done — {ok} fixed, {skipped} skipped, {failed} failed")
+    logger.info("Rescan done: %d fixed, %d skipped, %d failed", ok, skipped, failed)
+    return {"ok": ok, "skipped": skipped, "failed": failed}
 
 
