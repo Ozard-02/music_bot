@@ -72,8 +72,14 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
             max_concurrent_downloads=MAX_CONCURRENT,
         ) as client:
             if parsed["type"] == "track":
-                track = await client.get_track_metadata(url)
-                tracks = [track]
+                try:
+                    track = await client.get_track_metadata(url)
+                    if track is None:
+                        raise TypeError("get_track_metadata returned None")
+                    tracks = [track]
+                except Exception:
+                    logger.exception("Track metadata failed for %s", url)
+                    return {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("", url, "metadata_error")], "total": 1}
             else:
                 _, tracks = await client.get_playlist(url)
             return await _download_tracks(client, tracks, cfg, logger)
