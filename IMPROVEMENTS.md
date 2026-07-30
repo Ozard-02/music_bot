@@ -81,7 +81,7 @@
   - [x] Trigger: push to `main`
   - [x] Build image via `docker/build-push-action`
   - [x] Push to `ghcr.io/ozard-02/music_loop:latest`
-  - [x] Auth via built-in `secrets.GITHUB_TOKEN`
+  - [x] Auth via `secrets.GHCR_TOKEN` (PAT with `write:packages` scope)
 
 ---
 
@@ -116,7 +116,7 @@ next time: pre-check finds it → skip ✓
 - [ ] Test with real downloads
 
 ## Tests
-- [x] **121 tests** across bot, downloader, m3u8, queue_manager, resolver, worker
+- [x] **128 tests** across bot, downloader, m3u8, queue_manager, resolver, worker
   - [x] All mock-based, no network, no real SpotiFLAC calls
   - [x] Run: `pytest tests/ -v`
 

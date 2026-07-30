@@ -21,6 +21,10 @@ from downloader import run_url
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 
+def _run_url_sync(url: str, cfg: dict, logger: logging.Logger) -> dict:
+    async def _inner():
+        return await run_url(url, cfg, logger)
+    return asyncio.run(_inner())
 
 
 class Worker:
@@ -105,7 +109,7 @@ class Worker:
             url, display = await self._resolve(item)
 
             result = await asyncio.wait_for(
-                run_url(url, self._cfg, self._logger),
+                asyncio.to_thread(_run_url_sync, url, self._cfg, self._logger),
                 timeout=MAX_DOWNLOAD_TIMEOUT,
             )
 
