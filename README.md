@@ -2,7 +2,7 @@
 
 **⚠️ Educational purpose only.** Downloads copyrighted music. Know your local laws. See [Disclaimer](#disclaimer).
 
-![CI/CD](https://github.com/Ozard-02/music_loop/actions/workflows/docker.yml/badge.svg)
+![CI/CD](https://github.com/Ozard-02/music_bot/actions/workflows/docker.yml/badge.svg)
 
 Telegram bot that turns Spotify links into FLAC files via SpotiFLAC (Qobuz/Deezer/Amazon lossless providers).
 
