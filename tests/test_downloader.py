@@ -324,8 +324,9 @@ class TestRunUrl:
 class TestConsoleInterception:
     """SpotiFLAC's install_console_interception() pollutes the root logger:
     one TqdmLoggingHandler per track download, never removed.  The patch in
-    _disable_progress_manager must keep the root logger stable — regression
-    for the 3x duplicate log lines seen in production."""
+    spotiflac_patch.disable_progress_manager (triggered by importing
+    downloader) must keep the root logger stable — regression for the 3x
+    duplicate log lines seen in production."""
 
     def test_install_is_neutralized(self):
         import SpotiFLAC.core.progress as progress

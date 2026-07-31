@@ -56,9 +56,9 @@ For every FLAC in the target folder it:
 CLI (reads tags, applies nothing by default):
 
 ```bash
-python fix_metadata.py Albums/MADAME             # dry run — prints the plan
-python fix_metadata.py Albums/MADAME --apply     # write tags
-python fix_metadata.py /path/to/library --apply  # walk a whole library
+python scripts/fix_metadata.py Albums/MADAME             # dry run — prints the plan
+python scripts/fix_metadata.py Albums/MADAME --apply     # write tags
+python scripts/fix_metadata.py /path/to/library --apply  # walk a whole library
 ```
 
 Telegram bot (always applies):
@@ -85,11 +85,11 @@ rescan (Settings → Scan) so the split albums collapse back into one.
   continues; it never aborts the rest.
 - Filenames are left untouched (except the move into the real album folder).
 
-### Related one-off scripts
+### Related one-off scripts (in `scripts/`)
 
-- `fix_mb_tags.py` — strips `MUSICBRAINZ_*` from every FLAC in `~/Music`
+- `scripts/fix_mb_tags.py` — strips `MUSICBRAINZ_*` from every FLAC in `~/Music`
   (the same cleanup, offline, but does not retag anything else).
-- `fix_covers.py` — re-embeds Spotify cover art into every FLAC with a
-  Spotify track URL.
-- `retag_missing.py` — retags a hardcoded list of tagless files (a manual
+- `scripts/fix_covers.py` — re-embeds Spotify cover art into every FLAC with a
+  Spotify track URL (same engine as the bot's `/rescan`).
+- `scripts/retag_missing.py` — retags a hardcoded list of tagless files (a manual
   predecessor of `fix_metadata.py`).

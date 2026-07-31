@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fix_metadata import (
+from scripts.fix_metadata import (
     _guess_metadata,
     _is_foreign,
     _majority,
@@ -81,6 +81,8 @@ class TestFixAlbumFolder:
         return folder
 
     def _patch_flac(self, urls=None):
+        from contextlib import ExitStack, contextmanager
+
         urls = urls or {}
 
         def _fake_flac(path):
@@ -95,7 +97,14 @@ class TestFixAlbumFolder:
             audio.get.side_effect = get
             return audio
 
-        return patch("fix_metadata.FLAC", side_effect=_fake_flac)
+        @contextmanager
+        def _stack():
+            with ExitStack() as stack:
+                stack.enter_context(patch("scripts.fix_metadata.FLAC", side_effect=_fake_flac))
+                stack.enter_context(patch("flac_utils.FLAC", side_effect=_fake_flac))
+                yield
+
+        return _stack()
 
     @pytest.mark.asyncio
     async def test_url_track_retags_and_stays(self, tmp_path):
@@ -248,7 +257,9 @@ class TestFixLibrary:
             album = "DISINCANTO" if sid == "disincanto" else "MADAME"
             return _track(album=album)
 
-        with patch("fix_metadata.FLAC", side_effect=_fake_flac), patch(
+        with patch("scripts.fix_metadata.FLAC", side_effect=_fake_flac), patch(
+            "flac_utils.FLAC", side_effect=_fake_flac
+        ), patch(
             "SpotiFLAC.core.tagger.embed_metadata_async", AsyncMock()
         ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls:
             client = client_cls.return_value

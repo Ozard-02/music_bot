@@ -29,7 +29,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from config import setup_logger, load_config, bridge_community_session
-from downloader import rescan_library
+from maintenance import rescan_library
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from resolver import parse_input, format_help
@@ -213,7 +213,7 @@ async def fixmetadata_cmd(update: Update, context) -> None:
         await update.message.reply_html(f"❌ Not a folder: <code>{folder}</code>")
         return
 
-    from fix_metadata import fix_library
+    from scripts.fix_metadata import fix_library
 
     msg = await update.message.reply_html(
         f"⏳ Fixing metadata in <code>{folder}</code>…"

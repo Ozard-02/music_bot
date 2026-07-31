@@ -12,52 +12,31 @@ Files whose real album (from Spotify) differs from the album folder they sit
 in are moved into the folder of their real album. Nothing is ever deleted.
 
 Examples:
-    python fix_metadata.py Albums/MADAME --dry-run
-    python fix_metadata.py Albums/MADAME --apply
-    python fix_metadata.py /mnt/server/files/Albums --apply   # whole library
+    python scripts/fix_metadata.py Albums/MADAME --dry-run
+    python scripts/fix_metadata.py Albums/MADAME --apply
+    python scripts/fix_metadata.py /mnt/server/files/Albums --apply   # whole library
 """
 
 import argparse
 import asyncio
 import logging
 import os
-import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mutagen.flac import FLAC
 
 from config import SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
+from flac_utils import get_spotify_id_from_file
+from spotiflac_patch import reset_progress_manager, silence_spotiflac_loggers
 from track_utils import sanitize
 
 log = logging.getLogger("fix_metadata")
 
-_TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
-
 # Provider order = priority. Apple first, then Deezer, then SoundCloud.
 ENRICH_PROVIDERS = ["apple", "deezer", "soundcloud"]
-
-
-def _silence_spotiflac_loggers() -> None:
-    for name in list(logging.root.manager.loggerDict):
-        if name.startswith("SpotiFLAC"):
-            logging.getLogger(name).setLevel(logging.CRITICAL)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
-def _get_spotify_id(filepath: str | Path) -> str | None:
-    try:
-        audio = FLAC(str(filepath))
-    except Exception:
-        return None
-    for tag in ("URL", "comment"):
-        val = audio.get(tag, [None])[0]
-        if val:
-            m = _TRACK_ID_RE.search(val)
-            if m:
-                return m.group(1)
-    return None
 
 
 def _guess_metadata(filepath: str | Path) -> tuple[str, str] | None:
@@ -135,11 +114,9 @@ async def fix_album_folder(
                 "would_fix": 0, "details": [], "moved_files": [], "failed_files": []}
 
     from SpotiFLAC.client import SpotifyMetadataClient
-    from SpotiFLAC.core.progress import ProgressManager
     from SpotiFLAC.core.tagger import embed_metadata_async, EmbedOptions
 
-    ProgressManager._event_queue = None
-    ProgressManager._worker_task = None
+    reset_progress_manager()
 
     majority_album = _majority([_read_existing(f)["album"] for f in flacs])
     if apply:
@@ -163,7 +140,7 @@ async def fix_album_folder(
     async def process(fpath: Path) -> None:
         async with sem:
             try:
-                sid = _get_spotify_id(fpath)
+                sid = get_spotify_id_from_file(fpath)
                 if sid:
                     track = await spotify.get_track_async(sid)
                 else:
@@ -299,7 +276,7 @@ async def _main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    _silence_spotiflac_loggers()
+    silence_spotiflac_loggers()
 
     target = Path(args.folder).expanduser()
     if not target.is_dir():
@@ -309,10 +286,7 @@ async def _main() -> None:
     mode = "APPLY" if args.apply else "DRY-RUN"
     log.info("=== fix_metadata %s: %s ===", mode, target)
 
-    if args.apply:
-        res = await fix_library(target, apply=True, logger=log)
-    else:
-        res = await fix_library(target, apply=False, logger=log)
+    res = await fix_library(target, apply=args.apply, logger=log)
 
     log.info("")
     log.info("=== Results ===")

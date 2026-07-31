@@ -17,6 +17,8 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from mutagen.flac import FLAC
 
 from config import load_config

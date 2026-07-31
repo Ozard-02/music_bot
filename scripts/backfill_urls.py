@@ -1,13 +1,16 @@
 import asyncio
 import logging
 import os
+import sys
 
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mutagen.flac import FLAC
 
 from config import load_config, SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
-from track_utils import _get_jpeg_dimensions
+from track_utils import get_jpeg_dimensions
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("backfill_urls")
@@ -103,7 +106,7 @@ async def backfill():
             if pics:
                 p = pics[0]
                 if p.width == 0 or p.height == 0:
-                    w, h = _get_jpeg_dimensions(p.data)
+                    w, h = get_jpeg_dimensions(p.data)
                     if w > 0 and h > 0:
                         p.width = w
                         p.height = h

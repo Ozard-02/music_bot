@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from telegram import Bot
 
@@ -26,6 +27,57 @@ def _run_url_sync(url: str, cfg: dict, logger: logging.Logger, skip_titles: set[
     async def _inner():
         return await run_url(url, cfg, logger, skip_titles)
     return asyncio.run(_inner())
+
+
+@dataclass(frozen=True)
+class FailureDecision:
+    """Outcome for a failed item: action + detail (error, count, or delay)."""
+
+    action: str  # "fail" | "done" | "requeue"
+    detail: object = None
+
+
+def decide_failure(item: dict, result: dict, gave_up_titles: set[str], *, now: datetime | None = None) -> FailureDecision:
+    """Pure decision logic for failed downloads. Checks, in order:
+    1. age > MAX_QUEUE_AGE            → fail ("Timed out in queue")
+    2. retries >= MAX_QUEUE_RETRIES    → fail ("Max retries exceeded")
+    3. no still-trying failures        → done with partial result (gave-up count)
+    4. otherwise                       → requeue with exponential backoff delay
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    retries = item.get("retries", 0)
+    try:
+        created = datetime.fromisoformat(item["created_at"])
+        age = (now - created).total_seconds()
+    except (ValueError, TypeError, KeyError):
+        age = 0
+
+    if age > MAX_QUEUE_AGE:
+        return FailureDecision("fail", "Timed out in queue (>24h)")
+    if retries >= MAX_QUEUE_RETRIES:
+        return FailureDecision("fail", "Max retries exceeded")
+
+    still_trying = [
+        title for _track_id, title, _err in result.get("failed_tracks", [])
+        if title not in gave_up_titles
+    ]
+    if not still_trying:
+        return FailureDecision("done", len(gave_up_titles))
+
+    delay = min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries))
+    return FailureDecision("requeue", delay)
+
+
+def _result_summary(result: dict) -> str:
+    parts = []
+    if result.get("ok"):
+        parts.append(f"✅ {result['ok']} ok")
+    if result.get("skipped"):
+        parts.append(f"⏭ {result['skipped']} skipped")
+    if result.get("failed"):
+        parts.append(f"❌ {result['failed']} failed")
+    return " | ".join(parts)
 
 
 class Worker:
@@ -145,27 +197,6 @@ class Worker:
 
     async def _handle_no_failures(self, item: dict, display: str, result: dict):
         gave_up_tracks = result.get("gave_up_tracks", [])
-        if not gave_up_tracks:
-            await asyncio.to_thread(
-                self._queue.mark_done,
-                item["id"],
-                result["ok"],
-                result["skipped"],
-                0,
-            )
-            parts = []
-            if result["ok"]:
-                parts.append(f"✅ {result['ok']} ok")
-            if result["skipped"]:
-                parts.append(f"⏭ {result['skipped']} skipped")
-            await self._bot.send_message(
-                chat_id=self._chat_id,
-                text=f"<b>{display}</b>\n{' | '.join(parts)}",
-                parse_mode="HTML",
-            )
-            await self._auto_build_m3u8(item)
-            return
-
         await asyncio.to_thread(
             self._queue.mark_done,
             item["id"],
@@ -173,16 +204,15 @@ class Worker:
             result["skipped"],
             len(gave_up_tracks),
         )
-        parts = []
-        if result["ok"]:
-            parts.append(f"✅ {result['ok']} ok")
-        if result["skipped"]:
-            parts.append(f"⏭ {result['skipped']} skipped")
+        parts = [_result_summary(result)]
         if gave_up_tracks:
             parts.append(f"❌ {len(gave_up_tracks)} given up")
+        msg = f"<b>{display}</b>\n{' | '.join(parts)}"
+        if gave_up_tracks:
+            msg += f"\n🧊 Tracks gave up after {MAX_TRACK_RETRIES} attempts"
         await self._bot.send_message(
             chat_id=self._chat_id,
-            text=f"<b>{display}</b>\n{' | '.join(parts)}\n🧊 Tracks gave up after {MAX_TRACK_RETRIES} attempts",
+            text=msg,
             parse_mode="HTML",
         )
         await self._auto_build_m3u8(item)
@@ -217,63 +247,49 @@ class Worker:
             self._logger.warning("Auto m3u8 failed for %s: %s", item["query"], e)
 
     async def _handle_failure(self, item: dict, display: str, result: dict):
-        retries = item.get("retries", 0)
-        try:
-            created = datetime.fromisoformat(item["created_at"])
-            age = (datetime.now(timezone.utc) - created).total_seconds()
-        except (ValueError, TypeError, KeyError):
-            age = 0
-
-        if age > MAX_QUEUE_AGE:
-            await asyncio.to_thread(self._queue.mark_failed, item["id"], "Timed out in queue (>24h)")
-            await self._auto_build_m3u8(item)
-            msg = f"<b>{display}</b>\n⏰ In queue over 24h — gave up"
-            await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
-            return
-
-        if retries >= MAX_QUEUE_RETRIES:
-            await asyncio.to_thread(self._queue.mark_failed, item["id"], "Max retries exceeded")
-            await self._auto_build_m3u8(item)
-            msg = f"<b>{display}</b>\n❌ Failed after {MAX_QUEUE_RETRIES} retries"
-            await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
-            return
-
         gave_up = await asyncio.to_thread(
             self._queue.get_give_up_titles, item["id"], MAX_TRACK_RETRIES,
         )
-        still_trying = [
-            title for _track_id, title, _err in result.get("failed_tracks", [])
-            if title not in gave_up
-        ]
+        decision = decide_failure(item, result, gave_up)
+        retries = item.get("retries", 0)
 
-        if not still_trying:
-            gave_up_count = len(gave_up)
+        if decision.action == "fail":
+            await asyncio.to_thread(self._queue.mark_failed, item["id"], decision.detail)
+            await self._auto_build_m3u8(item)
+            if decision.detail.startswith("Timed out"):
+                msg = f"<b>{display}</b>\n⏰ In queue over 24h — gave up"
+            else:
+                msg = f"<b>{display}</b>\n❌ Failed after {MAX_QUEUE_RETRIES} retries"
+            await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
+            return
+
+        if decision.action == "done":
             await asyncio.to_thread(
                 self._queue.mark_done,
                 item["id"],
                 result["ok"],
                 result["skipped"],
-                gave_up_count,
+                decision.detail,
             )
             await self._auto_build_m3u8(item)
+            parts = []
+            if result["ok"]:
+                parts.append(f"✅ {result['ok']} ok")
+            if result["skipped"]:
+                parts.append(f"⏭ {result['skipped']} skipped")
             msg = (
-                f"<b>{display}</b>\n✅ {result['ok']} ok | ⏭ {result['skipped']} skipped"
-                f" | ❌ {gave_up_count} given up\n"
+                f"<b>{display}</b>\n{' | '.join(parts)} | ❌ {decision.detail} given up\n"
                 f"🧊 Gave up after {MAX_TRACK_RETRIES} attempts"
             )
             await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
             return
 
-        delay = min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries))
+        delay = decision.detail
         await asyncio.to_thread(self._queue.requeue, item["id"], delay)
-        parts = []
-        if result["ok"]:
-            parts.append(f"✅ {result['ok']} ok")
-        if result["skipped"]:
-            parts.append(f"⏭ {result['skipped']} skipped")
-        if result["failed"]:
-            parts.append(f"❌ {result['failed']} failed")
         when = f"retry in {delay}s" if delay > 0 else "retrying now"
-        msg = f"<b>{display}</b>\n{' | '.join(parts)}\n🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES}, {when})"
+        msg = (
+            f"<b>{display}</b>\n{_result_summary(result)}\n"
+            f"🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES}, {when})"
+        )
         await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
 

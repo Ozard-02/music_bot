@@ -6,8 +6,55 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES
-from worker import Worker
+from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES, RETRY_BACKOFF_BASE
+from worker import Worker, decide_failure
+
+
+class TestDecideFailure:
+    """Pure decision logic for failed items — no DB, no bot."""
+
+    def _item(self, retries=0, created=None):
+        return {
+            "id": 1,
+            "retries": retries,
+            "created_at": created or datetime.now(timezone.utc).isoformat(),
+        }
+
+    def _result(self, failed_tracks):
+        return {"ok": 0, "skipped": 0, "failed": len(failed_tracks), "failed_tracks": failed_tracks}
+
+    def test_older_than_24h_fails_timeout(self):
+        old = datetime.now(timezone.utc) - timedelta(hours=25)
+        d = decide_failure(self._item(created=old.isoformat()), self._result([]), set())
+        assert d.action == "fail"
+        assert "24h" in d.detail
+
+    def test_max_retries_fails(self):
+        d = decide_failure(self._item(retries=MAX_QUEUE_RETRIES), self._result([("id1", "A", "err")]), set())
+        assert d.action == "fail"
+        assert d.detail == "Max retries exceeded"
+
+    def test_all_failures_given_up_marks_done(self):
+        d = decide_failure(self._item(), self._result([("id1", "Broken", "err")]), {"Broken"})
+        assert d.action == "done"
+        assert d.detail == 1
+
+    def test_mix_of_given_up_and_fresh_requeues(self):
+        d = decide_failure(
+            self._item(),
+            self._result([("id1", "Broken", "err"), ("id2", "Fresh", "err")]),
+            {"Broken"},
+        )
+        assert d.action == "requeue"
+        assert d.detail == RETRY_BACKOFF_BASE
+
+    def test_requeue_backoff_doubles_with_retries(self):
+        d = decide_failure(self._item(retries=2), self._result([("id1", "A", "err")]), set())
+        assert d.detail == RETRY_BACKOFF_BASE * 4
+
+    def test_bad_created_at_treated_as_fresh(self):
+        d = decide_failure(self._item(created="not-a-date"), self._result([("id1", "A", "err")]), set())
+        assert d.action == "requeue"
 
 
 class TestWorkerProcess:
