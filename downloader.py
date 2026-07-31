@@ -14,16 +14,25 @@ from track_utils import spotiflac_track_relative_path, track_relative_path, _get
 
 
 def _disable_progress_manager():
-    """Neutralize SpotiFLAC's ProgressManager once.
+    """Neutralize SpotiFLAC's ProgressManager + console interception once.
 
     ProgressManager keeps class-level asyncio state (_event_queue, _worker_task)
     bound to the first event loop that touched it.  The bot runs each download
     in its own thread/loop (asyncio.to_thread + asyncio.run), so the shared
     queue ends up 'bound to a different event loop' on every subsequent job,
     flooding the log.  We never use its tqdm bars, so make it a no-op.
+
+    SpotiFLAC's install_console_interception() (called once per track
+    download) strips every StreamHandler — including ours — off the root
+    logger and adds a TqdmLoggingHandler that is never removed.  Handlers
+    pile up on root one per track, so every log line prints N times in
+    SpotiFLAC's format and spoty_loop.log stops growing.  Neutralize it in
+    both modules that reference it (core.progress and downloader).
     """
     try:
+        from SpotiFLAC.core import progress
         from SpotiFLAC.core.progress import ProgressManager
+        import SpotiFLAC.downloader as sf_downloader
     except ImportError:
         return
     ProgressManager._event_queue = None
@@ -33,6 +42,11 @@ def _disable_progress_manager():
     ProgressManager._master_bar = None
     ProgressManager.enqueue_progress = lambda *a, **kw: None
     ProgressManager.start_worker = lambda *a, **kw: None
+    ProgressManager.initialize_master_bar = lambda *a, **kw: None
+
+    for _mod in (progress, sf_downloader):
+        _mod.install_console_interception = lambda *a, **kw: None
+        _mod.uninstall_console_interception = lambda *a, **kw: None
 
 
 _disable_progress_manager()

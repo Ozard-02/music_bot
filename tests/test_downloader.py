@@ -319,3 +319,52 @@ class TestRunUrl:
         assert client.download_track.await_count == 2
         client.download_track.assert_any_call(t1.external_url)
         client.download_track.assert_any_call(t2.external_url)
+
+
+class TestConsoleInterception:
+    """SpotiFLAC's install_console_interception() pollutes the root logger:
+    one TqdmLoggingHandler per track download, never removed.  The patch in
+    _disable_progress_manager must keep the root logger stable — regression
+    for the 3x duplicate log lines seen in production."""
+
+    def test_install_is_neutralized(self):
+        import SpotiFLAC.core.progress as progress
+        import SpotiFLAC.downloader as sf_downloader
+
+        root = logging.getLogger()
+        before = list(root.handlers)
+
+        for _ in range(3):
+            progress.install_console_interception()
+            progress.uninstall_console_interception()
+            sf_downloader.install_console_interception()
+            sf_downloader.uninstall_console_interception()
+
+        assert root.handlers == before
+
+    def test_spoty_loop_still_logs_once_in_our_format(self):
+        import SpotiFLAC.core.progress as progress
+        import SpotiFLAC.downloader as sf_downloader
+
+        for _ in range(3):
+            progress.install_console_interception()
+            sf_downloader.install_console_interception()
+
+        logger = logging.getLogger("spoty_loop")
+        logger.setLevel(logging.INFO)
+        emitted = []
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                emitted.append(self.format(record))
+
+        cap = Capture()
+        cap.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logger.addHandler(cap)
+        try:
+            logger.info("Processing #42: test")
+        finally:
+            logger.removeHandler(cap)
+
+        assert len(emitted) == 1
+        assert emitted[0].endswith("[INFO] Processing #42: test")
