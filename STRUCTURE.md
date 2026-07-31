@@ -48,8 +48,13 @@ run_url(url, cfg, logger, skip_titles=None) → {ok, skipped, failed, failed_tra
 
    _disable_progress_manager() — runs once at import; neutralizes SpotiFLAC
      ProgressManager's class-level asyncio state (_event_queue/_worker_task) and
-     makes enqueue_progress/start_worker no-ops. Fixes the "Queue bound to a
-     different event loop" RuntimeError flood.
+     makes enqueue_progress/start_worker/initialize_master_bar no-ops. Fixes the
+     "Queue bound to a different event loop" RuntimeError flood. Also no-ops
+     install/uninstall_console_interception in SpotiFLAC.core.progress AND
+     SpotiFLAC.downloader: that function (called once per track download) strips
+     every StreamHandler off the root logger and adds a TqdmLoggingHandler that
+     is never removed — handlers piled up one per track, printing every log line
+     N× in SpotiFLAC's format and freezing spoty_loop.log.
 ```
 
 ## Bot system
