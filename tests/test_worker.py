@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from config import MAX_QUEUE_RETRIES
+from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES
 from worker import Worker
 
 
@@ -58,7 +58,14 @@ class TestWorkerProcess:
         qm.enqueue("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url", return_value={"ok": 0, "skipped": 0, "failed": 3, "total": 3}):
+        with patch("worker.run_url", return_value={
+            "ok": 0, "skipped": 0, "failed": 3, "total": 3,
+            "failed_tracks": [
+                ("id1", "Broken Song", "Qobuz 500"),
+                ("id2", "Another Fail", "Tidal 410"),
+                ("id3", "Last One", "Deezer 404"),
+            ],
+        }):
             await worker._process(item)
 
         s = qm.get_status()
@@ -69,6 +76,51 @@ class TestWorkerProcess:
         assert item_from_db["retry_at"] is not None
 
         bot.send_message.assert_awaited()
+        msg = bot.send_message.call_args[1]["text"]
+        assert "Re-queued" in msg
+
+    @pytest.mark.asyncio
+    async def test_track_gives_up_after_max_attempts(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        for _ in range(MAX_TRACK_RETRIES):
+            qm.log_failed_track(item["id"], "Broken Song", "Qobuz 500")
+
+        with patch("worker.run_url", return_value={
+            "ok": 0, "skipped": 0, "failed": 1, "total": 1,
+            "failed_tracks": [("id1", "Broken Song", "Qobuz 500")],
+        }):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["done"] == 1
+        assert s["queued"] == 0
+
+        msg = bot.send_message.call_args[1]["text"]
+        assert "given up" in msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_requeues_when_other_tracks_still_trying(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        for _ in range(MAX_TRACK_RETRIES):
+            qm.log_failed_track(item["id"], "Broken Song", "Qobuz 500")
+
+        with patch("worker.run_url", return_value={
+            "ok": 0, "skipped": 0, "failed": 2, "total": 2,
+            "failed_tracks": [
+                ("id1", "Broken Song", "Qobuz 500"),
+                ("id2", "Fresh Fail", "Deezer 404"),
+            ],
+        }):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["queued"] == 1
         msg = bot.send_message.call_args[1]["text"]
         assert "Re-queued" in msg
 

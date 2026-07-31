@@ -173,6 +173,26 @@ class TestQueueManager:
         assert qm.get_failed_tracks() == []
         assert qm.get_failed_tracks(item_id=999) == []
 
+    def test_get_give_up_titles(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue("link", "url")
+        item = qm.dequeue()
+        for _ in range(10):
+            qm.log_failed_track(item["id"], "Broken Song", "Qobuz 500")
+        qm.log_failed_track(item["id"], "Almost", "Deezer 404")
+
+        gave_up = qm.get_give_up_titles(item["id"], threshold=10)
+        assert gave_up == {"Broken Song"}
+
+    def test_get_give_up_titles_below_threshold(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue("link", "url")
+        item = qm.dequeue()
+        qm.log_failed_track(item["id"], "Almost", "Deezer 404")
+
+        assert qm.get_give_up_titles(item["id"], threshold=10) == set()
+        assert qm.get_give_up_titles(999, threshold=10) == set()
+
     def test_log_failed_track_without_error(self, queue_manager: QueueManager):
         qm = queue_manager
         qm.enqueue("link", "url")
