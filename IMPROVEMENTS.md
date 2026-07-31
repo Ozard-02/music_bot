@@ -10,6 +10,7 @@
   - [x] Search handler — `"Artist - Album"`, `"Album - Song"`, `"Artist - Song"`
   - [x] `/status` — current download + queue position + history stats
   - [x] `/mkplaylist <url> [name]` — generate .m3u8 for a Spotify playlist from tracks on disk
+  - [x] `/fixmetadata <folder>` — re-tag all FLACs in a folder / library root via SpotiFLAC (Apple-first enrichment); strips bogus MUSICBRAINZ_* and moves files to their real album folder
   - [x] `/purge` — remove all queued items
   - [x] Duplicate prevention — warns "Already queued as #N" when same input is already active
   - [x] Chat ID whitelist: only your user ID can interact; others silently ignored
@@ -116,7 +117,7 @@ next time: pre-check finds it → skip ✓
 - [ ] Test with real downloads
 
 ## Tests
-- [x] **128 tests** across bot, downloader, m3u8, queue_manager, resolver, worker
+- [x] **149 tests** across bot, downloader, fix_metadata, m3u8, queue_manager, resolver, worker
   - [x] All mock-based, no network, no real SpotiFLAC calls
   - [x] Run: `pytest tests/ -v`
 

@@ -119,8 +119,14 @@ docker compose up -d
 50. **`BaseException` catch for SpotiFLAC `sys.exit(0)`** — SpotiFLAC calls `sys.exit(0)` on success in some code paths, which raises `SystemExit`. Changed `except Exception` → `except BaseException` chain to prevent silent crash. Worker interprets `SystemExit` as success.
 51. **Silent metadata failure detection** — SpotiFLAC's `download_track(url)` returns `[]` (not exception) when metadata resolution fails. Added file-existence check in `_dl`: if `download_track` returns `[]` and no file appears on disk, counts as failure with "SILENT FAIL" log. Added post-download `(disk: N/total)` sanity line.
 52. **All platforms verified** — bare-metal (Arch Linux), Docker on laptop (macOS), Docker on TrueNAS SCALE all tested working.
+53. **Post-download cover overwrite** — `downloader.py:_fix_cover()` fetches Spotify cover (640×640 via URL upgrade `1e02`→`b273`) and embeds via mutagen after each successful download. Keeps enrich_providers for genre/label, only cover gets corrected.
+54. **`/rescan` bot command** — `rescan_library()` in `downloader.py` walks output dir, reads `URL` tag for Spotify track ID, fetches fresh metadata + cover, embeds it. Reports via Telegram progress callback. Uses `asyncio.Semaphore(SCRIPT_MAX_CONCURRENT=5)`.
+55. **conftest.py cleanup** — `config` fixture now `rmtree`s `/tmp/test_music` before returning, preventing stale-file cross-test pollution.
+56. **`fix_metadata.py` + `/fixmetadata` bot command** — re-tags every FLAC in a folder (or whole library root) through the SpotiFLAC pipeline: deletes old tags, strips all `MUSICBRAINZ_*` (fixes "same album name split into multiple Navidrome albums"), writes clean Spotify metadata with Apple-first enrichment (`["apple","deezer","soundcloud"]`). Files whose real album differs from their folder are moved into the real album's folder (never deleted). CLI `--dry-run` default, `--apply` writes. 149 tests.
 
 ## Remaining
 
 - **Tune parallelism** — adjust `MAX_CONCURRENT` (3→?) if rate-limited.
 - **Tidal v1 API retired** — permanent 410 error, requires SpotiFLAC update or tidal-web extension.
+- **Album metadata quality** — investigate whether enrich_providers (Apple/Deezer/Tidal/SoundCloud) contaminate album-level metadata (genre, label, year, etc.). Possibly drop enrich_providers entirely and use only Spotify metadata for consistency.
+- **Cross-folder album merging** — `/fixmetadata` moves single-track folders (e.g. `OK`, `ROSSO COME IL FANGO`) into their real album folder only when run on the library root or on that folder; folders are never auto-deleted when emptied.

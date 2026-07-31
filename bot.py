@@ -144,6 +144,58 @@ async def rescan_cmd(update: Update, context) -> None:
 
 
 @require_auth
+async def fixmetadata_cmd(update: Update, context) -> None:
+    if not context.args:
+        await update.message.reply_html(
+            "Usage: /fixmetadata &lt;album folder&gt;\n"
+            "Re-tags every FLAC in the folder (Spotify + Apple enrichment) and "
+            "moves files that belong to a different album. Run it on one album "
+            "folder, or on the library root to fix everything."
+        )
+        return
+
+    cfg = context.application.bot_data["cfg"]
+    root = Path(cfg["output_dir"])
+    folder = Path(context.args[0]).expanduser()
+    if not folder.is_absolute():
+        folder = root / folder
+
+    if not folder.is_dir():
+        await update.message.reply_html(f"❌ Not a folder: <code>{folder}</code>")
+        return
+
+    from fix_metadata import fix_library
+
+    msg = await update.message.reply_html(
+        f"⏳ Fixing metadata in <code>{folder}</code>…"
+    )
+
+    async def progress(current, total, text):
+        await msg.edit_text(
+            f"⏳ <b>Fix metadata</b> {current}/{total}\n<code>{text[:200]}</code>"
+        )
+
+    try:
+        result = await fix_library(folder, apply=True, progress=progress)
+        lines = [
+            f"✅ <b>Fix metadata done</b>",
+            f"  Folders: {result['folders']}",
+            f"  Re-tagged: {result['fixed']}",
+            f"  Moved: {result['moved']}",
+            f"  Failed: {result['failed']}",
+        ]
+        if result["failed_files"]:
+            lines.append("  ❌ <code>" + ", ".join(result["failed_files"]) + "</code>")
+        if result["moved_files"]:
+            lines.append("  📦 Moved to their album folder:")
+            for f in result["moved_files"]:
+                lines.append(f"  <code>{Path(f).name} → {Path(f).parent.name}/</code>")
+        await msg.edit_text("\n".join(lines))
+    except Exception as e:
+        await msg.edit_text(f"❌ Fix metadata error: {e}")
+
+
+@require_auth
 async def handle_message(update: Update, context) -> None:
     text = update.message.text.strip()
     qm: QueueManager = context.application.bot_data["queue_manager"]
@@ -272,6 +324,7 @@ def main() -> None:
     application.add_handler(CommandHandler("purge", purge_cmd))
     application.add_handler(CommandHandler("mkplaylist", mkplaylist_cmd))
     application.add_handler(CommandHandler("rescan", rescan_cmd))
+    application.add_handler(CommandHandler("fixmetadata", fixmetadata_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot starting...")
