@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import threading
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,6 +21,7 @@ from bot import (
     handle_message,
     _is_allowed,
     ALLOWED_USER_ID,
+    SingleInstanceLock,
 )
 
 
@@ -193,6 +196,45 @@ class TestHandleMessage:
         context = _make_context()
         await handle_message(update, context)
         update.message.reply_html.assert_not_awaited()
+
+
+class TestSingleInstanceLock:
+    def _lock(self, tmp_path, logger, poll=0.01):
+        return SingleInstanceLock(tmp_path / "queue.db.lock", logger, poll=poll)
+
+    def test_acquires_when_free(self, tmp_path, logger):
+        lock = self._lock(tmp_path, logger)
+        assert lock._try_lock() is True
+        lock.release()
+
+    def test_second_instance_blocked_while_held(self, tmp_path, logger):
+        l1 = self._lock(tmp_path, logger)
+        l2 = self._lock(tmp_path, logger)
+        assert l1._try_lock() is True
+        assert l2._try_lock() is False  # another fd holds the flock
+        l1.release()
+        assert l2._try_lock() is True
+        l2.release()
+
+    def test_standby_takes_over_after_holder_releases(self, tmp_path, logger):
+        l1 = self._lock(tmp_path, logger)
+        l2 = self._lock(tmp_path, logger)
+        assert l1._try_lock() is True
+
+        acquired = []
+
+        def run():
+            l2.acquire()
+            acquired.append(True)
+
+        t = threading.Thread(target=run)
+        t.start()
+        time.sleep(0.05)  # let the standby poll a few times while held
+        l1.release()
+        t.join(timeout=2)
+
+        assert acquired == [True]
+        l2.release()
 
 
 class TestPurgeCmd:
