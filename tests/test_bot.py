@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from bot import (
     help_cmd,
     status_cmd,
     purge_cmd,
+    fixmetadata_cmd,
     handle_message,
     _is_allowed,
     ALLOWED_USER_ID,
@@ -223,4 +225,61 @@ class TestPurgeCmd:
         update = _make_update(user_id=99999)
         context = _make_context()
         await purge_cmd(update, context)
+        update.message.reply_html.assert_not_awaited()
+
+
+class TestFixMetadataCmd:
+    def _context(self, tmp_path, args=()):
+        context = _make_context()
+        context.application.bot_data["cfg"] = {"output_dir": str(tmp_path)}
+        context.args = list(args)
+        return context
+
+    @pytest.mark.asyncio
+    async def test_usage_when_no_args(self):
+        update = _make_update(text="/fixmetadata")
+        context = self._context(Path("/tmp"))
+        await fixmetadata_cmd(update, context)
+        update.message.reply_html.assert_awaited_once()
+        assert "Usage" in update.message.reply_html.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_resolves_relative_to_output_dir_and_applies(self, tmp_path):
+        album = tmp_path / "MADAME"
+        album.mkdir()
+        (album / "a.flac").write_bytes(b"fake")
+
+        fake = {
+            "folders": 1, "total": 1, "fixed": 1, "moved": 1, "failed": 0,
+            "failed_files": [],
+            "moved_files": [str(tmp_path / "LUNA" / "a.flac")],
+        }
+        update = _make_update(text="/fixmetadata MADAME")
+        context = self._context(tmp_path, args=["MADAME"])
+
+        with patch("fix_metadata.fix_library", new=AsyncMock(return_value=fake)) as m:
+            await fixmetadata_cmd(update, context)
+
+        assert str(m.call_args.args[0]) == str(album)
+        assert m.call_args.kwargs["apply"] is True
+        # initial reply_html + progress/summary go through the returned msg mock
+        msg_mock = update.message.reply_html.return_value
+        assert msg_mock.edit_text.await_count >= 1
+        text = msg_mock.edit_text.call_args_list[-1][0][0]
+        assert "Fix metadata done" in text
+        assert "Re-tagged: 1" in text
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_folder_reports_error(self, tmp_path):
+        update = _make_update(text="/fixmetadata NOPE")
+        context = self._context(tmp_path, args=["NOPE"])
+        await fixmetadata_cmd(update, context)
+        text = update.message.reply_html.call_args_list[-1][0][0]
+        assert "Not a folder" in text
+
+    @pytest.mark.asyncio
+    async def test_ignores_unauthorized(self, tmp_path):
+        update = _make_update(user_id=99999, text="/fixmetadata MADAME")
+        context = self._context(tmp_path, args=["MADAME"])
+        await fixmetadata_cmd(update, context)
         update.message.reply_html.assert_not_awaited()

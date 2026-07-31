@@ -35,8 +35,15 @@ run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry po
     └─ download each missing track in parallel:
        asyncio.gather(*[download_track(t.external_url) for t in missing])
        with asyncio.Semaphore(MAX_CONCURRENT) limiting concurrency
-       after each successful download → `_rename_after_download()`
-       (moves SpotiFLAC's `_`-path to original-symbols path)
+        after each successful download → `_rename_after_download()` + `_fix_cover()`
+        (moves SpotiFLAC's `_`-path to original-symbols path, overwrites cover with Spotify art)
+
+   rescan_library(cfg, logger, progress=None) → {fixed, skipped, failed, errors}
+     ├─ walk output_dir for *.flac
+     ├─ for each: read URL tag → parse Spotify track ID
+     ├─ AsyncSpotiFLAC → get_track_async(id) → download + embed cover
+     ├─ asyncio.Semaphore(SCRIPT_MAX_CONCURRENT=5) limiting concurrency
+     └─ progress(current, total, text) callback for UI updates
 
 ```
 
@@ -51,9 +58,12 @@ main()
 ├─ QueueManager(queue.db)
 ├─ creates asyncio.Event() — shared wake signal
 ├─ Application.builder().post_init(post_init)  # migrates .playlist_covers/, starts Worker(wake_event)
-├─ handlers: /start, /help, /status, /purge, /mkplaylist, text
+├─ handlers: /start, /help, /status, /purge, /mkplaylist, /rescan, /fixmetadata, text
 │  ├─ handle_message sets wake_event after enqueue → worker wakes instantly
-│  └─ mkplaylist_cmd runs build_m3u8 directly (async), shows "🖼️ Cover saved" if cover downloaded
+│  ├─ mkplaylist_cmd runs build_m3u8 directly (async), shows "🖼️ Cover saved" if cover downloaded
+│  ├─ rescan_cmd runs rescan_library() with Telegram progress callback ("🔍 Rescan N/M")
+│  └─ fixmetadata_cmd runs fix_library() (from fix_metadata.py) with progress callback
+│     folder arg resolved against cfg["output_dir"], applies changes, reports summary
 └─ run_polling()
 ```
 
@@ -125,6 +135,7 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
 `SpotiFLAC/core/tagger.py`: `_embed_flac` strips `MUSICBRAINZ_*` before writing Vorbis comments.
 
 ## Helper scripts
+- `fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. CLI: `python fix_metadata.py <folder> [--apply]`.
 - `fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
 - `fix_covers.py` — re-embed Spotify cover art into all FLACs with Spotify track IDs
 - `fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
