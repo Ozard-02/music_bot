@@ -15,8 +15,7 @@ setup_logger(log_path) → logger          # RotatingFileHandler (5MB×3) + stre
 bridge_community_session(logger)         # copy desktop Tidal session
 ```
 
-### `downloader.py`
-
+### `downloader.py` — download engine only
 ```
 run_url(url, cfg, logger, skip_titles=None) → {ok, skipped, failed, failed_tracks, gave_up_tracks}  ← entry point
 ├─ parse_spotify_url(url)
@@ -38,23 +37,52 @@ run_url(url, cfg, logger, skip_titles=None) → {ok, skipped, failed, failed_tra
        with asyncio.Semaphore(MAX_CONCURRENT) limiting concurrency
         after each successful download → `_rename_after_download()` + `_fix_cover()`
         (moves SpotiFLAC's `_`-path to original-symbols path, overwrites cover with Spotify art)
+```
+Cover/rename helpers use `flac_utils.embed_cover()` + `upgrade_cover_url()`. The
+SpotiFLAC monkey-patches live in `spotiflac_patch.py` (imported here for its
+import-time side-effect).
 
-   rescan_library(cfg, logger, progress=None) → {fixed, skipped, failed, errors}
-     ├─ walk output_dir for *.flac
-     ├─ for each: read URL tag → parse Spotify track ID
-     ├─ AsyncSpotiFLAC → get_track_async(id) → download + embed cover
-     ├─ asyncio.Semaphore(SCRIPT_MAX_CONCURRENT=5) limiting concurrency
-     └─ progress(current, total, text) callback for UI updates
+### `maintenance.py` — library maintenance
+```
+rescan_library(cfg, logger, progress=None, dry_run=False) → {ok, skipped, failed}
+  ├─ walk output_dir for *.flac (flac_utils.iter_flacs)
+  ├─ for each: read URL tag → parse Spotify track ID (flac_utils.get_spotify_id_from_file)
+  ├─ SpotifyMetadataClient → get_track_async(id) → fetch 640px cover → embed (flac_utils.embed_cover)
+  ├─ asyncio.Semaphore(SCRIPT_MAX_CONCURRENT=5) limiting concurrency
+  └─ progress(current, total, text) callback for UI updates
+```
+Backs the bot's `/rescan` command and the `scripts/fix_covers.py` CLI (with `--dry-run`).
 
-   _disable_progress_manager() — runs once at import; neutralizes SpotiFLAC
-     ProgressManager's class-level asyncio state (_event_queue/_worker_task) and
-     makes enqueue_progress/start_worker/initialize_master_bar no-ops. Fixes the
-     "Queue bound to a different event loop" RuntimeError flood. Also no-ops
-     install/uninstall_console_interception in SpotiFLAC.core.progress AND
-     SpotiFLAC.downloader: that function (called once per track download) strips
-     every StreamHandler off the root logger and adds a TqdmLoggingHandler that
-     is never removed — handlers piled up one per track, printing every log line
-     N× in SpotiFLAC's format and freezing spoty_loop.log.
+### `spotiflac_patch.py` — all SpotiFLAC monkey-patching in one place
+```
+disable_progress_manager()   — runs once at import; neutralizes ProgressManager's
+  class-level asyncio state (_event_queue/_worker_task), makes
+  enqueue_progress/start_worker/initialize_master_bar no-ops (kills the
+  "Queue bound to a different event loop" RuntimeError flood), and no-ops
+  install/uninstall_console_interception in SpotiFLAC.core.progress AND
+  SpotiFLAC.downloader (that function strips every StreamHandler off the root
+  logger per track download — handlers piled up, freezing spoty_loop.log).
+reset_progress_manager()     — detach class-level state before using SpotiFLAC in a new loop
+silence_spotiflac_loggers()  — set all SpotiFLAC.* loggers to CRITICAL + httpx/httpcore to WARNING
+silence_spotiflac()          — context manager; no-ops console banners, api-failure
+  prints, quality-fallback spam, track headers, tqdm writes, and builtins.input
+  (interactive prompts like "Incolla qui il grant") during a download
+```
+
+### `flac_utils.py` — shared FLAC/tag/cover helpers
+```
+get_spotify_id_from_file(path) → str | None   # read URL/comment tag, extract track ID
+upgrade_cover_url(url)                        # Spotify CDN 300×300 (1e02) → 640×640 (b273)
+embed_cover(path, data)                       # replace pictures with JPEG front cover + dimensions
+iter_flacs(root)                              # yield every .flac under root (sorted)
+```
+
+### `track_utils.py` — shared path utilities
+```
+sanitize(text, spotiflac_mode=False)  # preserve special chars; only `/` → `∕`
+spotiflac_sanitize / spotiflac_track_relative_path   # SpotiFLAC's `_`-sanitized variant
+track_relative_path(track, cfg)       # {AlbumArtist}/{Album}/{Artist} - {Title}.flac
+get_jpeg_dimensions(data) → (w, h)    # JPEG SOF0/1/2 scan (0,0 if not JPEG)
 ```
 
 ## Bot system
@@ -74,7 +102,7 @@ main()
 │  ├─ handle_message sets wake_event after enqueue → worker wakes instantly
 │  ├─ mkplaylist_cmd runs build_m3u8 directly (async), shows "🖼️ Cover saved" if cover downloaded
 │  ├─ rescan_cmd runs rescan_library() with Telegram progress callback ("🔍 Rescan N/M")
-│  └─ fixmetadata_cmd runs fix_library() (from fix_metadata.py) with progress callback
+│  └─ fixmetadata_cmd runs fix_library() (from scripts/fix_metadata.py) with progress callback
 │     folder arg resolved against cfg["output_dir"], applies changes, reports summary
 └─ run_polling()  (finally → lock.release())
 ```
@@ -138,25 +166,36 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     skip_titles = get_give_up_titles(item, MAX_TRACK_RETRIES=10)  # tracks that gave up
     run_url(url, skip_titles) via asyncio.wait_for(timeout=MAX_DOWNLOAD_TIMEOUT) → result
     ├─ if any failed → log_failed_track() per track → _handle_failure()
-    │  ├─ age >24h → mark_failed("Timed out") + _auto_build_m3u8()
-    │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries") + _auto_build_m3u8()
-    │  ├─ remaining failures all ≥ MAX_TRACK_RETRIES → mark_done(partial) + notify + m3u8
-    │  └─ else → requeue()
+    │  └─ decide_failure(item, result, gave_up_titles) → FailureDecision  (pure function)
+    │     ├─ "fail" (age >24h)     → mark_failed("Timed out") + _auto_build_m3u8()
+    │     ├─ "fail" (retries ≥MAX) → mark_failed("Max retries") + _auto_build_m3u8()
+    │     ├─ "done" (all gave up)  → mark_done(partial) + notify + m3u8
+    │     └─ "requeue" (delay)     → requeue with exponential backoff
     └─ if all ok → _handle_no_failures(): mark_done + _auto_build_m3u8() + send summary
        (given-up tracks reported separately as "❌ N given up")
     on exception → mark_failed() → send error
 ```
 
-## SpotiFLAC patch
-`SpotiFLAC/core/tagger.py`: `_embed_flac` strips `MUSICBRAINZ_*` before writing Vorbis comments.
+## SpotiFLAC patches
+- `SpotiFLAC/core/tagger.py`: `_embed_flac` strips `MUSICBRAINZ_*` before writing Vorbis comments.
+- `spotiflac_patch.py`: runtime monkey-patches (ProgressManager, console interception, logger noise) — see section above.
 
-## Helper scripts
-- `fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. CLI: `python fix_metadata.py <folder> [--apply]`.
-- `fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
-- `fix_covers.py` — re-embed Spotify cover art into all FLACs with Spotify track IDs
-- `fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
+## Helper scripts — `scripts/`
+
+Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
+`from scripts.fix_metadata import fix_library`). Each script bootstraps
+`sys.path` so it also runs standalone: `python scripts/<name>.py`.
+
+- `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
+- `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
+- `scripts/fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
+- `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
+- `scripts/retag_missing.py` — retag a hardcoded list of tagless files (predecessor of fix_metadata)
+- `scripts/backfill_urls.py` — write Spotify URL tags into FLACs that lack them
+- `scripts/fix_qvc.py` — personal one-off: fix Gemitaiz QVC album metadata (gitignored)
+
+## Other root modules
 - `m3u8.py` — generate .m3u8 for a Spotify playlist from tracks already on disk, download cover sidecar
-- `track_utils.py` — shared path utilities (`sanitize`, `spotiflac_sanitize`, `track_relative_path`, `spotiflac_track_relative_path`)
 
   ```
   python m3u8.py <playlist_url> [playlist_name]
@@ -164,8 +203,6 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
   _download_cover(url, path) — httpx GET → write image to path
   build_m3u8_lines(tracks, cfg) → (lines, count)  # dedup by track.id
   ```
-
-  Path utilities live in `track_utils.py`; `m3u8.py` and `downloader.py` both import from there.
 
 - `config.default.json` — reference config (6 keys)
 - `IMPROVEMENTS.md` — planned Docker + enhancements

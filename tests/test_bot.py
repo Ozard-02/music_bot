@@ -299,7 +299,7 @@ class TestFixMetadataCmd:
         update = _make_update(text="/fixmetadata MADAME")
         context = self._context(tmp_path, args=["MADAME"])
 
-        with patch("fix_metadata.fix_library", new=AsyncMock(return_value=fake)) as m:
+        with patch("scripts.fix_metadata.fix_library", new=AsyncMock(return_value=fake)) as m:
             await fixmetadata_cmd(update, context)
 
         assert str(m.call_args.args[0]) == str(album)

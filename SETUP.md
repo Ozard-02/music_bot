@@ -26,8 +26,7 @@ Existing files are detected by SpotiFLAC's internal `_file_exists()` — no re-d
 ### Bare-metal
 ```bash
 cd spoty_loop
-python bot.py          # Telegram bot
-python downloader.py "https://open.spotify.com/playlist/..."   # CLI one-shot
+python bot.py          # Telegram bot (downloads go through the queue)
 ```
 
 ### Docker
@@ -59,6 +58,9 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 |------|---------|
 | `bot.py` | Telegram bot entry point |
 | `downloader.py` | Core download engine |
+| `maintenance.py` | Library maintenance (`rescan_library` cover re-embed) |
+| `spotiflac_patch.py` | SpotiFLAC monkey-patches (progress manager, console) |
+| `flac_utils.py` | Shared FLAC/tag/cover helpers |
 | `queue_manager.py` | SQLite queue persistence |
 | `worker.py` | Background queue processor |
 | `resolver.py` | Input parsing + Spotify search |
@@ -70,15 +72,14 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 | `Dockerfile` | Container image (python:3.14-slim + chromium) |
 | `docker-compose.yml` | Single-service Docker Compose |
 | `.dockerignore` | Excludes venv, caches, logs, secrets |
-| `fix_mb_tags.py` | Remove MUSICBRAINZ_* tags from existing FLACs |
-| `fix_covers.py` | Re-embed correct Spotify cover art into FLACs |
+| `scripts/` | Maintenance CLIs: fix_metadata (also bot-called), fix_covers, fix_mb_tags, fix_original_filenames, retag_missing, backfill_urls, fix_qvc |
 | `spoty_loop.log` | Full log (all runs) |
 | `duplicates.log` | Track IDs that appeared >1× in the playlist |
 
 Config is read from `~/.spotiflac/config.json` (created by the desktop app). If missing, a warning points to `config.default.json` and hardcoded defaults are used.
 
 ## Navidrome note
-Qobuz metadata enrichment injects bogus `MUSICBRAINZ_ALBUMID` values that cause Navidrome to merge unrelated albums. `SpotiFLAC/core/tagger.py` is patched to strip all `MUSICBRAINZ_*` tags before writing. Run `fix_mb_tags.py` on existing files if you see misgrouped albums.
+Qobuz metadata enrichment injects bogus `MUSICBRAINZ_ALBUMID` values that cause Navidrome to merge unrelated albums. `SpotiFLAC/core/tagger.py` is patched to strip all `MUSICBRAINZ_*` tags before writing. Run `python scripts/fix_mb_tags.py` on existing files if you see misgrouped albums.
 
 ## Cover art note
-Qobuz enrichment returns wrong HD covers for some albums (e.g., Ditonellapiaga "Chimica"). `enrich_providers` in downloader.py excludes qobuz, uses `["apple", "deezer", "tidal", "soundcloud"]` (priority order). Apple Music provides 3000×3000, Tidal 1280×1280, Deezer and SoundCloud lower resolutions. Run `fix_covers.py` on existing files with incorrect covers.
+Qobuz enrichment returns wrong HD covers for some albums (e.g., Ditonellapiaga "Chimica"). `enrich_providers` in downloader.py excludes qobuz, uses `["apple", "deezer", "tidal", "soundcloud"]` (priority order). Apple Music provides 3000×3000, Tidal 1280×1280, Deezer and SoundCloud lower resolutions. Run `python scripts/fix_covers.py` on existing files with incorrect covers.

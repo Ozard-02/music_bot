@@ -22,11 +22,16 @@ User → Telegram Bot (bot.py)
 
 | File | Job |
 |---|---|
-| `downloader.py` | Core download engine. `run_url(url)` handles tracks/albums/playlists with retry. Still works as standalone CLI. |
+| `downloader.py` | Core download engine. `run_url(url)` handles tracks/albums/playlists with retry. |
+| `maintenance.py` | Library maintenance: `rescan_library()` re-embeds Spotify covers (`/rescan`, `scripts/fix_covers.py`). |
+| `spotiflac_patch.py` | All SpotiFLAC monkey-patching in one place (ProgressManager, console interception, log silencing). |
+| `flac_utils.py` | Shared FLAC helpers: `get_spotify_id_from_file`, `upgrade_cover_url`, `embed_cover`, `iter_flacs`. |
+| `track_utils.py` | Shared path utilities (`sanitize`, `track_relative_path`, `get_jpeg_dimensions`). |
 | `queue_manager.py` | SQLite queue table (status, timestamps, results). Thread-safe. |
 | `resolver.py` | `parse_input()` detects link vs "Artist - Album" search. `resolve_search()` queries Spotify via SpotiFLAC. |
-| `worker.py` | Background async loop — dequeues, resolves, calls `run_url()`, sends Telegram notification. |
+| `worker.py` | Background async loop — dequeues, resolves, calls `run_url()`, sends Telegram notification. Pure `decide_failure()` for retry decisions. |
 | `bot.py` | Telegram bot — /start, /help, /status, /purge, /mkplaylist, link handler, text handler. Chat ID whitelist. |
+| `scripts/` | Maintenance CLIs: fix_metadata (also bot-called), fix_covers, fix_mb_tags, fix_original_filenames, retag_missing, backfill_urls, fix_qvc. |
 | `Dockerfile` | Container image: python:3.14-slim + chromium + spotiflac + bot.py |
 | `docker-compose.yml` | Single-service compose with TrueNAS pool mounts and env vars |
 | `.dockerignore` | Excludes venv, caches, logs, .env from image |
@@ -58,7 +63,8 @@ Requires env vars:
 ```bash
 python bot.py
 ```
-Standalone CLI still works: `python downloader.py <spotify_url>`
+
+Maintenance CLIs live in `scripts/` (`python scripts/fix_metadata.py <folder> [--apply]`, etc.).
 
 ### Docker
 ```bash
@@ -135,3 +141,10 @@ docker compose up -d
 - **Album metadata quality** — investigate whether enrich_providers (Apple/Deezer/Tidal/SoundCloud) contaminate album-level metadata (genre, label, year, etc.). Possibly drop enrich_providers entirely and use only Spotify metadata for consistency.
 - **Cross-folder album merging** — `/fixmetadata` moves single-track folders (e.g. `OK`, `ROSSO COME IL FANGO`) into their real album folder only when run on the library root or on that folder; folders are never auto-deleted when emptied.
 61. **Kill 3× duplicate log lines (root logger pollution)** — SpotiFLAC 1.5.9's `core/progress.py:install_console_interception()` runs once per track download (`client.download_track` → `SpotiflacDownloader.run_async` → `DownloadWorker.run_async`). It strips every `StreamHandler` off the root logger (including our asctime stdout handler AND the `RotatingFileHandler`, which is a StreamHandler subclass — the file log froze after the first track) and adds a `TqdmLoggingHandler` (`[%(levelname)s] %(name)s: %(message)s`) that `uninstall_console_interception()` never removes. Root handlers piled up one per track → every record (incl. ours, name `spoty_loop`) printed N× foreign-format with µs-identical timestamps. This was never parallelism/containers (the single-instance lock #60 was still needed, but was not the cause). `_disable_progress_manager()` now also no-ops `install_/uninstall_console_interception` in both `SpotiFLAC.core.progress` and `SpotiFLAC.downloader` (the module-level name actually called at downloader.py:436), plus `initialize_master_bar`. `Dockerfile` pins `SpotiFLAC==1.5.9` so the image can't drift from what we test. Reproduced locally before fixing (3 installs → 3 root handlers → 3× output). 160 tests.
+62. **Refactor: complexity reduction (no behavior change)** —
+    - `spotiflac_patch.py` — all monkey-patching (`disable_progress_manager`, `reset_progress_manager`, `silence_spotiflac`, `silence_spotiflac_loggers`) moved out of `downloader.py`/`fix_metadata.py`. Import-time side-effect preserved (regression-tested).
+    - `flac_utils.py` — shared helpers `get_spotify_id_from_file` (was duplicated ×3), `embed_cover` (×3), `upgrade_cover_url`, `iter_flacs`; `_get_jpeg_dimensions` → public `get_jpeg_dimensions`.
+    - `maintenance.py` — `rescan_library` moved out of `downloader.py` (bot's `/rescan` + `scripts/fix_covers.py` CLI now share it; `dry_run` param added to keep fix_covers' `--dry-run`).
+    - `worker.py` — 4-outcome failure state machine extracted into pure `decide_failure(item, result, gave_up_titles) → FailureDecision` (fail-timeout / fail-max-retries / done-partial / requeue-backoff), tested directly (6 new tests); `_handle_no_failures`/`_handle_failure` are thin dispatchers with a shared `_result_summary()`.
+    - `scripts/` — package with the 7 maintenance/one-off CLIs (fix_metadata, fix_covers, fix_mb_tags, fix_original_filenames, retag_missing, backfill_urls, fix_qvc), each with a `sys.path` bootstrap for standalone use; bot + tests import updated (`from scripts.fix_metadata import fix_library`). `fix_qvc.py` stays gitignored at its new path.
+    - 166 tests.

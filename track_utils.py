@@ -41,7 +41,7 @@ def spotiflac_track_relative_path(track: TrackMetadata, cfg: dict) -> str:
     return _make_relative_path(track, cfg, spotiflac_mode=True)
 
 
-def _get_jpeg_dimensions(data: bytes) -> tuple[int, int]:
+def get_jpeg_dimensions(data: bytes) -> tuple[int, int]:
     if data[:2] != b"\xff\xd8":
         return (0, 0)
     i = 2
