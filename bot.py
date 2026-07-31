@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -38,6 +39,54 @@ TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
 
 QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", str(Path(__file__).parent / "queue.db")))
+
+
+class SingleInstanceLock:
+    """flock-based single-instance lock with standby + takeover.
+
+    The lock file sits next to the queue DB on the shared volume, so every
+    instance (container or bare-metal) contends on the same file.  flock is
+    advisory and released automatically when the holder's process exits, so
+    there is never a stale lock.  A standby instance polls until the holder
+    dies, then takes over.  Only the lock holder polls Telegram getUpdates,
+    so two instances can never run the bot at the same time.
+    """
+
+    def __init__(self, lock_path: Path, logger: logging.Logger, poll: float = 30.0):
+        self._lock_path = lock_path
+        self._logger = logger
+        self._poll = poll
+        self._fd: int | None = None
+        self._standby_log_every = 10
+        self._attempt = 0
+
+    def _try_lock(self) -> bool:
+        import fcntl
+
+        fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return False
+        self._fd = fd
+        return True
+
+    def acquire(self) -> None:
+        while not self._try_lock():
+            self._attempt += 1
+            if self._attempt == 1 or self._attempt % self._standby_log_every == 0:
+                self._logger.warning(
+                    "Another bot instance holds %s (attempt %d) — standing by",
+                    self._lock_path, self._attempt,
+                )
+            time.sleep(self._poll)
+        self._logger.info("Acquired single-instance lock %s", self._lock_path)
+
+    def release(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)  # flock is released when the fd closes
+            self._fd = None
 
 
 def _is_allowed(update: Update) -> bool:
@@ -298,6 +347,9 @@ def main() -> None:
     bridge_community_session(logger)
     cfg = load_config(logger)
 
+    lock = SingleInstanceLock(QUEUE_DB.with_name(QUEUE_DB.name + ".lock"), logger)
+    lock.acquire()
+
     qm = QueueManager(str(QUEUE_DB))
 
     wake_event = asyncio.Event()
@@ -328,7 +380,10 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Bot starting...")
-    application.run_polling(bootstrap_retries=3)
+    try:
+        application.run_polling(bootstrap_retries=3)
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

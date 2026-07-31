@@ -59,6 +59,8 @@ run_url(url, cfg, logger, skip_titles=None) → {ok, skipped, failed, failed_tra
 main()
 ├─ TOKEN + ALLOWED_USER_ID from env
 ├─ setup_logger(), bridge_community_session(), load_config()  (from config.py)
+├─ SingleInstanceLock(queue.db.lock).acquire() — flock-based, blocks in standby
+│  until sole instance, then proceeds (prevents two bots / Telegram conflicts)
 ├─ require_auth decorator — all handlers guarded by _is_allowed
 ├─ QueueManager(queue.db)
 ├─ creates asyncio.Event() — shared wake signal
@@ -69,7 +71,7 @@ main()
 │  ├─ rescan_cmd runs rescan_library() with Telegram progress callback ("🔍 Rescan N/M")
 │  └─ fixmetadata_cmd runs fix_library() (from fix_metadata.py) with progress callback
 │     folder arg resolved against cfg["output_dir"], applies changes, reports summary
-└─ run_polling()
+└─ run_polling()  (finally → lock.release())
 ```
 
 ### `queue_manager.py` — SQLite persistence
