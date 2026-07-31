@@ -53,7 +53,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "total": 1}
+        assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
         client.download_track.assert_awaited_once_with(self.TRACK_URL)
 
     @pytest.mark.asyncio
@@ -85,7 +85,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, cfg, logger)
 
-        assert result == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "total": 1}
+        assert result == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -140,7 +140,7 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "total": 2}
+        assert result == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -162,7 +162,7 @@ class TestRunUrl:
             cfg = {**config, "output_dir": "/tmp/does-not-exist-xyz"}
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "total": 2}
+        assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
         assert client.download_track.await_count == 2
         client.download_track.assert_any_call(t1.external_url)
         client.download_track.assert_any_call(t2.external_url)
@@ -209,6 +209,54 @@ class TestRunUrl:
         client.download_track.assert_any_call(t2.external_url)
 
     @pytest.mark.asyncio
+    async def test_album_skips_given_up_titles(self, config, logger):
+        t1 = _mock_track("t1", "Song A")
+        t2 = _mock_track("t2", "Song B")
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "album", "id": "alb123"}
+            client = _make_client(
+                playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+                download_return=[],
+            )
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.ALBUM_URL, config, logger, skip_titles={"Song B"})
+
+        assert result["ok"] == 1
+        assert result["skipped"] == 0
+        assert result["failed"] == 0
+        assert result["gave_up_tracks"] == [("t2", "Song B", "gave_up")]
+        assert client.download_track.await_count == 1
+        client.download_track.assert_any_call(t1.external_url)
+
+    @pytest.mark.asyncio
+    async def test_album_given_up_only(self, config, logger):
+        t1 = _mock_track("t1", "Song A")
+        t2 = _mock_track("t2", "Song B")
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "album", "id": "alb123"}
+            client = _make_client(
+                playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+            )
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.ALBUM_URL, config, logger, skip_titles={"Song A", "Song B"})
+
+        assert result["ok"] == 0
+        assert result["skipped"] == 0
+        assert result["failed"] == 0
+        assert len(result["gave_up_tracks"]) == 2
+        client.download_track.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_album_partial_failure(self, config, logger):
         t1 = _mock_track("t1", "OK Song")
         t2 = _mock_track("t2", "Bad Song")
@@ -246,7 +294,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "total": 1}
+        assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "gave_up_tracks": [], "total": 1}
 
     @pytest.mark.asyncio
     async def test_album_dedup_counts_unique(self, config, logger):

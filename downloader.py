@@ -13,6 +13,31 @@ from config import (
 from track_utils import spotiflac_track_relative_path, track_relative_path, _get_jpeg_dimensions
 
 
+def _disable_progress_manager():
+    """Neutralize SpotiFLAC's ProgressManager once.
+
+    ProgressManager keeps class-level asyncio state (_event_queue, _worker_task)
+    bound to the first event loop that touched it.  The bot runs each download
+    in its own thread/loop (asyncio.to_thread + asyncio.run), so the shared
+    queue ends up 'bound to a different event loop' on every subsequent job,
+    flooding the log.  We never use its tqdm bars, so make it a no-op.
+    """
+    try:
+        from SpotiFLAC.core.progress import ProgressManager
+    except ImportError:
+        return
+    ProgressManager._event_queue = None
+    ProgressManager._worker_task = None
+    ProgressManager._bars = {}
+    ProgressManager._slot_map = {}
+    ProgressManager._master_bar = None
+    ProgressManager.enqueue_progress = lambda *a, **kw: None
+    ProgressManager.start_worker = lambda *a, **kw: None
+
+
+_disable_progress_manager()
+
+
 @contextmanager
 def _silence_spotiflac():
     import SpotiFLAC.core.console as _console
@@ -51,7 +76,7 @@ def _silence_spotiflac():
         builtins.input = _originals["input"]
 
 
-async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
+async def run_url(url: str, cfg: dict, logger: logging.Logger, skip_titles: set[str] | None = None) -> dict:
     from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
@@ -83,7 +108,7 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger) -> dict:
                     return {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("", url, "metadata_error")], "total": 1}
             else:
                 _, tracks = await client.get_playlist(url)
-            return await _download_tracks(client, tracks, cfg, logger)
+            return await _download_tracks(client, tracks, cfg, logger, skip_titles)
 
 
 _SPOTIFY_COVER_UPGRADE = re.compile(r"(ab67616d0000)1e02")
@@ -179,7 +204,7 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger):
         parent = parent.parent
 
 
-async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logger) -> dict:
+async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logger, skip_titles: set[str] | None = None) -> dict:
     seen = set()
     unique = []
     for t in tracks:
@@ -190,23 +215,33 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
 
     existing = []
     missing = []
+    given_up = []
+    skip_titles = skip_titles or set()
     for t in unique:
         rel = track_relative_path(t, cfg)
         full = Path(cfg["output_dir"]) / rel
         if full.exists():
             existing.append(t)
+        elif t.title in skip_titles:
+            given_up.append(t)
         else:
             missing.append(t)
 
     existing_count = len(existing)
+    given_up_count = len(given_up)
     logger.info(
-        "Pre-check: %d/%d tracks exist on disk (%d new)",
-        existing_count, total, len(missing),
+        "Pre-check: %d/%d tracks exist on disk (%d new, %d given up)",
+        existing_count, total, len(missing), given_up_count,
     )
 
     if not missing:
         logger.info("All %d tracks already on disk — nothing to do", total)
-        return {"ok": 0, "skipped": total, "failed": 0, "failed_tracks": [], "total": total}
+        return {
+            "ok": 0, "skipped": existing_count, "failed": 0,
+            "failed_tracks": [],
+            "gave_up_tracks": [(t.id, t.title, "gave_up") for t in given_up],
+            "total": total,
+        }
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
     failed_list = []
@@ -234,6 +269,7 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
         "skipped": skipped,
         "failed": failed,
         "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
+        "gave_up_tracks": [(t.id, t.title, "gave_up") for t in given_up],
         "total": total,
     }
 

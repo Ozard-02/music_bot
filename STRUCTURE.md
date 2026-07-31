@@ -7,17 +7,18 @@
 ```
 Constants: SERVICES=["amazon","qobuz"], MAX_CONCURRENT=3,
            PER_TRACK_TIMEOUT=100, PER_TRACK_RETRIES=3,
-           MAX_QUEUE_RETRIES=15, MAX_DOWNLOAD_TIMEOUT=3600
+           MAX_QUEUE_RETRIES=15, MAX_TRACK_RETRIES=10,
+           MAX_DOWNLOAD_TIMEOUT=3600
 
 load_config(logger) → dict               # read ~/.spotiflac/config.json
-setup_logger(log_path) → logger          # file+stream, suppress SpotiFLAC/httpx
+setup_logger(log_path) → logger          # RotatingFileHandler (5MB×3) + stream
 bridge_community_session(logger)         # copy desktop Tidal session
 ```
 
 ### `downloader.py`
 
 ```
-run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry point
+run_url(url, cfg, logger, skip_titles=None) → {ok, skipped, failed, failed_tracks, gave_up_tracks}  ← entry point
 ├─ parse_spotify_url(url)
 ├─ if "track":
 │  ├─ get_track_metadata(url)
@@ -29,9 +30,9 @@ run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry po
    ├─ dedup by track.id
     ├─ pre-check: construct path for each track via track_relative_path()
     │  (uses original-symbols path via `sanitize()` — only `/` → `∕`)
-    │  → split into existing/missing
+    │  → split into existing/missing/given_up (titles in skip_titles)
     ├─ if all exist → early return {ok=0, skipped=N}
-    ├─ log "Pre-check: N/M exist (X new)"
+    ├─ log "Pre-check: N/M exist (X new, Y given up)"
     └─ download each missing track in parallel:
        asyncio.gather(*[download_track(t.external_url) for t in missing])
        with asyncio.Semaphore(MAX_CONCURRENT) limiting concurrency
@@ -45,6 +46,10 @@ run_url(url, cfg, logger) → {ok, skipped, failed, failed_tracks}  ← entry po
      ├─ asyncio.Semaphore(SCRIPT_MAX_CONCURRENT=5) limiting concurrency
      └─ progress(current, total, text) callback for UI updates
 
+   _disable_progress_manager() — runs once at import; neutralizes SpotiFLAC
+     ProgressManager's class-level asyncio state (_event_queue/_worker_task) and
+     makes enqueue_progress/start_worker no-ops. Fixes the "Queue bound to a
+     different event loop" RuntimeError flood.
 ```
 
 ## Bot system
@@ -81,6 +86,7 @@ QueueManager(db_path)
   purge_all() → count                       # DELETE all rows
   log_failed_track(item_id, title, error)   # per-track failures
   get_failed_tracks(item_id=None, limit=50)
+  get_give_up_titles(item_id, threshold) → set   # titles failed ≥ threshold×
   get_status() → {queued, running, done, failed, next_id}
   get_history(limit) → [item, ...]
 
@@ -122,12 +128,15 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
   _process(item):
     "link"   → url = item.query
     "search" → AsyncSpotiFLAC → resolve_search() → url
-    run_url(url) via asyncio.wait_for(timeout=MAX_DOWNLOAD_TIMEOUT) → result
+    skip_titles = get_give_up_titles(item, MAX_TRACK_RETRIES=10)  # tracks that gave up
+    run_url(url, skip_titles) via asyncio.wait_for(timeout=MAX_DOWNLOAD_TIMEOUT) → result
     ├─ if any failed → log_failed_track() per track → _handle_failure()
     │  ├─ age >24h → mark_failed("Timed out") + _auto_build_m3u8()
     │  ├─ retries ≥MAX_QUEUE_RETRIES → mark_failed("Max retries") + _auto_build_m3u8()
+    │  ├─ remaining failures all ≥ MAX_TRACK_RETRIES → mark_done(partial) + notify + m3u8
     │  └─ else → requeue()
-    └─ if all ok → mark_done(result["ok"], result["skipped"], 0) → _auto_build_m3u8() → send summary
+    └─ if all ok → _handle_no_failures(): mark_done + _auto_build_m3u8() + send summary
+       (given-up tracks reported separately as "❌ N given up")
     on exception → mark_failed() → send error
 ```
 

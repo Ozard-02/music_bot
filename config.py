@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress bars
@@ -17,6 +18,7 @@ PER_TRACK_RETRIES = 3
 # Queue
 MAX_PARALLEL_JOBS = 3
 MAX_QUEUE_RETRIES = 15
+MAX_TRACK_RETRIES = 10  # give up on a track after this many failed attempts
 MAX_DOWNLOAD_TIMEOUT = 3600  # 1h — kill stuck downloads
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
 RETRY_BACKOFF_BASE = 5    # seconds, doubles each retry
@@ -58,7 +60,10 @@ def setup_logger(log_path: str | Path | None = None) -> logging.Logger:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
-        handlers=[logging.FileHandler(log_path), logging.StreamHandler()],
+        handlers=[
+            RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3),
+            logging.StreamHandler(),
+        ],
     )
     logger = logging.getLogger("spoty_loop")
     logger.info("Logging to %s", log_path)

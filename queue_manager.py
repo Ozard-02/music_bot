@@ -221,6 +221,16 @@ class QueueManager:
             )
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_give_up_titles(self, item_id: int, threshold: int) -> set[str]:
+        """Titles that have failed >= threshold times for this item."""
+        conn = self._connect()
+        cursor = conn.execute(
+            "SELECT track_title, COUNT(*) AS n FROM failed_tracks "
+            "WHERE item_id=? GROUP BY track_title HAVING n >= ?",
+            (item_id, threshold),
+        )
+        return {row["track_title"] for row in cursor.fetchall()}
+
     def find_existing(self, input_type: str, query: str) -> int | None:
         conn = self._connect()
         cursor = conn.execute(

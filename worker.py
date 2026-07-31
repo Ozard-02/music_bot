@@ -9,6 +9,7 @@ from telegram import Bot
 from config import (
     MAX_PARALLEL_JOBS,
     MAX_QUEUE_RETRIES,
+    MAX_TRACK_RETRIES,
     MAX_DOWNLOAD_TIMEOUT,
     MAX_QUEUE_AGE,
     RETRY_BACKOFF_BASE,
@@ -21,9 +22,9 @@ from downloader import run_url
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 
-def _run_url_sync(url: str, cfg: dict, logger: logging.Logger) -> dict:
+def _run_url_sync(url: str, cfg: dict, logger: logging.Logger, skip_titles: set[str] | None = None) -> dict:
     async def _inner():
-        return await run_url(url, cfg, logger)
+        return await run_url(url, cfg, logger, skip_titles)
     return asyncio.run(_inner())
 
 
@@ -108,8 +109,17 @@ class Worker:
         try:
             url, display = await self._resolve(item)
 
+            skip_titles = await asyncio.to_thread(
+                self._queue.get_give_up_titles, item["id"], MAX_TRACK_RETRIES,
+            )
+            if skip_titles:
+                self._logger.info(
+                    "#%d: skipping %d given-up tracks",
+                    item["id"], len(skip_titles),
+                )
+
             result = await asyncio.wait_for(
-                asyncio.to_thread(_run_url_sync, url, self._cfg, self._logger),
+                asyncio.to_thread(_run_url_sync, url, self._cfg, self._logger, skip_titles),
                 timeout=MAX_DOWNLOAD_TIMEOUT,
             )
 
@@ -120,24 +130,7 @@ class Worker:
                     )
 
             if result["failed"] == 0:
-                await asyncio.to_thread(
-                    self._queue.mark_done,
-                    item["id"],
-                    result["ok"],
-                    result["skipped"],
-                    0,
-                )
-                parts = []
-                if result["ok"]:
-                    parts.append(f"✅ {result['ok']} ok")
-                if result["skipped"]:
-                    parts.append(f"⏭ {result['skipped']} skipped")
-                await self._bot.send_message(
-                    chat_id=self._chat_id,
-                    text=f"<b>{display}</b>\n{' | '.join(parts)}",
-                    parse_mode="HTML",
-                )
-                await self._auto_build_m3u8(item)
+                await self._handle_no_failures(item, display, result)
             else:
                 await self._handle_failure(item, display, result)
 
@@ -149,6 +142,50 @@ class Worker:
                 text=f"<b>Failed</b> #{item['id']}: {item['query']}\nInternal error — check logs",
                 parse_mode="HTML",
             )
+
+    async def _handle_no_failures(self, item: dict, display: str, result: dict):
+        gave_up_tracks = result.get("gave_up_tracks", [])
+        if not gave_up_tracks:
+            await asyncio.to_thread(
+                self._queue.mark_done,
+                item["id"],
+                result["ok"],
+                result["skipped"],
+                0,
+            )
+            parts = []
+            if result["ok"]:
+                parts.append(f"✅ {result['ok']} ok")
+            if result["skipped"]:
+                parts.append(f"⏭ {result['skipped']} skipped")
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                text=f"<b>{display}</b>\n{' | '.join(parts)}",
+                parse_mode="HTML",
+            )
+            await self._auto_build_m3u8(item)
+            return
+
+        await asyncio.to_thread(
+            self._queue.mark_done,
+            item["id"],
+            result["ok"],
+            result["skipped"],
+            len(gave_up_tracks),
+        )
+        parts = []
+        if result["ok"]:
+            parts.append(f"✅ {result['ok']} ok")
+        if result["skipped"]:
+            parts.append(f"⏭ {result['skipped']} skipped")
+        if gave_up_tracks:
+            parts.append(f"❌ {len(gave_up_tracks)} given up")
+        await self._bot.send_message(
+            chat_id=self._chat_id,
+            text=f"<b>{display}</b>\n{' | '.join(parts)}\n🧊 Tracks gave up after {MAX_TRACK_RETRIES} attempts",
+            parse_mode="HTML",
+        )
+        await self._auto_build_m3u8(item)
 
     async def _resolve(self, item: dict) -> tuple[str, str]:
         if item["input_type"] == "search":
@@ -198,6 +235,32 @@ class Worker:
             await asyncio.to_thread(self._queue.mark_failed, item["id"], "Max retries exceeded")
             await self._auto_build_m3u8(item)
             msg = f"<b>{display}</b>\n❌ Failed after {MAX_QUEUE_RETRIES} retries"
+            await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
+            return
+
+        gave_up = await asyncio.to_thread(
+            self._queue.get_give_up_titles, item["id"], MAX_TRACK_RETRIES,
+        )
+        still_trying = [
+            title for _track_id, title, _err in result.get("failed_tracks", [])
+            if title not in gave_up
+        ]
+
+        if not still_trying:
+            gave_up_count = len(gave_up)
+            await asyncio.to_thread(
+                self._queue.mark_done,
+                item["id"],
+                result["ok"],
+                result["skipped"],
+                gave_up_count,
+            )
+            await self._auto_build_m3u8(item)
+            msg = (
+                f"<b>{display}</b>\n✅ {result['ok']} ok | ⏭ {result['skipped']} skipped"
+                f" | ❌ {gave_up_count} given up\n"
+                f"🧊 Gave up after {MAX_TRACK_RETRIES} attempts"
+            )
             await self._bot.send_message(chat_id=self._chat_id, text=msg, parse_mode="HTML")
             return
 
