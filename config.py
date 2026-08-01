@@ -13,7 +13,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress
 
 # Download engine
 DEFAULT_SERVICES = ["qobuz", "deezer", "amazon"]
-MAX_CONCURRENT = 3
+MAX_CONCURRENT = 2
 PER_TRACK_TIMEOUT = 100
 PER_TRACK_RETRIES = 3
 

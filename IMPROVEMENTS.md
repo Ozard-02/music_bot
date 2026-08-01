@@ -10,7 +10,7 @@
   - [x] Search handler — `"Artist - Album"`, `"Album - Song"`, `"Artist - Song"`
   - [x] `/status` — current download + queue position + history stats
   - [x] `/mkplaylist <url> [name]` — generate .m3u8 for a Spotify playlist from tracks on disk
-  - [x] `/fixmetadata <folder>` — re-tag all FLACs in a folder / library root via SpotiFLAC (Apple-first enrichment); strips bogus MUSICBRAINZ_* and moves files to their real album folder
+  - [x] `/fixmetadata [folder]` — re-tag all FLACs in a folder (whole library if omitted) via SpotiFLAC (Apple-first enrichment); strips bogus MUSICBRAINZ_* and moves files to their real album folder
   - [x] `/purge` — remove all queued items
   - [x] Duplicate prevention — warns "Already queued as #N" when same input is already active
   - [x] Chat ID whitelist: only your user ID can interact; others silently ignored

@@ -153,13 +153,13 @@ async def mkplaylist_cmd(update: Update, context) -> None:
     try:
         result = await build_m3u8(url, name)
         missing = result.get("missing_count", 0)
-        parts = [f"✅ <b>{result['playlist_name']}</b>",
-                 f"{result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
+        parts = [f"✅ <b>Playlist: {result['playlist_name']}</b>",
+                 f"  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
         if missing:
-            parts.append(f"❌ {missing} missing — see <code>{result['missing_log_path']}</code>")
+            parts.append(f"  ❌ {missing} missing — see <code>{result['missing_log_path']}</code>")
         if result.get("cover_path"):
-            parts.append(f"🖼️ Cover saved")
-        parts.append(f"<code>{result['path']}</code>")
+            parts.append("  🖼️ Cover saved")
+        parts.append(f"  <code>{result['path']}</code>")
         await msg.edit_text("\n".join(parts), parse_mode="HTML")
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
@@ -194,24 +194,19 @@ async def rescan_cmd(update: Update, context) -> None:
 
 @require_auth
 async def fixmetadata_cmd(update: Update, context) -> None:
-    if not context.args:
-        await update.message.reply_html(
-            "Usage: /fixmetadata &lt;album folder&gt;\n"
-            "Re-tags every FLAC in the folder (Spotify + Apple enrichment) and "
-            "moves files that belong to a different album. Run it on one album "
-            "folder, or on the library root to fix everything."
-        )
-        return
-
     cfg = context.application.bot_data["cfg"]
     root = Path(cfg["output_dir"])
-    folder = Path(context.args[0]).expanduser()
-    if not folder.is_absolute():
-        folder = root / folder
 
-    if not folder.is_dir():
-        await update.message.reply_html(f"❌ Not a folder: <code>{folder}</code>")
-        return
+    if not context.args:
+        folder = root
+    else:
+        folder = Path(" ".join(context.args)).expanduser()
+        if not folder.is_absolute():
+            folder = root / folder
+
+        if not folder.is_dir():
+            await update.message.reply_html(f"❌ Not a folder: <code>{folder}</code>")
+            return
 
     from scripts.fix_metadata import fix_library
 
@@ -264,7 +259,7 @@ async def handle_message(update: Update, context) -> None:
     if not is_new:
         await update.message.reply_html(
             f"⚠️ <b>Already queued as #{item_id}</b>\n"
-            f"<code>{value[:80]}</code>"
+            f"  <code>{value[:80]}</code>"
         )
         return
 
@@ -275,8 +270,8 @@ async def handle_message(update: Update, context) -> None:
     pos = s["queued"] + s["running"]
     await update.message.reply_html(
         f"📥 <b>Queued #{item_id}</b>\n"
-        f"Position: {pos}\n"
-        f"<code>{value[:80]}</code>"
+        f"  Position: {pos}\n"
+        f"  <code>{value[:80]}</code>"
     )
 
 

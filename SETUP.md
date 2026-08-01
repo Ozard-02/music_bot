@@ -14,7 +14,7 @@ while True:
   run_url():
     dedup playlist by track.id (first kept)
     pre-check paths on disk → skip existing, skip given-up titles
-    download all unique tracks with 3 parallel workers (100s timeout, 3 retries)
+    download all unique tracks with 2 parallel workers (100s timeout, 3 retries)
   retry/fail via decide_failure() (age >24h, retries ≥15, give-up, backoff)
 ```
 

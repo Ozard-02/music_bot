@@ -136,7 +136,6 @@ docker compose up -d
 
 ## Remaining
 
-- **Tune parallelism** — adjust `MAX_CONCURRENT` (3→?) if rate-limited.
 - **Tidal v1 API retired** — permanent 410 error, requires SpotiFLAC update or tidal-web extension.
 - **Album metadata quality** — investigate whether enrich_providers (Apple/Deezer/Tidal/SoundCloud) contaminate album-level metadata (genre, label, year, etc.). Possibly drop enrich_providers entirely and use only Spotify metadata for consistency.
 - **Cross-folder album merging** — `/fixmetadata` moves single-track folders (e.g. `OK`, `ROSSO COME IL FANGO`) into their real album folder only when run on the library root or on that folder; folders are never auto-deleted when emptied.
@@ -148,3 +147,8 @@ docker compose up -d
     - `worker.py` — 4-outcome failure state machine extracted into pure `decide_failure(item, result, gave_up_titles) → FailureDecision` (fail-timeout / fail-max-retries / done-partial / requeue-backoff), tested directly (6 new tests); `_handle_no_failures`/`_handle_failure` are thin dispatchers with a shared `_result_summary()`.
     - `scripts/` — package with the 7 maintenance/one-off CLIs (fix_metadata, fix_covers, fix_mb_tags, fix_original_filenames, retag_missing, backfill_urls, fix_qvc), each with a `sys.path` bootstrap for standalone use; bot + tests import updated (`from scripts.fix_metadata import fix_library`). `fix_qvc.py` stays gitignored at its new path.
     - 166 tests.
+63. **`MAX_CONCURRENT` 3→2 + bot message consistency** —
+    - `config.MAX_CONCURRENT = 2` (per downloader semaphore + `max_concurrent_downloads`).
+    - `/fixmetadata` with no folder now defaults to the whole library (consistent with `/rescan`); folder args joined with spaces so multi-word folders like `Noyz Narcos` resolve correctly.
+    - One message convention everywhere: `{emoji} <b>Title</b>` + 2-space-indented body lines (paths in `<code>`). Applied to queued/already-queued, `/mkplaylist`, worker notifications (success, partial, timeout, max-retries, requeue, internal error), and the auto-m3u8 message.
+    - `format_help()` now lists `/help` and `/rescan` (were missing). 161 tests.

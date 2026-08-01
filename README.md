@@ -28,7 +28,8 @@ Telegram msg → SQLite queue → Worker → SpotiFLAC → FLAC on disk
 | `/status` | Queue stats + recent items |
 | `/purge` | Clear all queued items |
 | `/mkplaylist <url>` | Generate m3u8 playlist file |
-| `/fixmetadata <folder>` | Re-tag all FLACs in a folder (fixes "same album split into several" in Navidrome) |
+| `/rescan` | Re-embed Spotify covers for the whole library |
+| `/fixmetadata [folder]` | Re-tag all FLACs in a folder (whole library if omitted; fixes "same album split into several" in Navidrome) |
 
 Metadata issues (bogus MusicBrainz tags, split albums, tagless files) are
 explained in [METADATA.md](METADATA.md).
