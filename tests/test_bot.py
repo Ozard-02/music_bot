@@ -278,12 +278,39 @@ class TestFixMetadataCmd:
         return context
 
     @pytest.mark.asyncio
-    async def test_usage_when_no_args(self):
+    async def test_no_args_runs_on_library_root(self, tmp_path):
         update = _make_update(text="/fixmetadata")
-        context = self._context(Path("/tmp"))
-        await fixmetadata_cmd(update, context)
-        update.message.reply_html.assert_awaited_once()
-        assert "Usage" in update.message.reply_html.call_args[0][0]
+        context = self._context(tmp_path)
+
+        fake = {
+            "folders": 2, "total": 3, "fixed": 3, "moved": 0, "failed": 0,
+            "failed_files": [],
+            "moved_files": [],
+        }
+        with patch("scripts.fix_metadata.fix_library", new=AsyncMock(return_value=fake)) as m:
+            await fixmetadata_cmd(update, context)
+
+        assert str(m.call_args.args[0]) == str(tmp_path)
+        assert m.call_args.kwargs["apply"] is True
+
+    @pytest.mark.asyncio
+    async def test_multi_word_folder_joins_args(self, tmp_path):
+        album = tmp_path / "Noyz Narcos"
+        album.mkdir()
+        (album / "a.flac").write_bytes(b"fake")
+
+        fake = {
+            "folders": 1, "total": 1, "fixed": 1, "moved": 0, "failed": 0,
+            "failed_files": [],
+            "moved_files": [],
+        }
+        update = _make_update(text="/fixmetadata Noyz Narcos")
+        context = self._context(tmp_path, args=["Noyz", "Narcos"])
+
+        with patch("scripts.fix_metadata.fix_library", new=AsyncMock(return_value=fake)) as m:
+            await fixmetadata_cmd(update, context)
+
+        assert str(m.call_args.args[0]) == str(album)
 
     @pytest.mark.asyncio
     async def test_resolves_relative_to_output_dir_and_applies(self, tmp_path):

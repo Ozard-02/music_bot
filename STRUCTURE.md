@@ -5,7 +5,7 @@
 ### `config.py` — shared constants + setup utilities
 
 ```
-Constants: SERVICES=["qobuz","deezer","amazon"], MAX_CONCURRENT=3,
+Constants: SERVICES=["qobuz","deezer","amazon"], MAX_CONCURRENT=2,
            PER_TRACK_TIMEOUT=100, PER_TRACK_RETRIES=3,
            MAX_QUEUE_RETRIES=15, MAX_TRACK_RETRIES=10,
            MAX_DOWNLOAD_TIMEOUT=3600, MAX_QUEUE_AGE=86400

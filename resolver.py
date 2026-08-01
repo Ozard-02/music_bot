@@ -34,10 +34,12 @@ def format_help() -> str:
         "- <b>Artist \u2014 Song</b> \u2192 download song\n\n"
         "Use a dash with spaces ( \u2014 ) between the two parts.\n\n"
         "<b>Commands:</b>\n"
+        "/help \u2014 this message\n"
         "/status \u2014 queue status and recent items\n"
         "/purge \u2014 remove all items\n"
         "/mkplaylist &lt;url&gt; [name] \u2014 build .m3u8 from playlist\n"
-        "/fixmetadata &lt;folder&gt; \u2014 re-tag all songs in a folder"
+        "/rescan \u2014 re-embed Spotify covers for the whole library\n"
+        "/fixmetadata [album folder] \u2014 re-tag a folder (whole library if omitted)"
     )
 
 
