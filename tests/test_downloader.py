@@ -369,3 +369,100 @@ class TestConsoleInterception:
 
         assert len(emitted) == 1
         assert emitted[0].endswith("[INFO] Processing #42: test")
+
+
+class TestConsoleSilencing:
+    """silence_spotiflac's console no-ops must reach SpotiFLAC's module-level
+    copies (`from .core.console import print_summary`), not just the console
+    module attributes — otherwise the banners, timeout lines and the qobuz
+    grant prompt leak into production logs (import-copy gotcha)."""
+
+    def test_copied_names_in_downloader_are_noops(self, capsys):
+        import SpotiFLAC.downloader as sf_downloader
+
+        sf_downloader.print_summary(1, 1, [("t", "a", "err")], 0.5)
+        sf_downloader.print_track_header(1, 2, "Song", "Artist", "Album")
+        sf_downloader.safe_tqdm_write("  ⏱  Timeout reached for 'x' — skipping track.")
+        sf_downloader.uninstall_console_interception()
+
+        out, err = capsys.readouterr()
+        assert out == "" and err == ""
+
+    def test_provider_copies_are_noops(self, capsys):
+        from SpotiFLAC.core import console
+        from SpotiFLAC.providers import qobuz, tidal
+
+        assert qobuz.print_api_failure is console.print_api_failure
+        assert qobuz.print_source_banner is console.print_source_banner
+        assert tidal.print_quality_fallback is console.print_quality_fallback
+        qobuz.print_api_failure("qobuz", "", "bound to a different event loop")
+        tidal.print_source_banner("tidal", "", "FLAC")
+
+        out, err = capsys.readouterr()
+        assert out == "" and err == ""
+
+    def test_builtins_input_is_noop(self, capsys):
+        import builtins
+
+        prompt = "Incolla qui il grant (da DevTools ...): "
+        assert builtins.input(prompt) == ""
+        out, err = capsys.readouterr()
+        assert out == "" and err == ""
+
+    def test_concurrent_manager_exit_does_not_resurrect_prints(self, capsys):
+        """Regression: the old context manager restored builtins.input/console
+        in `finally`, so with one manager per download thread the first thread
+        to exit un-patched the others mid-download."""
+        import builtins
+        from spotiflac_patch import silence_spotiflac
+
+        with silence_spotiflac():
+            with silence_spotiflac():
+                pass
+
+        import SpotiFLAC.core.console as console
+        assert console.print_summary(1, 1, [], 0.0) is None
+        assert builtins.input("no prompt") == ""
+        out, err = capsys.readouterr()
+        assert out == "" and err == ""
+
+
+class TestQobuzLockPatch:
+    """QobuzProvider stores an asyncio.Lock bound to the first event loop;
+    SpotiFLAC awaits it from fresh loops and dies with 'bound to a different
+    event loop'.  _patch_qobuz_lock must replace it with a loop-agnostic lock."""
+
+    def test_provider_uses_loop_agnostic_lock(self):
+        from spotiflac_patch import _AsyncLockAdapter
+        from SpotiFLAC.providers.qobuz import QobuzProvider
+
+        provider = QobuzProvider()
+        assert isinstance(provider._creds_lock, _AsyncLockAdapter)
+
+    @pytest.mark.asyncio
+    async def test_lock_works_across_two_event_loops(self):
+        import threading
+        from spotiflac_patch import _AsyncLockAdapter
+
+        lock = _AsyncLockAdapter()
+
+        async def _probe(l):
+            async with l:
+                pass
+
+        results = []
+
+        def _run_in_new_loop():
+            asyncio.run(_probe(lock))
+            results.append(True)
+
+        await _probe(lock)
+
+        threads = [threading.Thread(target=_run_in_new_loop) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert results == [True, True]
+        assert not any(t.is_alive() for t in threads)

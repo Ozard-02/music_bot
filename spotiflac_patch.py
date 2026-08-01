@@ -1,15 +1,101 @@
 """Neutralize SpotiFLAC's noisy/leaky internals (monkey-patches).
 
 Kept in one module so the hacks are easy to find and review.  Importing this
-module runs `disable_progress_manager()` once — downloader.py relies on that
-side-effect (regression-tested in tests/test_downloader.py).
+module runs `install_console_silencing()`, `_patch_qobuz_lock()` and
+`disable_progress_manager()` once — downloader.py relies on that side-effect
+(regression-tested in tests/test_downloader.py).
 """
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import logging
+import sys
+import threading
 from contextlib import contextmanager
+
+_CONSOLE_PRINTS = (
+    "print_source_banner",
+    "print_api_failure",
+    "print_quality_fallback",
+    "print_track_header",
+    "print_summary",
+    "print_official_source",
+)
+
+
+def install_console_silencing() -> None:
+    """Permanently no-op SpotiFLAC's console output and interactive prompts.
+
+    Run once at import time, before any SpotiFLAC module is used.  This must be
+    permanent (never restored), for two reasons:
+
+    * SpotiFLAC call sites use module-level copies (`from .core.console import
+      print_summary`), so patching the console module's attributes alone does
+      nothing — the copies are fixed at import time.  We patch the console
+      module AND overwrite the copies in every already-imported module;
+      modules imported later pick up the patched attributes automatically.
+    * The old context-manager approach restored the originals in a `finally` —
+      with one manager per download thread, the first thread to exit
+      un-patched builtins.input while the others were still downloading (the
+      "Incolla qui il grant" prompt leaked into the logs).  No restore, no
+      race.
+    """
+    import SpotiFLAC.core.console as _console
+    import SpotiFLAC.core.progress as _progress
+
+    for _name in _CONSOLE_PRINTS:
+        setattr(_console, _name, lambda *a, **kw: None)
+    _progress.safe_tqdm_write = lambda *a, **kw: None
+    builtins.input = lambda *a, **kw: ""
+
+    _sources = {_name: _console for _name in _CONSOLE_PRINTS}
+    _sources["safe_tqdm_write"] = _progress
+    for _mod_name, _mod in list(sys.modules.items()):
+        if not _mod_name.startswith("SpotiFLAC"):
+            continue
+        for _name, _src in _sources.items():
+            if hasattr(_mod, _name):
+                setattr(_mod, _name, getattr(_src, _name))
+
+
+class _AsyncLockAdapter:
+    """asyncio.Lock stand-in with no event-loop affinity.
+
+    QobuzProvider stores an asyncio.Lock created in the first event loop that
+    touched it; SpotiFLAC's own to_thread + asyncio.run patterns later await it
+    from fresh loops, raising 'is bound to a different event loop' and failing
+    the whole download (the main cause of the 100s timeouts in production).  A
+    threading.Lock works across loops and satisfies the `async with` usage.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    async def __aenter__(self) -> "_AsyncLockAdapter":
+        await asyncio.to_thread(self._lock.acquire)
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self._lock.release()
+
+
+def _patch_qobuz_lock() -> None:
+    try:
+        from SpotiFLAC.providers import qobuz
+    except ImportError:
+        return
+    if getattr(qobuz.QobuzProvider, "_spoty_loop_lock_patched", False):
+        return
+    qobuz.QobuzProvider._spoty_loop_lock_patched = True
+    _orig_init = qobuz.QobuzProvider.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        _orig_init(self, *args, **kwargs)
+        self._creds_lock = _AsyncLockAdapter()
+
+    qobuz.QobuzProvider.__init__ = _patched_init
 
 
 def disable_progress_manager():
@@ -68,41 +154,11 @@ def silence_spotiflac_loggers() -> None:
 
 @contextmanager
 def silence_spotiflac():
-    """No-op SpotiFLAC's console prints and interactive prompts during a download."""
-    import SpotiFLAC.core.console as _console
-    import SpotiFLAC.core.progress as _progress
-
-    _originals = {
-        "print_source_banner": _console.print_source_banner,
-        "print_api_failure": _console.print_api_failure,
-        "print_quality_fallback": _console.print_quality_fallback,
-        "print_track_header": _console.print_track_header,
-        "print_summary": _console.print_summary,
-        "print_official_source": _console.print_official_source,
-        "safe_tqdm_write": _progress.safe_tqdm_write,
-        "input": builtins.input,
-    }
-
-    _console.print_source_banner = lambda *a, **kw: None
-    _console.print_api_failure = lambda *a, **kw: None
-    _console.print_quality_fallback = lambda *a, **kw: None
-    _console.print_track_header = lambda *a, **kw: None
-    _console.print_summary = lambda *a, **kw: None
-    _console.print_official_source = lambda *a, **kw: None
-    _progress.safe_tqdm_write = lambda *a, **kw: None
-    builtins.input = lambda *a, **kw: ""
-
-    try:
-        yield
-    finally:
-        _console.print_source_banner = _originals["print_source_banner"]
-        _console.print_api_failure = _originals["print_api_failure"]
-        _console.print_quality_fallback = _originals["print_quality_fallback"]
-        _console.print_track_header = _originals["print_track_header"]
-        _console.print_summary = _originals["print_summary"]
-        _console.print_official_source = _originals["print_official_source"]
-        _progress.safe_tqdm_write = _originals["safe_tqdm_write"]
-        builtins.input = _originals["input"]
+    """Idempotent guard — console silencing is installed permanently at import."""
+    install_console_silencing()
+    yield
 
 
+install_console_silencing()
+_patch_qobuz_lock()
 disable_progress_manager()

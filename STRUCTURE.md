@@ -63,10 +63,18 @@ disable_progress_manager()   — runs once at import; neutralizes ProgressManage
   SpotiFLAC.downloader (that function strips every StreamHandler off the root
   logger per track download — handlers piled up, freezing spoty_loop.log).
 reset_progress_manager()     — detach class-level state before using SpotiFLAC in a new loop
+install_console_silencing()   — runs once at import; permanently no-ops console.print_*,
+  progress.safe_tqdm_write and builtins.input, then overwrites the module-level
+  copies in every already-imported SpotiFLAC module (they do `from .core.console
+  import print_summary` — patching console attrs alone is useless). Never
+  restored → no multi-thread restore race (kills SESSION SUMMARY boxes,
+  ✗/⚠️/⏱ lines and the "Incolla qui il grant" prompt in production logs).
+_patch_qobuz_lock()           — runs once at import; wraps QobuzProvider.__init__ so
+  _creds_lock becomes a loop-agnostic _AsyncLockAdapter (threading.Lock behind
+  async-with). SpotiFLAC awaits the provider's asyncio.Lock from fresh loops
+  (to_thread + asyncio.run) → "bound to a different event loop" → 100s timeouts.
 silence_spotiflac_loggers()  — set all SpotiFLAC.* loggers to CRITICAL + httpx/httpcore to WARNING
-silence_spotiflac()          — context manager; no-ops console banners, api-failure
-  prints, quality-fallback spam, track headers, tqdm writes, and builtins.input
-  (interactive prompts like "Incolla qui il grant") during a download
+silence_spotiflac()          — idempotent guard; silencing is installed permanently at import
 ```
 
 ### `flac_utils.py` — shared FLAC/tag/cover helpers
