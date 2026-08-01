@@ -6,6 +6,8 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from spotiflac_patch import silence_spotiflac_loggers
+
 os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress bars
 
 
@@ -68,12 +70,7 @@ def setup_logger(log_path: str | Path | None = None) -> logging.Logger:
     logger = logging.getLogger("spoty_loop")
     logger.info("Logging to %s", log_path)
 
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("nodriver").setLevel(logging.WARNING)
-    for name in list(logging.root.manager.loggerDict):
-        if name.startswith("SpotiFLAC"):
-            logging.getLogger(name).setLevel(logging.CRITICAL)
+    silence_spotiflac_loggers()
 
     return logger
 

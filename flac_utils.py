@@ -48,8 +48,8 @@ def embed_cover(fpath: str | Path, data: bytes) -> None:
 
 
 def iter_flacs(root: str | Path):
-    """Yield every .flac file under `root`."""
+    """Yield every FLAC file under `root` (case-insensitive, sorted)."""
     root = Path(root)
-    for f in sorted(root.rglob("*.flac")):
-        if f.suffix.lower() == ".flac":
+    for f in sorted(root.rglob("*")):
+        if f.is_file() and f.suffix.lower() == ".flac":
             yield f

@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutagen.flac import FLAC
 
 from config import load_config
+from flac_utils import iter_flacs
 from track_utils import sanitize
 
 log = logging.getLogger("fix_original_filenames")
@@ -56,28 +57,24 @@ def main(dry_run: bool = False):
     skipped = 0
     errors = 0
 
-    for root, _dirs, files in os.walk(cfg["output_dir"]):
-        for fn in files:
-            if not fn.lower().endswith(".flac"):
-                continue
-            fpath = os.path.join(root, fn)
-            total += 1
+    for fpath in iter_flacs(cfg["output_dir"]):
+        total += 1
 
-            try:
-                audio = FLAC(fpath)
-            except Exception as e:
-                log.warning("  SKIP (read error) %s — %s", fpath, e)
-                skipped += 1
-                continue
+        try:
+            audio = FLAC(str(fpath))
+        except Exception as e:
+            log.warning("  SKIP (read error) %s — %s", fpath, e)
+            skipped += 1
+            continue
 
-            rel = target_rel_path(audio, cfg)
-            if rel is None:
-                skipped += 1
-                continue
+        rel = target_rel_path(audio, cfg)
+        if rel is None:
+            skipped += 1
+            continue
 
-            target = os.path.join(cfg["output_dir"], rel)
-            if fpath == target:
-                continue
+        target = Path(cfg["output_dir"]) / rel
+        if fpath == target:
+            continue
 
             if dry_run:
                 log.info("  WOULD RENAME\n    %s\n    -> %s", fpath, target)

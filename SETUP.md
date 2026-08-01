@@ -8,18 +8,17 @@ Download Spotify playlists to FLAC using SpotiFLAC's anonymous providers (Tidal/
 ```
 while True:
   copy desktop community session (avoids Cloudflare)
-  suppress SpotiFLAC child loggers
-  health-check qobuz, tidal, amazon (every 5 min) until at least one UP
-  while failed > 0:
-    dedup playlist by track.id (first kept, duplicates → duplicates.log)
-    download all unique tracks with 3 parallel workers (180s timeout, 3 retries)
-    if zero failed → exit success
-    if all failed → wait 5 min (server likely down)
-    if some failed → wait 60s and retry only the failed ones
-  if crash → restart outer loop after 30s
+  suppress SpotiFLAC child loggers (spotiflac_patch.silence_spotiflac_loggers)
+  dequeue next item from queue.db (worker.py)
+  link → run_url() directly; "Artist - Album" → resolve_search() first
+  run_url():
+    dedup playlist by track.id (first kept)
+    pre-check paths on disk → skip existing, skip given-up titles
+    download all unique tracks with 3 parallel workers (100s timeout, 3 retries)
+  retry/fail via decide_failure() (age >24h, retries ≥15, give-up, backoff)
 ```
 
-Existing files are detected by SpotiFLAC's internal `_file_exists()` — no re-download.
+Existing files are detected by the pre-check via `track_relative_path()` — no re-download.
 
 ## Usage
 
@@ -51,7 +50,7 @@ periodically in the TrueNAS Apps UI.
 Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 
 ## Provider priority
-`SERVICES = ["qobuz", "tidal", "amazon"]` — Qobuz first. Tidal v1 API retired (410). Amazon last.
+`SERVICES = ["qobuz", "deezer", "amazon"]` — Qobuz first. Tidal v1 API retired (410). Amazon last.
 
 ## Files
 | File | Purpose |
@@ -74,7 +73,6 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 | `.dockerignore` | Excludes venv, caches, logs, secrets |
 | `scripts/` | Maintenance CLIs: fix_metadata (also bot-called), fix_covers, fix_mb_tags, fix_original_filenames, retag_missing, backfill_urls, fix_qvc |
 | `spoty_loop.log` | Full log (all runs) |
-| `duplicates.log` | Track IDs that appeared >1× in the playlist |
 
 Config is read from `~/.spotiflac/config.json` (created by the desktop app). If missing, a warning points to `config.default.json` and hardcoded defaults are used.
 
