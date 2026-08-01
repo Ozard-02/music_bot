@@ -1,9 +1,9 @@
 """Neutralize SpotiFLAC's noisy/leaky internals (monkey-patches).
 
 Kept in one module so the hacks are easy to find and review.  Importing this
-module runs `install_console_silencing()`, `_patch_qobuz_lock()` and
-`disable_progress_manager()` once — downloader.py relies on that side-effect
-(regression-tested in tests/test_downloader.py).
+module runs `install_console_silencing()`, `_patch_qobuz_lock()`,
+`_patch_musicbrainz()` and `disable_progress_manager()` once — downloader.py
+relies on that side-effect (regression-tested in tests/test_downloader.py).
 """
 
 from __future__ import annotations
@@ -98,6 +98,60 @@ def _patch_qobuz_lock() -> None:
     qobuz.QobuzProvider.__init__ = _patched_init
 
 
+def _patch_musicbrainz() -> None:
+    """No-op SpotiFLAC's MusicBrainz lookup at download time.
+
+    Every provider (qobuz, deezer, amazon, apple_music, tidal, gdstudio,
+    pandora, youtube) looks up MusicBrainz by ISRC during download and embeds
+    the result via extra_tags=mb_tags: MUSICBRAINZ_TRACKID/ALBUMID/ARTISTID/
+    RELEASEGROUPID/ALBUMARTISTID plus barcode/label/country/sort/etc. The IDs
+    are often inconsistent between tracks of the same album → Navidrome groups
+    the album into multiple releases — exactly what /fixmetadata exists to
+    strip. So fresh downloads keep reproducing the problem /fixmetadata fixes.
+
+    No-op the whole lookup so downloads match /fixmetadata output:
+    mb_result_to_tags always returns {} (covers every provider),
+    AsyncMBFetch never spawns a thread, fetch_mb_metadata_async returns {}
+    (skips the ~12s/track MB network call). Enrichment providers
+    (apple/deezer/soundcloud) still supply genre/label/bpm/UPC.
+    """
+    try:
+        from SpotiFLAC.core import musicbrainz as mb
+    except ImportError:
+        return
+    if getattr(mb, "_spoty_loop_mb_patched", False):
+        return
+    mb._spoty_loop_mb_patched = True
+
+    def _noop_tags(*a, **kw) -> dict:
+        return {}
+
+    import concurrent.futures
+
+    _done = concurrent.futures.Future()
+    _done.set_result(None)
+
+    def _noop_init(self, isrc: str) -> None:
+        self.isrc = isrc
+        self.future = _done
+
+    async def _noop_async(*a, **kw) -> dict:
+        return {}
+
+    mb.mb_result_to_tags = _noop_tags
+    mb.AsyncMBFetch.__init__ = _noop_init
+    mb.fetch_mb_metadata_async = _noop_async
+
+    # Import-copy gotcha: providers do `from ...musicbrainz import ...`, so
+    # overwrite the already-copied names too (same sweep as console silencing).
+    for _mod_name, _mod in list(sys.modules.items()):
+        if not _mod_name.startswith("SpotiFLAC"):
+            continue
+        for _name in ("mb_result_to_tags", "fetch_mb_metadata_async"):
+            if hasattr(_mod, _name):
+                setattr(_mod, _name, getattr(mb, _name))
+
+
 def disable_progress_manager():
     """Neutralize SpotiFLAC's ProgressManager + console interception once.
 
@@ -161,4 +215,5 @@ def silence_spotiflac():
 
 install_console_silencing()
 _patch_qobuz_lock()
+_patch_musicbrainz()
 disable_progress_manager()
