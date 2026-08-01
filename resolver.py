@@ -38,8 +38,7 @@ def format_help() -> str:
         "/status \u2014 queue status and recent items\n"
         "/purge \u2014 remove all items\n"
         "/mkplaylist &lt;url&gt; [name] \u2014 build .m3u8 from playlist\n"
-        "/rescan \u2014 re-embed Spotify covers for the whole library\n"
-        "/fixmetadata [album folder] \u2014 re-tag a folder (whole library if omitted)"
+        "/fixmetadata [album folder] \u2014 re-tag + fix Spotify covers (whole library if omitted)"
     )
 
 

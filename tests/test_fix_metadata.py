@@ -15,7 +15,7 @@ from scripts.fix_metadata import (
 )
 
 
-def _track(album="MADAME", title="MAREA", album_artist="Madame", artists="Madame"):
+def _track(album="MADAME", title="MAREA", album_artist="Madame", artists="Madame", cover_url=""):
     from SpotiFLAC.core.models import TrackMetadata
 
     return TrackMetadata(
@@ -26,6 +26,7 @@ def _track(album="MADAME", title="MAREA", album_artist="Madame", artists="Madame
         album_artist=album_artist,
         track_number=2,
         total_tracks=18,
+        cover_url=cover_url,
     )
 
 
@@ -183,6 +184,59 @@ class TestFixAlbumFolder:
         remaining = [p.name for p in folder.iterdir()]
         assert not any(n.startswith("Madame - LUNA") for n in remaining)
         assert len(res["moved_files"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_embeds_upgraded_spotify_cover(self, tmp_path):
+        """Merged rescan behavior: the embedded cover must be the upgraded
+        Spotify one (640x640), not an enrichment-provider cover — achieved by
+        passing cover_data so tagger's enrichment cover can't override it."""
+        folder = self._make_folder(tmp_path, names=["Madame - MAREA.flac"])
+        mock_embed = AsyncMock()
+        resp = MagicMock(status_code=200, content=b"COVERBYTES")
+        http = AsyncMock()
+        http.get = AsyncMock(return_value=resp)
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=http)
+        cm.__aexit__ = AsyncMock()
+
+        with self._patch_flac(urls={"Madame - MAREA.flac": "open.spotify.com/track/abc123"}), patch(
+            "SpotiFLAC.core.tagger.embed_metadata_async", mock_embed
+        ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls, patch(
+            "scripts.fix_metadata.httpx.AsyncClient", return_value=cm
+        ) as http_cls:
+            client = client_cls.return_value
+            client.get_track_async = AsyncMock(return_value=_track(
+                album="MADAME",
+                cover_url="https://i.scdn.co/image/ab67616d00001e02abcdef",
+            ))
+
+            res = await fix_album_folder(folder, apply=True)
+
+        assert res["fixed"] == 1
+        assert http_cls.call_args.kwargs["timeout"] == 10
+        called_url = http.get.call_args[0][0]
+        assert "b273" in called_url and "1e02" not in called_url
+        assert mock_embed.call_args.kwargs["cover_data"] == b"COVERBYTES"
+
+    @pytest.mark.asyncio
+    async def test_no_cover_url_skips_fetch_and_retags(self, tmp_path):
+        """Tracks without a Spotify cover_url fall back to normal retag (no cover fetch)."""
+        folder = self._make_folder(tmp_path, names=["Madame - MAREA.flac"])
+        mock_embed = AsyncMock()
+
+        with self._patch_flac(urls={"Madame - MAREA.flac": "open.spotify.com/track/abc123"}), patch(
+            "SpotiFLAC.core.tagger.embed_metadata_async", mock_embed
+        ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls, patch(
+            "scripts.fix_metadata.httpx.AsyncClient", new=MagicMock()
+        ) as http_cls:
+            client = client_cls.return_value
+            client.get_track_async = AsyncMock(return_value=_track(album="MADAME"))
+
+            res = await fix_album_folder(folder, apply=True)
+
+        assert res["fixed"] == 1
+        http_cls.assert_not_called()
+        assert mock_embed.call_args.kwargs["cover_data"] is None
 
     @pytest.mark.asyncio
     async def test_dry_run_does_not_write_or_move(self, tmp_path):
