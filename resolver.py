@@ -57,7 +57,7 @@ async def resolve_search(
     tracks = results.get("tracks", [])
     albums = results.get("albums", [])
 
-    best_track = _best_track_match(tracks, a)
+    best_track = best_track_match(tracks, a)
     best_album = _best_album_match(albums, a)
 
     if best_track and best_album:
@@ -83,9 +83,20 @@ def _pick_between_track_and_album(track, album, second_part: str, first_part: st
     return (track.external_url, track.title, "track")
 
 
-def _best_track_match(tracks: list, artist_hint: str):
+def best_track_match(tracks: list, artist_hint: str = "", title_hint: str = ""):
+    """Return the search result that best matches the hints, else the first.
+
+    `artist_hint` matches against the track's artists (substring, case-
+    insensitive); `title_hint` matches exactly against the title.  Falls back
+    to `tracks[0]`, or None if there are no results.  Shared by the resolver
+    and the maintenance scripts (fix_metadata, backfill_urls, retag_missing).
+    """
+    artist = (artist_hint or "").strip().lower()
+    title = (title_hint or "").strip().lower()
     for t in tracks:
-        if artist_hint.lower() in (getattr(t, "artists", "") or "").lower():
+        if artist and artist in (getattr(t, "artists", "") or "").lower():
+            return t
+        if title and title == (getattr(t, "title", "") or "").lower():
             return t
     return tracks[0] if tracks else None
 

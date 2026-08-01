@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from config import SCRIPT_MAX_CONCURRENT
-from flac_utils import embed_cover, get_spotify_id_from_file, upgrade_cover_url
+from flac_utils import embed_cover, fetch_cover, get_spotify_id_from_file
 from spotiflac_patch import reset_progress_manager
 
 
@@ -21,7 +21,6 @@ async def rescan_library(
     dry_run: bool = False,
 ) -> dict:
     from SpotiFLAC.client import SpotifyMetadataClient
-    import httpx
 
     reset_progress_manager()
 
@@ -51,14 +50,13 @@ async def rescan_library(
                     skipped += 1
                     return
 
-                async with httpx.AsyncClient(timeout=10) as http:
-                    resp = await http.get(upgrade_cover_url(track.cover_url))
-                    if resp.status_code != 200:
-                        failed += 1
-                        return
+                data = await fetch_cover(track.cover_url)
+                if data is None:
+                    failed += 1
+                    return
 
                 if not dry_run:
-                    await asyncio.to_thread(embed_cover, fpath, resp.content)
+                    await asyncio.to_thread(embed_cover, fpath, data)
                 ok += 1
             except Exception:
                 failed += 1

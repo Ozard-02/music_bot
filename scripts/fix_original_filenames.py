@@ -76,27 +76,27 @@ def main(dry_run: bool = False):
         if fpath == target:
             continue
 
-            if dry_run:
-                log.info("  WOULD RENAME\n    %s\n    -> %s", fpath, target)
-                renamed += 1
-                continue
+        if dry_run:
+            log.info("  WOULD RENAME\n    %s\n    -> %s", fpath, target)
+            renamed += 1
+            continue
 
-            try:
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                os.rename(fpath, target)
-                log.info("  RENAMED\n    %s\n    -> %s", fpath, target)
-                renamed += 1
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            os.rename(fpath, target)
+            log.info("  RENAMED\n    %s\n    -> %s", fpath, target)
+            renamed += 1
 
-                parent = os.path.dirname(fpath)
-                while parent != cfg["output_dir"]:
-                    try:
-                        os.rmdir(parent)
-                    except OSError:
-                        break
-                    parent = os.path.dirname(parent)
-            except Exception as e:
-                log.error("  FAIL %s — %s", fpath, e)
-                errors += 1
+            parent = os.path.dirname(fpath)
+            while parent != cfg["output_dir"]:
+                try:
+                    os.rmdir(parent)
+                except OSError:
+                    break
+                parent = os.path.dirname(parent)
+        except Exception as e:
+            log.error("  FAIL %s — %s", fpath, e)
+            errors += 1
 
     log.info("")
     log.info("Done: %d files, %d renamed, %d skipped, %d errors (dry_run=%s)",
