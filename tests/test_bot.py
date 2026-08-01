@@ -109,6 +109,7 @@ class TestStatusCmd:
             {"id": 7, "status": "done", "query": "Album B", "result_ok": 3,
              "result_skipped": 1, "result_failed": 0},
         ]
+        qm.get_running.return_value = []
 
         update = _make_update()
         context = _make_context(qm=qm)
@@ -118,6 +119,32 @@ class TestStatusCmd:
         assert "Queue" in text
         assert "2" in text  # queued count
         assert "5" in text  # done count
+
+    @pytest.mark.asyncio
+    async def test_reports_running_jobs_with_progress(self):
+        qm = MagicMock()
+        qm.get_status.return_value = {
+            "queued": 0, "running": 1, "done": 3, "failed": 0, "next_id": None,
+        }
+        qm.get_history.return_value = [
+            {"id": 4, "status": "running", "query": "Some Album"},
+        ]
+        qm.get_running.return_value = [
+            {"id": 4, "status": "running", "query": "Some Album",
+             "started_at": "2026-08-01T10:00:00+00:00",
+             "progress": "3/10 · Now: Song X"},
+        ]
+
+        update = _make_update()
+        context = _make_context(qm=qm)
+        await status_cmd(update, context)
+        text = update.message.reply_html.call_args[0][0]
+        assert "Running:" in text
+        assert "#4" in text
+        assert "3/10" in text
+        assert "Song X" in text
+        # running item is not duplicated in Recent
+        assert "#4" not in text.split("Recent:")[-1]
 
     @pytest.mark.asyncio
     async def test_ignores_unauthorized(self):
@@ -405,6 +432,7 @@ class TestMessageEscaping:
             {"id": 8, "status": "done", "query": "AC/DC & Bon Scott - Album",
              "result_ok": 5, "result_skipped": 0, "result_failed": 0},
         ]
+        qm.get_running.return_value = []
 
         update = _make_update()
         context = _make_context(qm=qm)

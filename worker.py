@@ -24,9 +24,15 @@ from downloader import run_url
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 
-def _run_url_sync(url: str, cfg: dict, logger: logging.Logger, skip_titles: set[str] | None = None) -> dict:
+def _run_url_sync(
+    url: str,
+    cfg: dict,
+    logger: logging.Logger,
+    skip_titles: set[str] | None = None,
+    progress_cb=None,
+) -> dict:
     async def _inner():
-        return await run_url(url, cfg, logger, skip_titles)
+        return await run_url(url, cfg, logger, skip_titles, progress_cb)
     return asyncio.run(_inner())
 
 
@@ -179,8 +185,13 @@ class Worker:
                     item["id"], len(skip_titles),
                 )
 
+            def progress_cb(done, total, title):
+                self._queue.set_progress(item["id"], f"{done}/{total} · Now: {title}")
+
             result = await asyncio.wait_for(
-                asyncio.to_thread(_run_url_sync, url, self._cfg, self._logger, skip_titles),
+                asyncio.to_thread(
+                    _run_url_sync, url, self._cfg, self._logger, skip_titles, progress_cb,
+                ),
                 timeout=MAX_DOWNLOAD_TIMEOUT,
             )
 

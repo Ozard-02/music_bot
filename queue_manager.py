@@ -57,9 +57,14 @@ class QueueManager:
                 ON failed_tracks(item_id)
             """)
 
-            # Schema migration: add retry_at for exponential backoff
+            # Schema migrations (idempotent): add retry_at for exponential
+            # backoff, then progress for live per-track download status
             try:
                 conn.execute("ALTER TABLE queue ADD COLUMN retry_at TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE queue ADD COLUMN progress TEXT")
             except sqlite3.OperationalError:
                 pass
 
@@ -139,12 +144,12 @@ class QueueManager:
                     retry_at = datetime.now(timezone.utc).timestamp() + delay
                     retry_at_iso = datetime.fromtimestamp(retry_at, tz=timezone.utc).isoformat()
                     conn.execute(
-                        "UPDATE queue SET status='queued', retries=retries+1, retry_at=? WHERE id=?",
+                        "UPDATE queue SET status='queued', retries=retries+1, retry_at=?, progress=NULL WHERE id=?",
                         (retry_at_iso, item_id),
                     )
                 else:
                     conn.execute(
-                        "UPDATE queue SET status='queued', retries=retries+1, retry_at=NULL WHERE id=?",
+                        "UPDATE queue SET status='queued', retries=retries+1, retry_at=NULL, progress=NULL WHERE id=?",
                         (item_id,),
                     )
 
@@ -166,7 +171,7 @@ class QueueManager:
                 now = datetime.now(timezone.utc).isoformat()
                 conn.execute(
                     "UPDATE queue SET status='done', completed_at=?, "
-                    "result_ok=?, result_skipped=?, result_failed=? WHERE id=?",
+                    "result_ok=?, result_skipped=?, result_failed=?, progress=NULL WHERE id=?",
                     (now, ok, skipped, failed, item_id),
                 )
 
@@ -176,8 +181,17 @@ class QueueManager:
             with conn:
                 now = datetime.now(timezone.utc).isoformat()
                 conn.execute(
-                    "UPDATE queue SET status='failed', completed_at=?, error=? WHERE id=?",
+                    "UPDATE queue SET status='failed', completed_at=?, error=?, progress=NULL WHERE id=?",
                     (now, error, item_id),
+                )
+
+    def set_progress(self, item_id: int, text: str):
+        with self._lock:
+            conn = self._connect()
+            with conn:
+                conn.execute(
+                    "UPDATE queue SET progress=? WHERE id=?",
+                    (text, item_id),
                 )
 
     def get_status(self) -> dict:
@@ -195,6 +209,13 @@ class QueueManager:
             "failed": counts.get("failed", 0),
             "next_id": row["id"] if row else None,
         }
+
+    def get_running(self) -> list[dict]:
+        conn = self._connect()
+        cursor = conn.execute(
+            "SELECT * FROM queue WHERE status='running' ORDER BY id"
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def log_failed_track(self, item_id: int, track_title: str, error: str | None = None):
         with self._lock:

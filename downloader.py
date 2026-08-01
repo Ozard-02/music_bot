@@ -15,7 +15,13 @@ from spotiflac_patch import silence_spotiflac
 from track_utils import spotiflac_track_relative_path, track_relative_path
 
 
-async def run_url(url: str, cfg: dict, logger: logging.Logger, skip_titles: set[str] | None = None) -> dict:
+async def run_url(
+    url: str,
+    cfg: dict,
+    logger: logging.Logger,
+    skip_titles: set[str] | None = None,
+    progress_cb=None,
+) -> dict:
     from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
@@ -47,7 +53,7 @@ async def run_url(url: str, cfg: dict, logger: logging.Logger, skip_titles: set[
                     return {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("", url, "metadata_error")], "total": 1}
             else:
                 _, tracks = await client.get_playlist(url)
-            return await _download_tracks(client, tracks, cfg, logger, skip_titles)
+            return await _download_tracks(client, tracks, cfg, logger, skip_titles, progress_cb)
 
 
 async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
@@ -95,7 +101,14 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger):
         parent = parent.parent
 
 
-async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logger, skip_titles: set[str] | None = None) -> dict:
+async def _download_tracks(
+    client,
+    tracks: list,
+    cfg: dict,
+    logger: logging.Logger,
+    skip_titles: set[str] | None = None,
+    progress_cb=None,
+) -> dict:
     seen = set()
     unique = []
     for t in tracks:
@@ -136,8 +149,10 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
     failed_list = []
+    done_count = 0
 
     async def _dl(track):
+        nonlocal done_count
         async with sem:
             try:
                 fl = await client.download_track(track.external_url)
@@ -148,6 +163,9 @@ async def _download_tracks(client, tracks: list, cfg: dict, logger: logging.Logg
                     await _fix_cover(track, cfg, logger)
             except Exception:
                 failed_list.append(track)
+            done_count += 1
+            if progress_cb:
+                await asyncio.to_thread(progress_cb, done_count, len(missing), track.title)
 
     await asyncio.gather(*[_dl(t) for t in missing], return_exceptions=True)
 
