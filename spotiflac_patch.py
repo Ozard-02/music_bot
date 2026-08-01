@@ -62,8 +62,8 @@ def silence_spotiflac_loggers() -> None:
     for name in list(logging.root.manager.loggerDict):
         if name.startswith("SpotiFLAC"):
             logging.getLogger(name).setLevel(logging.CRITICAL)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    for noisy in ("httpx", "httpcore", "nodriver"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 @contextmanager

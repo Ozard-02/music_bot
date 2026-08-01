@@ -215,7 +215,6 @@ class TestQueueManager:
         item_id, is_new = qm.enqueue_unique("link", "url")
         assert is_new is True
         assert item_id == 1
-        assert qm.find_existing("link", "url") == 1
 
     def test_enqueue_unique_detects_duplicate(self, queue_manager: QueueManager):
         qm = queue_manager
@@ -251,38 +250,6 @@ class TestQueueManager:
         qm.mark_failed(item["id"], "err")
         _, is_new = qm.enqueue_unique("link", "url")
         assert is_new is True
-
-    def test_find_existing_returns_id_for_queued(self, queue_manager: QueueManager):
-        qm = queue_manager
-        qm.enqueue("link", "url")
-        assert qm.find_existing("link", "url") == 1
-
-    def test_find_existing_returns_none_for_done(self, queue_manager: QueueManager):
-        qm = queue_manager
-        qm.enqueue("link", "url")
-        item = qm.dequeue()
-        qm.mark_done(item["id"], 1, 0, 0)
-        assert qm.find_existing("link", "url") is None
-
-    def test_find_existing_returns_none_for_failed(self, queue_manager: QueueManager):
-        qm = queue_manager
-        qm.enqueue("link", "url")
-        item = qm.dequeue()
-        qm.mark_failed(item["id"], "err")
-        assert qm.find_existing("link", "url") is None
-
-    def test_find_existing_returns_none_for_missing(self, queue_manager: QueueManager):
-        assert queue_manager.find_existing("link", "url") is None
-
-    def test_find_existing_ignores_different_type(self, queue_manager: QueueManager):
-        qm = queue_manager
-        qm.enqueue("link", "url")
-        assert qm.find_existing("search", "url") is None
-
-    def test_find_existing_ignores_different_query(self, queue_manager: QueueManager):
-        qm = queue_manager
-        qm.enqueue("link", "url-a")
-        assert qm.find_existing("link", "url-b") is None
 
     def test_purge_all_removes_everything(self, queue_manager: QueueManager):
         qm = queue_manager

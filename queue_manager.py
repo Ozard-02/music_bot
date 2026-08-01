@@ -82,8 +82,8 @@ class QueueManager:
     def enqueue_unique(self, input_type: str, query: str) -> tuple[int, bool]:
         """Atomically check for existing + insert under a single lock.
 
-        Returns (item_id, is_new).  This closes the TOCTOU race between
-        find_existing() and enqueue() when called from separate handlers.
+        Returns (item_id, is_new) — closes the TOCTOU race of separate
+        check-then-insert calls.
         """
         with self._lock:
             conn = self._connect()
@@ -230,15 +230,6 @@ class QueueManager:
             (item_id, threshold),
         )
         return {row["track_title"] for row in cursor.fetchall()}
-
-    def find_existing(self, input_type: str, query: str) -> int | None:
-        conn = self._connect()
-        cursor = conn.execute(
-            "SELECT id FROM queue WHERE input_type=? AND query=? AND status IN ('queued', 'running')",
-            (input_type, query),
-        )
-        row = cursor.fetchone()
-        return row["id"] if row else None
 
     def purge_all(self) -> int:
         with self._lock:

@@ -280,41 +280,50 @@ async def handle_message(update: Update, context) -> None:
     )
 
 
+def _cleanup_part_files(output: Path, logger: logging.Logger) -> None:
+    """Remove leftover .part files from interrupted downloads."""
+    if not output.exists():
+        return
+    cleaned = 0
+    for p in output.rglob("*enc.part"):
+        try:
+            p.unlink()
+            cleaned += 1
+        except OSError:
+            pass
+    if cleaned:
+        logger.info("Cleaned up %d leftover .part file(s)", cleaned)
+
+
+def _migrate_playlist_covers(output: Path, logger: logging.Logger) -> None:
+    """Migrate .playlist_covers/ to sidecar (Navidrome-compatible) location."""
+    covers_dir = output / ".playlist_covers"
+    if not covers_dir.is_dir():
+        return
+    moved = 0
+    for f in list(covers_dir.iterdir()):
+        if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
+            dest = output / f.name
+            if not dest.exists():
+                f.rename(dest)
+                moved += 1
+    if moved:
+        logger.info("Migrated %d playlist cover(s) from .playlist_covers/", moved)
+    try:
+        covers_dir.rmdir()
+    except OSError:
+        pass
+
+
 async def post_init(application: Application) -> None:
     qm: QueueManager = application.bot_data["queue_manager"]
     cfg = application.bot_data["cfg"]
     logger: logging.Logger = application.bot_data["logger"]
     wake_event: asyncio.Event = application.bot_data["wake_event"]
 
-    # Clean up leftover .part files from interrupted downloads
     output = Path(cfg["output_dir"])
-    if output.exists():
-        cleaned = 0
-        for p in output.rglob("*enc.part"):
-            try:
-                p.unlink()
-                cleaned += 1
-            except OSError:
-                pass
-        if cleaned:
-            logger.info("Cleaned up %d leftover .part file(s)", cleaned)
-
-    # Migrate .playlist_covers/ to sidecar (Navidrome-compatible) location
-    covers_dir = output / ".playlist_covers"
-    if covers_dir.is_dir():
-        moved = 0
-        for f in list(covers_dir.iterdir()):
-            if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
-                dest = output / f.name
-                if not dest.exists():
-                    f.rename(dest)
-                    moved += 1
-        if moved:
-            logger.info("Migrated %d playlist cover(s) from .playlist_covers/", moved)
-        try:
-            covers_dir.rmdir()
-        except OSError:
-            pass
+    _cleanup_part_files(output, logger)
+    _migrate_playlist_covers(output, logger)
 
     worker = Worker(qm, application.bot, ALLOWED_USER_ID, cfg, logger, wake_event)
     application.bot_data["worker"] = worker
