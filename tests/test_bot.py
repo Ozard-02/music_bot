@@ -352,3 +352,63 @@ class TestFixMetadataCmd:
         context = self._context(tmp_path, args=["MADAME"])
         await fixmetadata_cmd(update, context)
         update.message.reply_html.assert_not_awaited()
+
+
+class TestEsc:
+    def test_escapes_html_specials(self):
+        from config import esc
+
+        assert esc("R&B <3") == "R&amp;B &lt;3"
+        assert esc("AC/DC & Guns") == "AC/DC &amp; Guns"
+        assert esc("plain text") == "plain text"
+        assert esc(42) == "42"
+
+
+class TestMessageEscaping:
+    """User/remote content must be HTML-escaped in every reply — a raw '&'
+    in a track name makes Telegram reject the whole message."""
+
+    @pytest.mark.asyncio
+    async def test_handle_message_escapes_search_value(self):
+        qm = MagicMock()
+        qm.enqueue_unique.return_value = (7, True)
+        qm.get_status.return_value = {
+            "queued": 1, "running": 0, "done": 0, "failed": 0,
+        }
+
+        update = _make_update(text="R&B - Album")
+        context = _make_context(qm=qm)
+        await handle_message(update, context)
+        text = update.message.reply_html.call_args[0][0]
+        assert "R&amp;B - Album" in text
+        assert "R&B" not in text
+
+    @pytest.mark.asyncio
+    async def test_handle_message_escapes_duplicate_value(self):
+        qm = MagicMock()
+        qm.enqueue_unique.return_value = (99, False)
+
+        update = _make_update(text="Guns N' Roses & Friends - Album")
+        context = _make_context(qm=qm)
+        await handle_message(update, context)
+        text = update.message.reply_html.call_args[0][0]
+        assert "Guns N' Roses &amp; Friends - Album" in text
+        assert "Roses & Friends" not in text
+
+    @pytest.mark.asyncio
+    async def test_status_escapes_history_queries(self):
+        qm = MagicMock()
+        qm.get_status.return_value = {
+            "queued": 1, "running": 0, "done": 1, "failed": 0, "next_id": 2,
+        }
+        qm.get_history.return_value = [
+            {"id": 8, "status": "done", "query": "AC/DC & Bon Scott - Album",
+             "result_ok": 5, "result_skipped": 0, "result_failed": 0},
+        ]
+
+        update = _make_update()
+        context = _make_context(qm=qm)
+        await status_cmd(update, context)
+        text = update.message.reply_html.call_args[0][0]
+        assert "AC/DC &amp; Bon Scott - Album" in text
+        assert "Scott & Bon" not in text

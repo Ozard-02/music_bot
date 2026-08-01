@@ -28,7 +28,7 @@ _load_env(Path(__file__).parent / ".env")
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from config import setup_logger, load_config, bridge_community_session
+from config import setup_logger, load_config, bridge_community_session, esc
 from maintenance import rescan_library
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
@@ -134,7 +134,7 @@ async def status_cmd(update: Update, context) -> None:
             icon = {"done": "✅", "failed": "❌", "running": "🔄", "queued": "⏳"}.get(
                 h["status"], "❓"
             )
-            label = h["query"][:60]
+            label = esc(h["query"][:60])
             lines.append(f"  #{h['id']} {icon} {label}")
     await update.message.reply_html("\n".join(lines))
 
@@ -153,13 +153,13 @@ async def mkplaylist_cmd(update: Update, context) -> None:
     try:
         result = await build_m3u8(url, name)
         missing = result.get("missing_count", 0)
-        parts = [f"✅ <b>Playlist: {result['playlist_name']}</b>",
+        parts = [f"✅ <b>Playlist: {esc(result['playlist_name'])}</b>",
                  f"  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
         if missing:
-            parts.append(f"  ❌ {missing} missing — see <code>{result['missing_log_path']}</code>")
+            parts.append(f"  ❌ {missing} missing — see <code>{esc(result['missing_log_path'])}</code>")
         if result.get("cover_path"):
             parts.append("  🖼️ Cover saved")
-        parts.append(f"  <code>{result['path']}</code>")
+        parts.append(f"  <code>{esc(result['path'])}</code>")
         await msg.edit_text("\n".join(parts), parse_mode="HTML")
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
@@ -178,7 +178,7 @@ async def rescan_cmd(update: Update, context) -> None:
     msg = await update.message.reply_html("🔍 Scanning library covers…")
 
     async def progress(current, total, text):
-        await msg.edit_text(f"🔍 <b>Rescan</b> {current}/{total}\n{text}")
+        await msg.edit_text(f"🔍 <b>Rescan</b> {current}/{total}\n{esc(text)}")
 
     try:
         result = await rescan_library(cfg, logging.getLogger("spoty_loop"), progress=progress)
@@ -205,18 +205,18 @@ async def fixmetadata_cmd(update: Update, context) -> None:
             folder = root / folder
 
         if not folder.is_dir():
-            await update.message.reply_html(f"❌ Not a folder: <code>{folder}</code>")
+            await update.message.reply_html(f"❌ Not a folder: <code>{esc(folder)}</code>")
             return
 
     from scripts.fix_metadata import fix_library
 
     msg = await update.message.reply_html(
-        f"⏳ Fixing metadata in <code>{folder}</code>…"
+        f"⏳ Fixing metadata in <code>{esc(folder)}</code>…"
     )
 
     async def progress(current, total, text):
         await msg.edit_text(
-            f"⏳ <b>Fix metadata</b> {current}/{total}\n<code>{text[:200]}</code>"
+            f"⏳ <b>Fix metadata</b> {current}/{total}\n<code>{esc(text[:200])}</code>"
         )
 
     try:
@@ -229,11 +229,11 @@ async def fixmetadata_cmd(update: Update, context) -> None:
             f"  Failed: {result['failed']}",
         ]
         if result["failed_files"]:
-            lines.append("  ❌ <code>" + ", ".join(result["failed_files"]) + "</code>")
+            lines.append("  ❌ <code>" + ", ".join(esc(f) for f in result["failed_files"]) + "</code>")
         if result["moved_files"]:
             lines.append("  📦 Moved to their album folder:")
             for f in result["moved_files"]:
-                lines.append(f"  <code>{Path(f).name} → {Path(f).parent.name}/</code>")
+                lines.append(f"  <code>{esc(Path(f).name)} → {esc(Path(f).parent.name)}/</code>")
         await msg.edit_text("\n".join(lines))
     except Exception as e:
         await msg.edit_text(f"❌ Fix metadata error: {e}")
@@ -259,7 +259,7 @@ async def handle_message(update: Update, context) -> None:
     if not is_new:
         await update.message.reply_html(
             f"⚠️ <b>Already queued as #{item_id}</b>\n"
-            f"  <code>{value[:80]}</code>"
+            f"  <code>{esc(value[:80])}</code>"
         )
         return
 
@@ -271,7 +271,7 @@ async def handle_message(update: Update, context) -> None:
     await update.message.reply_html(
         f"📥 <b>Queued #{item_id}</b>\n"
         f"  Position: {pos}\n"
-        f"  <code>{value[:80]}</code>"
+        f"  <code>{esc(value[:80])}</code>"
     )
 
 
