@@ -1,5 +1,6 @@
 """Shared configuration, logging, and setup utilities."""
 
+import html
 import json
 import logging
 import os
@@ -9,6 +10,11 @@ from pathlib import Path
 from spotiflac_patch import silence_spotiflac_loggers
 
 os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress bars
+
+
+def esc(value) -> str:
+    """HTML-escape arbitrary text for Telegram parse_mode='HTML' messages."""
+    return html.escape(str(value), quote=False)
 
 
 # Download engine

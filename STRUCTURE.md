@@ -104,6 +104,8 @@ main()
 │  ├─ rescan_cmd runs rescan_library() with Telegram progress callback ("🔍 Rescan N/M")
 │  └─ fixmetadata_cmd runs fix_library() (from scripts/fix_metadata.py) with progress callback
 │     folder arg resolved against cfg["output_dir"], applies changes, reports summary
+│  all HTML messages escape user/remote content via config.esc() (html.escape) —
+│  a raw & < > in a track/playlist name makes Telegram reject the message
 └─ run_polling()  (finally → lock.release())
 ```
 
@@ -174,6 +176,10 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     └─ if all ok → _handle_no_failures(): mark_done + _auto_build_m3u8() + send summary
        (given-up tracks reported separately as "❌ N given up")
     on exception → mark_failed() → send error
+  _notify(text) — all notifications go through this; a failed send (e.g. Telegram
+    reject / network) only logs a warning and never touches the DB status, so a
+    successful item can't be flipped to failed. All remote content (display names,
+    queries, playlist names) HTML-escaped via config.esc()
 ```
 
 ## SpotiFLAC patches

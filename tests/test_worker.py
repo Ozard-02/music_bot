@@ -57,16 +57,18 @@ class TestDecideFailure:
         assert d.action == "requeue"
 
 
+@pytest.fixture
+def bot():
+    return AsyncMock()
+
+
+@pytest.fixture
+def worker(queue_manager, bot, config, logger):
+    return Worker(queue_manager, bot, 12345, config, logger, asyncio.Event())
+
+
 class TestWorkerProcess:
     """Tests Worker._process with mocked run_url and bot."""
-
-    @pytest.fixture
-    def bot(self):
-        return AsyncMock()
-
-    @pytest.fixture
-    def worker(self, queue_manager, bot, config, logger):
-        return Worker(queue_manager, bot, 12345, config, logger, asyncio.Event())
 
     @pytest.mark.asyncio
     async def test_success_marks_done(self, worker, bot):
@@ -246,3 +248,59 @@ class TestWorkerProcess:
 
         msg = bot.send_message.call_args[1]["text"]
         assert "24h" in msg or "gave up" in msg.lower()
+
+
+class TestNotificationSafety:
+    """Notifications must never affect the item's DB status, and remote
+    content (display names) must be HTML-escaped before sending."""
+
+    TRACK = "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"
+
+    @pytest.mark.asyncio
+    async def test_display_with_special_chars_is_escaped(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", self.TRACK)
+        item = qm.dequeue()
+        worker._resolve = AsyncMock(return_value=(self.TRACK, "Guns N' Roses & Friends"))
+
+        with patch("worker.run_url", return_value={"ok": 3, "skipped": 0, "failed": 0, "total": 3}):
+            await worker._process(item)
+
+        msg = bot.send_message.call_args[1]["text"]
+        assert "Guns N' Roses &amp; Friends" in msg
+        assert "Roses & Friends" not in msg
+        assert bot.send_message.call_args[1]["parse_mode"] == "HTML"
+        s = qm.get_status()
+        assert s["done"] == 1
+        assert s["failed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_send_failure_does_not_flip_done_to_failed(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", self.TRACK)
+        item = qm.dequeue()
+        bot.send_message.side_effect = RuntimeError("Telegram parse error")
+
+        with patch("worker.run_url", return_value={"ok": 3, "skipped": 0, "failed": 0, "total": 3}):
+            await worker._process(item)  # must not raise
+
+        s = qm.get_status()
+        assert s["done"] == 1
+        assert s["failed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_send_failure_does_not_crash_requeue_path(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", self.TRACK)
+        item = qm.dequeue()
+        bot.send_message.side_effect = RuntimeError("Telegram network error")
+
+        with patch("worker.run_url", return_value={
+            "ok": 0, "skipped": 0, "failed": 2, "total": 2,
+            "failed_tracks": [("id1", "Broken", "Qobuz 500"), ("id2", "Another", "Tidal 410")],
+        }):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["queued"] == 1  # requeued, not failed
+        assert s["failed"] == 0
