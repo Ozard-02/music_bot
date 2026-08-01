@@ -131,6 +131,34 @@ class TestQueueManager:
         assert h[1]["id"] == 4
         assert h[2]["id"] == 3
 
+    def test_get_running_returns_only_running(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue("link", "a")
+        qm.enqueue("link", "b")
+        assert qm.get_running() == []
+        first = qm.dequeue()
+        second = qm.dequeue()
+        running = qm.get_running()
+        assert [r["id"] for r in running] == [first["id"], second["id"]]
+        qm.mark_done(first["id"], 1, 0, 0)
+        assert [r["id"] for r in qm.get_running()] == [second["id"]]
+
+    def test_set_progress_updates_row(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue("link", "a")
+        item = qm.dequeue()
+        assert item["progress"] is None
+        qm.set_progress(item["id"], "2/10 · Now: Song X")
+        assert qm.get_running()[0]["progress"] == "2/10 · Now: Song X"
+
+    def test_progress_cleared_on_done(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue("link", "a")
+        item = qm.dequeue()
+        qm.set_progress(item["id"], "5/5 · Now: Last")
+        qm.mark_done(item["id"], 5, 0, 0)
+        assert qm.get_item(item["id"])["progress"] is None
+
     def test_requeue_beyond_max_retries(self, queue_manager: QueueManager):
         qm = queue_manager
         qm.enqueue("link", "url")

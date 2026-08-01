@@ -17,7 +17,8 @@ bridge_community_session(logger)         # copy desktop Tidal session
 
 ### `downloader.py` — download engine only
 ```
-run_url(url, cfg, logger, skip_titles=None) → {ok, skipped, failed, failed_tracks, gave_up_tracks}  ← entry point
+run_url(url, cfg, logger, skip_titles=None, progress_cb=None) → {ok, skipped, failed, failed_tracks, gave_up_tracks}  ← entry point
+  progress_cb(done, total, title) — called per completed track (via asyncio.to_thread) for live /status
 ├─ parse_spotify_url(url)
 ├─ if "track":
 │  ├─ get_track_metadata(url)
@@ -108,6 +109,9 @@ main()
 ├─ Application.builder().post_init(post_init)  # migrates .playlist_covers/, starts Worker(wake_event)
 ├─ handlers: /start, /help, /status, /purge, /mkplaylist, /rescan, /fixmetadata, text
 │  ├─ handle_message sets wake_event after enqueue → worker wakes instantly
+│  ├─ status_cmd shows counts + a "Running:" section (per-job progress like
+│  │  "3/10 · Now: Song X · 2m 05s" from queue.progress + started_at, via
+│  │  qm.get_running() and _format_duration) — running items omitted from Recent
 │  ├─ mkplaylist_cmd runs build_m3u8 directly (async), shows "🖼️ Cover saved" if cover downloaded
 │  ├─ rescan_cmd runs rescan_library() with Telegram progress callback ("🔍 Rescan N/M")
 │  └─ fixmetadata_cmd runs fix_library() (from scripts/fix_metadata.py) with progress callback
@@ -125,9 +129,11 @@ QueueManager(db_path)
   find_existing(type, query) → id | None   # duplicate check
   dequeue() → item | None                   # atomically set status='running'
   get_item(id) → item | None                # fetch current DB row
-  requeue(id)                               # increment retries, set 'queued'
-  mark_done(id, ok, skipped, failed)
-  mark_failed(id, error)
+  requeue(id)                               # increment retries, set 'queued' (clears progress)
+  mark_done(id, ok, skipped, failed)        # clears progress
+  mark_failed(id, error)                    # clears progress
+  set_progress(id, text)                    # live "3/10 · Now: Song" for /status
+  get_running() → [item, ...]               # status='running' rows
   purge_all() → count                       # DELETE all rows
   log_failed_track(item_id, title, error)   # per-track failures
   get_failed_tracks(item_id=None, limit=50)
@@ -137,7 +143,7 @@ QueueManager(db_path)
 
 Tables:
   queue       — id, input_type, query, status, retries, created_at,
-                result_*, completed_at, error
+                result_*, completed_at, error, retry_at, progress
   failed_tracks — id, item_id (FK→queue), track_title, error, failed_at
 ```
 

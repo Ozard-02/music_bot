@@ -90,6 +90,27 @@ class TestWorkerProcess:
         bot.send_message.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_progress_cb_wired_into_run_url(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        captured = {}
+
+        def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None):
+            captured["progress_cb"] = progress_cb
+            return {"ok": 1, "skipped": 0, "failed": 0, "total": 1}
+
+        with patch("worker.run_url", side_effect=fake_run_url):
+            await worker._process(item)
+
+        cb = captured["progress_cb"]
+        assert cb is not None
+        with patch.object(qm, "set_progress", wraps=qm.set_progress) as spy:
+            cb(3, 10, "Song X")
+        spy.assert_called_once_with(item["id"], "3/10 · Now: Song X")
+
+    @pytest.mark.asyncio
     async def test_success_sends_correct_message(self, worker, bot):
         qm = worker._queue
         qm.enqueue("link", "https://open.spotify.com/track/abc")

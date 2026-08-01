@@ -320,6 +320,34 @@ class TestRunUrl:
         client.download_track.assert_any_call(t1.external_url)
         client.download_track.assert_any_call(t2.external_url)
 
+    @pytest.mark.asyncio
+    async def test_progress_cb_reports_per_track(self, config, logger):
+        t1 = _mock_track("t1", "Song A")
+        t2 = _mock_track("t2", "Song B")
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "album", "id": "alb123"}
+            client = _make_client(
+                playlist_return=({"name": "Test", "type": "album"}, [t1, t2]),
+                download_return=[],
+            )
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            calls = []
+
+            def progress_cb(done, total, title):
+                calls.append((done, total, title))
+
+            result = await run_url(self.ALBUM_URL, config, logger, progress_cb=progress_cb)
+
+        assert result["ok"] == 2
+        assert sorted(t for _, _, t in calls) == ["Song A", "Song B"]
+        assert all(total == 2 for _, total, _ in calls)
+        assert [d for d, _, _ in calls] == sorted([1, 2])
+
 
 class TestConsoleInterception:
     """SpotiFLAC's install_console_interception() pollutes the root logger:

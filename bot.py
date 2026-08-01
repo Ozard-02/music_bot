@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -115,11 +116,23 @@ async def help_cmd(update: Update, _context) -> None:
     await update.message.reply_html(format_help())
 
 
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
 @require_auth
 async def status_cmd(update: Update, context) -> None:
     qm: QueueManager = context.application.bot_data["queue_manager"]
     s = await asyncio.to_thread(qm.get_status)
     history = await asyncio.to_thread(qm.get_history, 5)
+    running = await asyncio.to_thread(qm.get_running)
 
     lines = [
         f"📊 <b>Queue Status</b>",
@@ -128,9 +141,32 @@ async def status_cmd(update: Update, context) -> None:
         f"  Done: {s['done']}",
         f"  Failed: {s['failed']}",
     ]
+
+    if running:
+        now = datetime.now(timezone.utc)
+        lines.append("\n<b>Running:</b>")
+        for r in running:
+            started = r.get("started_at")
+            elapsed = ""
+            if started:
+                try:
+                    elapsed = " · " + _format_duration(
+                        (now - datetime.fromisoformat(started)).total_seconds()
+                    )
+                except (ValueError, TypeError):
+                    pass
+            detail = r.get("progress") or "downloading"
+            lines.append(
+                f"  #{r['id']} 🔄 {esc(r['query'][:60])}\n"
+                f"    {esc(detail)}{elapsed}"
+            )
+
+    done_ids = {r["id"] for r in running}
     if history:
         lines.append("\n<b>Recent:</b>")
         for h in history:
+            if h["id"] in done_ids:
+                continue
             icon = {"done": "✅", "failed": "❌", "running": "🔄", "queued": "⏳"}.get(
                 h["status"], "❓"
             )
