@@ -202,7 +202,7 @@ class TestFixAlbumFolder:
         with self._patch_flac(urls={"Madame - MAREA.flac": "open.spotify.com/track/abc123"}), patch(
             "SpotiFLAC.core.tagger.embed_metadata_async", mock_embed
         ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls, patch(
-            "scripts.fix_metadata.httpx.AsyncClient", return_value=cm
+            "flac_utils.httpx.AsyncClient", return_value=cm
         ) as http_cls:
             client = client_cls.return_value
             client.get_track_async = AsyncMock(return_value=_track(
@@ -227,7 +227,7 @@ class TestFixAlbumFolder:
         with self._patch_flac(urls={"Madame - MAREA.flac": "open.spotify.com/track/abc123"}), patch(
             "SpotiFLAC.core.tagger.embed_metadata_async", mock_embed
         ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls, patch(
-            "scripts.fix_metadata.httpx.AsyncClient", new=MagicMock()
+            "flac_utils.httpx.AsyncClient", new=MagicMock()
         ) as http_cls:
             client = client_cls.return_value
             client.get_track_async = AsyncMock(return_value=_track(album="MADAME"))

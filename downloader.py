@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
-from flac_utils import embed_cover, upgrade_cover_url
+from flac_utils import embed_cover, fetch_cover
 from spotiflac_patch import silence_spotiflac
 from track_utils import spotiflac_track_relative_path, track_relative_path
 
@@ -57,8 +57,6 @@ async def run_url(
 
 
 async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
-    import httpx
-
     rel = track_relative_path(track, cfg)
     fpath = Path(cfg["output_dir"]) / rel
     cover_url = getattr(track, "cover_url", None)
@@ -66,11 +64,10 @@ async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
         return
 
     try:
-        async with httpx.AsyncClient(timeout=10) as http:
-            resp = await http.get(upgrade_cover_url(cover_url))
-            if resp.status_code != 200:
-                return
-        await asyncio.to_thread(embed_cover, fpath, resp.content)
+        data = await fetch_cover(cover_url)
+        if data is None:
+            return
+        await asyncio.to_thread(embed_cover, fpath, data)
         logger.debug("Cover overwritten for %s", rel)
     except Exception:
         logger.debug("Cover overwrite failed for %s", rel)

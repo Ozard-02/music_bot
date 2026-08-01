@@ -31,9 +31,7 @@ def _run_url_sync(
     skip_titles: set[str] | None = None,
     progress_cb=None,
 ) -> dict:
-    async def _inner():
-        return await run_url(url, cfg, logger, skip_titles, progress_cb)
-    return asyncio.run(_inner())
+    return asyncio.run(run_url(url, cfg, logger, skip_titles, progress_cb))
 
 
 @dataclass(frozen=True)
@@ -85,6 +83,17 @@ def _result_summary(result: dict) -> str:
     if result.get("failed"):
         parts.append(f"❌ {result['failed']} failed")
     return " | ".join(parts)
+
+
+def _done_message(display: str, result: dict, given_up: int) -> str:
+    """Completion message shared by the clean-success and all-gave-up paths."""
+    parts = [_result_summary(result)]
+    if given_up:
+        parts.append(f"❌ {given_up} given up")
+    msg = f"✅ <b>{esc(display)}</b>\n  {' | '.join(parts)}"
+    if given_up:
+        msg += f"\n  🧊 Tracks gave up after {MAX_TRACK_RETRIES} attempts"
+    return msg
 
 
 class Worker:
@@ -214,21 +223,19 @@ class Worker:
             )
 
     async def _handle_no_failures(self, item: dict, display: str, result: dict):
-        gave_up_tracks = result.get("gave_up_tracks", [])
+        await self._mark_done_and_notify(
+            item, display, result, len(result.get("gave_up_tracks", [])),
+        )
+
+    async def _mark_done_and_notify(self, item: dict, display: str, result: dict, given_up: int):
         await asyncio.to_thread(
             self._queue.mark_done,
             item["id"],
             result["ok"],
             result["skipped"],
-            len(gave_up_tracks),
+            given_up,
         )
-        parts = [_result_summary(result)]
-        if gave_up_tracks:
-            parts.append(f"❌ {len(gave_up_tracks)} given up")
-        msg = f"✅ <b>{esc(display)}</b>\n  {' | '.join(parts)}"
-        if gave_up_tracks:
-            msg += f"\n  🧊 Tracks gave up after {MAX_TRACK_RETRIES} attempts"
-        await self._notify(msg)
+        await self._notify(_done_message(display, result, given_up))
         await self._auto_build_m3u8(item)
 
     async def _resolve(self, item: dict) -> tuple[str, str]:
@@ -273,24 +280,7 @@ class Worker:
             return
 
         if decision.action == "done":
-            await asyncio.to_thread(
-                self._queue.mark_done,
-                item["id"],
-                result["ok"],
-                result["skipped"],
-                decision.detail,
-            )
-            await self._auto_build_m3u8(item)
-            parts = []
-            if result["ok"]:
-                parts.append(f"✅ {result['ok']} ok")
-            if result["skipped"]:
-                parts.append(f"⏭ {result['skipped']} skipped")
-            msg = (
-                f"✅ <b>{esc(display)}</b>\n  {' | '.join(parts)} | ❌ {decision.detail} given up\n"
-                f"  🧊 Gave up after {MAX_TRACK_RETRIES} attempts"
-            )
-            await self._notify(msg)
+            await self._mark_done_and_notify(item, display, result, decision.detail)
             return
 
         delay = decision.detail

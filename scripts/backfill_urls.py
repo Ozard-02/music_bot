@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutagen.flac import FLAC
 
 from config import load_config, SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
+from resolver import best_track_match
 from track_utils import get_jpeg_dimensions
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -78,15 +79,7 @@ async def backfill():
                 skipped += 1
                 return
 
-            track = None
-            artist_lc = artist.lower().strip()
-            for t in tracks:
-                t_artists = t.artists.lower()
-                if artist_lc in t_artists or t.title.lower() == title.lower():
-                    track = t
-                    break
-            if not track:
-                track = tracks[0]
+            track = best_track_match(tracks, artist, title)
 
             try:
                 track_full = await spotify.get_track_async(track.id)

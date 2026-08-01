@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import httpx
 from mutagen.flac import FLAC, Picture
 
 from track_utils import get_jpeg_dimensions
@@ -31,6 +32,15 @@ def get_spotify_id_from_file(fpath: str | Path) -> str | None:
 def upgrade_cover_url(url: str) -> str:
     """Upgrade Spotify CDN URL from 300x300 (1e02) to 640x640 (b273)."""
     return _SPOTIFY_COVER_UPGRADE.sub(r"\g<1>b273", url)
+
+
+async def fetch_cover(url: str, timeout: float = 10) -> bytes | None:
+    """Fetch an (upgraded 640x640) Spotify cover image, or None on failure."""
+    async with httpx.AsyncClient(timeout=timeout) as http:
+        resp = await http.get(upgrade_cover_url(url))
+        if resp.status_code != 200:
+            return None
+        return resp.content
 
 
 def embed_cover(fpath: str | Path, data: bytes) -> None:

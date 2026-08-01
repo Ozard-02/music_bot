@@ -92,6 +92,7 @@ silence_spotiflac()          — idempotent guard; silencing is installed perman
 ```
 get_spotify_id_from_file(path) → str | None   # read URL/comment tag, extract track ID
 upgrade_cover_url(url)                        # Spotify CDN 300×300 (1e02) → 640×640 (b273)
+fetch_cover(url, timeout=10) → bytes | None   # async GET of upgraded cover (shared by downloader/rescan/fixmetadata)
 embed_cover(path, data)                       # replace pictures with JPEG front cover + dimensions
 iter_flacs(root)                              # yield every .flac under root (sorted)
 ```
@@ -170,6 +171,7 @@ resolve_search(client, query) → (url, name, type)
   "Album - Song"     → search track → track URL
   picks best match via artist/album name heuristics
 
+best_track_match(tracks, artist_hint, title_hint) → track  # shared "best result" picker
 format_help() → HTML help text
 ```
 
@@ -199,6 +201,8 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     │     └─ "requeue" (delay)     → requeue with exponential backoff
     └─ if all ok → _handle_no_failures(): mark_done + _auto_build_m3u8() + send summary
        (given-up tracks reported separately as "❌ N given up")
+  _mark_done_and_notify(item, display, result, given_up) — shared completion path
+    (mark_done + `_done_message()` + notify + auto-m3u8) for clean success AND all-gave-up partials
     on exception → mark_failed() → send error
   _notify(text) — all notifications go through this; a failed send (e.g. Telegram
     reject / network) only logs a warning and never touches the DB status, so a
@@ -219,7 +223,7 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 - `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`, so the **upgraded Spotify cover is embedded** and enrichment covers can't override it; a failed fetch still retags. CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
 - `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
 - `scripts/fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
-- `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
+- `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths (regression-tested, incl. dry-run + empty-dir pruning)
 - `scripts/retag_missing.py` — retag a hardcoded list of tagless files (predecessor of fix_metadata)
 - `scripts/backfill_urls.py` — write Spotify URL tags into FLACs that lack them
 - `scripts/fix_qvc.py` — personal one-off: fix Gemitaiz QVC album metadata (gitignored)
