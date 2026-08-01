@@ -24,12 +24,14 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mutagen.flac import FLAC
 
 from config import SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
-from flac_utils import get_spotify_id_from_file
+from flac_utils import get_spotify_id_from_file, upgrade_cover_url
 from spotiflac_patch import reset_progress_manager, silence_spotiflac_loggers
 from track_utils import sanitize
 
@@ -168,6 +170,15 @@ async def fix_album_folder(
                     return
 
                 if apply:
+                    cover_data = None
+                    if getattr(track, "cover_url", None):
+                        try:
+                            async with httpx.AsyncClient(timeout=10) as http:
+                                resp = await http.get(upgrade_cover_url(track.cover_url))
+                                if resp.status_code == 200:
+                                    cover_data = resp.content
+                        except Exception as exc:
+                            llog.debug("Cover fetch failed for %s: %s", fpath.name, exc)
                     await embed_metadata_async(
                         filepath=str(fpath),
                         metadata=track,
@@ -177,6 +188,7 @@ async def fix_album_folder(
                             embed_lyrics=False,
                             cover_url=track.cover_url or "",
                         ),
+                        cover_data=cover_data,
                     )
                     res["fixed"] += 1
                 else:

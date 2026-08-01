@@ -361,9 +361,12 @@ class TestFixMetadataCmd:
         # initial reply_html + progress/summary go through the returned msg mock
         msg_mock = update.message.reply_html.return_value
         assert msg_mock.edit_text.await_count >= 1
-        text = msg_mock.edit_text.call_args_list[-1][0][0]
+        last_call = msg_mock.edit_text.call_args_list[-1]
+        text = last_call[0][0]
         assert "Fix metadata done" in text
         assert "Re-tagged: 1" in text
+        # tags must render, not show literally — parse_mode must be HTML
+        assert last_call.kwargs.get("parse_mode") == "HTML"
 
     @pytest.mark.asyncio
     async def test_nonexistent_folder_reports_error(self, tmp_path):

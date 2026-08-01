@@ -30,7 +30,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from config import setup_logger, load_config, bridge_community_session, esc
-from maintenance import rescan_library
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from resolver import parse_input, format_help
@@ -209,26 +208,6 @@ async def purge_cmd(update: Update, context) -> None:
 
 
 @require_auth
-async def rescan_cmd(update: Update, context) -> None:
-    cfg = context.application.bot_data["cfg"]
-    msg = await update.message.reply_html("🔍 Scanning library covers…")
-
-    async def progress(current, total, text):
-        await msg.edit_text(f"🔍 <b>Rescan</b> {current}/{total}\n{esc(text)}")
-
-    try:
-        result = await rescan_library(cfg, logging.getLogger("spoty_loop"), progress=progress)
-        await msg.edit_text(
-            f"✅ <b>Rescan complete</b>\n"
-            f"  Fixed: {result['ok']}\n"
-            f"  Skipped: {result['skipped']}\n"
-            f"  Failed: {result['failed']}"
-        )
-    except Exception as e:
-        await msg.edit_text(f"❌ Rescan error: {e}")
-
-
-@require_auth
 async def fixmetadata_cmd(update: Update, context) -> None:
     cfg = context.application.bot_data["cfg"]
     root = Path(cfg["output_dir"])
@@ -270,7 +249,7 @@ async def fixmetadata_cmd(update: Update, context) -> None:
             lines.append("  📦 Moved to their album folder:")
             for f in result["moved_files"]:
                 lines.append(f"  <code>{esc(Path(f).name)} → {esc(Path(f).parent.name)}/</code>")
-        await msg.edit_text("\n".join(lines))
+        await msg.edit_text("\n".join(lines), parse_mode="HTML")
     except Exception as e:
         await msg.edit_text(f"❌ Fix metadata error: {e}")
 
@@ -415,7 +394,6 @@ def main() -> None:
     application.add_handler(CommandHandler("status", status_cmd))
     application.add_handler(CommandHandler("purge", purge_cmd))
     application.add_handler(CommandHandler("mkplaylist", mkplaylist_cmd))
-    application.add_handler(CommandHandler("rescan", rescan_cmd))
     application.add_handler(CommandHandler("fixmetadata", fixmetadata_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

@@ -185,5 +185,8 @@ class TestFormatHelp:
         assert "Artist" in text
         assert "link" in text
 
+    def test_no_rescan_command(self):
+        assert "/rescan" not in format_help()
+
     def test_returns_non_empty_string(self):
         assert len(format_help()) > 50

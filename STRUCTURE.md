@@ -52,7 +52,8 @@ rescan_library(cfg, logger, progress=None, dry_run=False) → {ok, skipped, fail
   ├─ asyncio.Semaphore(SCRIPT_MAX_CONCURRENT=5) limiting concurrency
   └─ progress(current, total, text) callback for UI updates
 ```
-Backs the bot's `/rescan` command and the `scripts/fix_covers.py` CLI (with `--dry-run`).
+Backs the `scripts/fix_covers.py` CLI (with `--dry-run`). The bot no longer has a `/rescan`
+command — cover refresh now lives inside `/fixmetadata` (see `scripts/fix_metadata.py`).
 
 ### `spotiflac_patch.py` — all SpotiFLAC monkey-patching in one place
 ```
@@ -107,15 +108,15 @@ main()
 ├─ QueueManager(queue.db)
 ├─ creates asyncio.Event() — shared wake signal
 ├─ Application.builder().post_init(post_init)  # migrates .playlist_covers/, starts Worker(wake_event)
-├─ handlers: /start, /help, /status, /purge, /mkplaylist, /rescan, /fixmetadata, text
+├─ handlers: /start, /help, /status, /purge, /mkplaylist, /fixmetadata, text
 │  ├─ handle_message sets wake_event after enqueue → worker wakes instantly
 │  ├─ status_cmd shows counts + a "Running:" section (per-job progress like
 │  │  "3/10 · Now: Song X · 2m 05s" from queue.progress + started_at, via
 │  │  qm.get_running() and _format_duration) — running items omitted from Recent
 │  ├─ mkplaylist_cmd runs build_m3u8 directly (async), shows "🖼️ Cover saved" if cover downloaded
-│  ├─ rescan_cmd runs rescan_library() with Telegram progress callback ("🔍 Rescan N/M")
 │  └─ fixmetadata_cmd runs fix_library() (from scripts/fix_metadata.py) with progress callback
 │     folder arg resolved against cfg["output_dir"], applies changes, reports summary
+│     (summary edit_text carries parse_mode="HTML" so the <b>/<code> tags render)
 │  all HTML messages escape user/remote content via config.esc() (html.escape) —
 │  a raw & < > in a track/playlist name makes Telegram reject the message
 └─ run_polling()  (finally → lock.release())
@@ -206,7 +207,7 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 `from scripts.fix_metadata import fix_library`). Each script bootstraps
 `sys.path` so it also runs standalone: `python scripts/<name>.py`.
 
-- `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
+- `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`, so the **upgraded Spotify cover is embedded** and enrichment covers can't override it; a failed fetch still retags. CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
 - `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
 - `scripts/fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
 - `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths
