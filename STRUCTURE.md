@@ -41,7 +41,9 @@ run_url(url, cfg, logger, skip_titles=None, progress_cb=None) → {ok, skipped, 
 ```
 Cover/rename helpers use `flac_utils.embed_cover()` + `upgrade_cover_url()`. The
 SpotiFLAC monkey-patches live in `spotiflac_patch.py` (imported here for its
-import-time side-effect).
+import-time side-effect). Downloads enrich with `["apple","deezer","soundcloud"]`
+(no tidal) and embed no MusicBrainz tags (see `_patch_musicbrainz`), so fresh
+downloads already match `/fixmetadata` output.
 
 ### `maintenance.py` — library maintenance
 ```
@@ -75,6 +77,13 @@ _patch_qobuz_lock()           — runs once at import; wraps QobuzProvider.__ini
   _creds_lock becomes a loop-agnostic _AsyncLockAdapter (threading.Lock behind
   async-with). SpotiFLAC awaits the provider's asyncio.Lock from fresh loops
   (to_thread + asyncio.run) → "bound to a different event loop" → 100s timeouts.
+_patch_musicbrainz()          — runs once at import; no-ops SpotiFLAC's per-track
+  MusicBrainz lookup (every provider writes MUSICBRAINZ_* ids + extras via
+  extra_tags=mb_tags → Navidrome splits albums into multiple releases).
+  mb_result_to_tags → {} always, AsyncMBFetch never spawns a thread,
+  fetch_mb_metadata_async → {} (saves ~12s/track), then overwrites the
+  import-copied names in already-imported SpotiFLAC modules (same sweep as
+  console silencing). Downloads now match /fixmetadata output out of the box.
 silence_spotiflac_loggers()  — set all SpotiFLAC.* loggers to CRITICAL + httpx/httpcore to WARNING
 silence_spotiflac()          — idempotent guard; silencing is installed permanently at import
 ```

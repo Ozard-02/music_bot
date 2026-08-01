@@ -55,6 +55,10 @@ class TestRunUrl:
 
         assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
         client.download_track.assert_awaited_once_with(self.TRACK_URL)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["enrich_providers"] == [
+            "apple", "deezer", "soundcloud",
+        ]
 
     @pytest.mark.asyncio
     async def test_track_already_exists(self, tmp_path):
