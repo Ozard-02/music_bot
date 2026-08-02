@@ -9,6 +9,7 @@
   - [x] Link handler — validate Spotify URL, add to queue, reply "Queued (#N)"
   - [x] Search handler — `"Artist - Album"`, `"Album - Song"`, `"Artist - Song"`
   - [x] `/status` — current download + queue position + history stats
+  - [x] `/quality [value]` — set per-user download quality (no arg lists options)
   - [x] `/mkplaylist <url> [name]` — generate .m3u8 for a Spotify playlist from tracks on disk
   - [x] `/fixmetadata [folder]` — re-tag all FLACs in a folder (whole library if omitted) via SpotiFLAC (Apple-first enrichment); strips bogus MUSICBRAINZ_* and moves files to their real album folder
   - [x] `/purge` — remove all queued items
@@ -30,7 +31,7 @@
   - [x] Resolves search queries via SpotiFLAC search
   - [x] Calls `run_url()` (shared core) in thread executor — doesn't block bot polling
   - [x] Logs per-track failures to `failed_tracks` table
-  - [x] Requeues with retry counter (up to 50× or 24h), then permanent fail
+  - [x] Requeues with retry counter (up to 15× or 24h), then permanent fail
   - [x] Sends Telegram notification on completion (summary: X ok, Y skipped, Z failed)
   - [x] Whole-job timeout is graceful: `asyncio.TimeoutError` → requeue with 30-min floor + "⏳ Still downloading" (never "Internal error"); per-track failures logged live via `failure_cb` so give-up advances even when a job times out; timeout budget from `cfg.max_download_timeout` (default 8h)
 
@@ -51,10 +52,10 @@
   - [x] `format_help()` — format instructions in HTML
 
 ### Refactor
-- [x] **`downloader.py`** — extracted `run_url(url) -> dict{ok, skipped, failed, failed_tracks}`
+- [x] **`downloader.py`** — extracted `run_url(url) → DownloadResult{ok, skipped, failed, failed_tracks, gave_up_tracks, total}`
   - [x] Handles tracks, albums, playlists
   - [x] `_download_once` takes optional `services` param; CLI retry loop passes `wait_for_providers()` result (only healthy providers used)
-  - [x] Uses `client.download_track(url)` directly for all URL types (tracks, albums, playlists) — SpotiFLAC handles collection downloads internally with `is_album=True`, avoiding per-track re-resolution that caused wrong tracks
+  - [x] Uses `client.download_track(track.external_url)` per track — collections are split into per-track downloads limited by `asyncio.Semaphore(MAX_CONCURRENT)` (gives SpotiFLAC per-track metadata for correct path resolution), singles via `download_track(url)`
   - [x] Removed `download_single_track`, `download_collection`, `_download_track_with_retry` — SpotiFLAC internal retry/timeout/parallelism used instead
   - [x] Passes `track_max_retries`, `timeout_s`, `max_concurrent_downloads` to `AsyncSpotiFLAC`
   - [x] Standalone `main()` still works for CLI use
@@ -118,7 +119,7 @@ next time: pre-check finds it → skip ✓
 - [ ] Test with real downloads
 
 ## Tests
-- [x] **149 tests** across bot, downloader, fix_metadata, m3u8, queue_manager, resolver, worker
+- [x] **222 tests** across bot, downloader, fix_metadata, m3u8, queue_manager, resolver, worker
   - [x] All mock-based, no network, no real SpotiFLAC calls
   - [x] Run: `pytest tests/ -v`
 

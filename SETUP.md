@@ -36,6 +36,10 @@ docker compose up -d
 Requires `~/.spotiflac/` (created automatically on first run) and `~/Music/` on the host.
 The `.env` file in the project root is passed via `env_file` to the container.
 
+Auth: set `TELEGRAM_ALLOWED_USER_IDS` (comma-separated allowlist) or the legacy
+single-user `TELEGRAM_ALLOWED_USER_ID`. Each allowed user gets their own library
+folder `~/Music/{username}_Music/` and their own `/quality` preference.
+
 ### TrueNAS (production)
 Same `docker-compose.yml` — just remove the `.:/app` volume mount so the baked-in code is used instead.
 Create a dataset for `~/.spotiflac/` and set permissions before starting.
@@ -71,13 +75,14 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 | `Dockerfile` | Container image (python:3.14-slim + chromium) |
 | `docker-compose.yml` | Single-service Docker Compose |
 | `.dockerignore` | Excludes venv, caches, logs, secrets |
-| `scripts/` | Maintenance CLIs: fix_metadata (also bot-called), fix_covers, fix_original_filenames; archived superseded one-offs in scripts/archive/ |
+| `scripts/` | Maintenance CLIs: fix_metadata (also bot-called), fix_covers, fix_original_filenames, migrate_library; archived superseded one-offs in scripts/archive/ |
+| `library.py` | Per-user library layout (user folders, quality set) |
 | `spoty_loop.log` | Full log (all runs) |
 
 Config is read from `~/.spotiflac/config.json` (created by the desktop app). If missing, a warning points to `config.default.json` and hardcoded defaults are used.
 
 ## Navidrome note
-Qobuz metadata enrichment injects bogus `MUSICBRAINZ_ALBUMID` values that cause Navidrome to merge unrelated albums. `SpotiFLAC/core/tagger.py` is patched to strip all `MUSICBRAINZ_*` tags before writing. Run `python scripts/fix_mb_tags.py` on existing files if you see misgrouped albums.
+Qobuz metadata enrichment injects bogus `MUSICBRAINZ_ALBUMID` values that cause Navidrome to merge unrelated albums. Downloads now no-op the MusicBrainz lookup entirely (`spotiflac_patch._patch_musicbrainz`) and `SpotiFLAC/core/tagger.py` is patched to strip all `MUSICBRAINZ_*` tags before writing — fresh downloads never carry bogus MB IDs. Run `/fixmetadata` (or `scripts/fix_metadata.py`) on existing files if you see misgrouped albums.
 
 ## Cover art note
-Qobuz enrichment returns wrong HD covers for some albums (e.g., Ditonellapiaga "Chimica"). `enrich_providers` in downloader.py excludes qobuz, uses `["apple", "deezer", "tidal", "soundcloud"]` (priority order). Apple Music provides 3000×3000, Tidal 1280×1280, Deezer and SoundCloud lower resolutions. Run `python scripts/fix_covers.py` on existing files with incorrect covers.
+Qobuz enrichment returns wrong HD covers for some albums (e.g., Ditonellapiaga "Chimica"). `enrich_providers` in downloader.py excludes qobuz, uses `["apple", "deezer", "soundcloud"]` (priority order). Apple Music provides 3000×3000, Deezer and SoundCloud lower resolutions. The downloader overwrites covers with the 640×640 Spotify art after each track (`_fix_cover`); run `python scripts/fix_covers.py` on existing files with incorrect covers.

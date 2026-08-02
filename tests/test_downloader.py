@@ -53,7 +53,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
+        assert result.to_dict() == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
         client.download_track.assert_awaited_once_with(self.TRACK_URL)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["enrich_providers"] == [
@@ -89,7 +89,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, cfg, logger)
 
-        assert result == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
+        assert result.to_dict() == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -107,9 +107,9 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result["ok"] == 0
-        assert result["failed"] == 1
-        assert len(result["failed_tracks"]) == 1
+        assert result.ok == 0
+        assert result.failed == 1
+        assert len(result.failed_tracks) == 1
 
     @pytest.mark.asyncio
     async def test_album_all_exist(self, tmp_path):
@@ -144,7 +144,7 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
+        assert result.to_dict() == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -166,7 +166,7 @@ class TestRunUrl:
             cfg = {**config, "output_dir": "/tmp/does-not-exist-xyz"}
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
+        assert result.to_dict() == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
         assert client.download_track.await_count == 2
         client.download_track.assert_any_call(t1.external_url)
         client.download_track.assert_any_call(t2.external_url)
@@ -206,9 +206,9 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result["ok"] == 1
-        assert result["skipped"] == 1
-        assert result["failed"] == 0
+        assert result.ok == 1
+        assert result.skipped == 1
+        assert result.failed == 0
         assert client.download_track.await_count == 1
         client.download_track.assert_any_call(t2.external_url)
 
@@ -230,10 +230,10 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, config, logger, skip_titles={"Song B"})
 
-        assert result["ok"] == 1
-        assert result["skipped"] == 0
-        assert result["failed"] == 0
-        assert result["gave_up_tracks"] == [("t2", "Song B", "gave_up")]
+        assert result.ok == 1
+        assert result.skipped == 0
+        assert result.failed == 0
+        assert result.gave_up_tracks == [("t2", "Song B", "gave_up")]
         assert client.download_track.await_count == 1
         client.download_track.assert_any_call(t1.external_url)
 
@@ -254,10 +254,10 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, config, logger, skip_titles={"Song A", "Song B"})
 
-        assert result["ok"] == 0
-        assert result["skipped"] == 0
-        assert result["failed"] == 0
-        assert len(result["gave_up_tracks"]) == 2
+        assert result.ok == 0
+        assert result.skipped == 0
+        assert result.failed == 0
+        assert len(result.gave_up_tracks) == 2
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -279,9 +279,9 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, config, logger)
 
-        assert result["ok"] == 1
-        assert result["failed"] == 1
-        assert len(result["failed_tracks"]) == 1
+        assert result.ok == 1
+        assert result.failed == 1
+        assert len(result.failed_tracks) == 1
 
     @pytest.mark.asyncio
     async def test_download_raises_exception(self, config, logger):
@@ -298,7 +298,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "gave_up_tracks": [], "total": 1}
+        assert result.to_dict() == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "gave_up_tracks": [], "total": 1}
 
     @pytest.mark.asyncio
     async def test_failure_cb_called_for_failed_track(self, config, logger):
@@ -320,7 +320,7 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
 
-        assert result["failed"] == 1
+        assert result.failed == 1
         assert calls == [("Bad Song", "download_failed")]
 
     @pytest.mark.asyncio
@@ -339,7 +339,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
 
-        assert result["failed"] == 1
+        assert result.failed == 1
         assert len(calls) == 1
         assert calls[0][0] == "Test Track"
 
@@ -358,7 +358,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
 
-        assert result["ok"] == 1
+        assert result.ok == 1
         assert calls == []
 
     @pytest.mark.asyncio
@@ -379,8 +379,8 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, config, logger)
 
-        assert result["ok"] == 2
-        assert result["failed"] == 0
+        assert result.ok == 2
+        assert result.failed == 0
         assert client.download_track.await_count == 2
         client.download_track.assert_any_call(t1.external_url)
         client.download_track.assert_any_call(t2.external_url)
@@ -408,7 +408,7 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, config, logger, progress_cb=progress_cb)
 
-        assert result["ok"] == 2
+        assert result.ok == 2
         assert sorted(t for _, _, t in calls) == ["Song A", "Song B"]
         assert all(total == 2 for _, total, _ in calls)
         assert [d for d, _, _ in calls] == sorted([1, 2])

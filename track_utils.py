@@ -41,6 +41,38 @@ def spotiflac_track_relative_path(track: TrackMetadata, cfg: dict) -> str:
     return _make_relative_path(track, cfg, spotiflac_mode=True)
 
 
+def partition_tracks(
+    tracks: list[TrackMetadata],
+    cfg: dict,
+    skip_titles: set[str] | None = None,
+) -> tuple[list[TrackMetadata], list[TrackMetadata], list[TrackMetadata]]:
+    """Dedupe by `track.id`, then split into (existing, given_up, missing).
+
+    `existing` are already on disk, `given_up` have a title in `skip_titles`
+    (never downloaded again), everything else is `missing`. Order preserved.
+    """
+    seen: set[str] = set()
+    unique: list[TrackMetadata] = []
+    for t in tracks:
+        if t.id not in seen:
+            seen.add(t.id)
+            unique.append(t)
+
+    skip = skip_titles or set()
+    existing: list[TrackMetadata] = []
+    given_up: list[TrackMetadata] = []
+    missing: list[TrackMetadata] = []
+    for t in unique:
+        full = Path(cfg["output_dir"]) / track_relative_path(t, cfg)
+        if full.exists():
+            existing.append(t)
+        elif t.title in skip:
+            given_up.append(t)
+        else:
+            missing.append(t)
+    return existing, given_up, missing
+
+
 def get_jpeg_dimensions(data: bytes) -> tuple[int, int]:
     if data[:2] != b"\xff\xd8":
         return (0, 0)

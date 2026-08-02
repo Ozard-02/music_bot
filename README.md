@@ -14,7 +14,7 @@ Telegram msg → SQLite queue → Worker → SpotiFLAC → FLAC on disk
 
 - Send a Spotify link (track, album, playlist) → queued and downloaded automatically
 - Search by name: `artist - song`
-- Queue commands: `/status`, `/purge`
+- Queue commands: `/status`, `/quality`, `/purge`
 - Playlist builder: `/mkplaylist <url>` — generates m3u8 + cover art
 - Configurable provider order and quality
 - Exponential backoff retries
@@ -26,9 +26,10 @@ Telegram msg → SQLite queue → Worker → SpotiFLAC → FLAC on disk
 |---------|-------------|
 | `/start` | Welcome + help |
 | `/status` | Queue stats + recent items |
+| `/quality [value]` | Set your download quality (no arg lists `DOLBY_ATMOS, HI_RES_LOSSLESS, LOSSLESS, HIGH, LOW`) |
 | `/purge` | Clear all queued items |
 | `/mkplaylist <url>` | Generate m3u8 playlist file |
-| `/fixmetadata [folder]` | Re-tag all FLACs in a folder (whole library if omitted; fixes "same album split into several" in Navidrome) |
+| `/fixmetadata [folder]` | Re-tag all FLACs in a folder (your library if omitted; fixes "same album split into several" in Navidrome) |
 
 Metadata issues (bogus MusicBrainz tags, split albums, tagless files) are
 explained in [METADATA.md](METADATA.md).
@@ -47,9 +48,17 @@ See [SETUP.md](SETUP.md) for full setup (bare-metal, Docker, TrueNAS).
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `TELEGRAM_BOT_TOKEN` | Yes | — | Bot token from @BotFather |
-| `TELEGRAM_ALLOWED_USER_ID` | Yes | — | Your Telegram user ID |
+| `TELEGRAM_ALLOWED_USER_IDS` | Yes* | — | Comma-separated Telegram user IDs (allowlist) |
+| `TELEGRAM_ALLOWED_USER_ID` | Yes* | — | Legacy single-user fallback |
 | `QUEUE_DB_PATH` | No | `./queue.db` | Queue database path |
 | `CHROME_PATH` | No | system default | Chromium location |
+
+*One of `TELEGRAM_ALLOWED_USER_IDS` or `TELEGRAM_ALLOWED_USER_ID` must be set.
+
+Each allowed user gets their own library folder `~/Music/{username}_Music/`
+(fallback: first name), and their own `/quality` preference (applies to new
+downloads only). Migrate an existing root-level library into the owner's
+folder with `python scripts/migrate_library.py --username espo [--dry-run]`.
 
 Provider order, quality, and download options go in `~/.spotiflac/config.json`.
 

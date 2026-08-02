@@ -18,9 +18,11 @@ from bot import (
     status_cmd,
     purge_cmd,
     fixmetadata_cmd,
+    quality_cmd,
     handle_message,
     _is_allowed,
     ALLOWED_USER_ID,
+    ALLOWED_USER_IDS,
     SingleInstanceLock,
 )
 
@@ -29,6 +31,8 @@ def _make_update(user_id: int = 12345, text: str = "") -> MagicMock:
     update = MagicMock()
     user = MagicMock()
     user.id = user_id
+    user.username = "espo"
+    user.first_name = "Espo"
     update.effective_user = user
     update.message = AsyncMock()
     update.message.text = text
@@ -41,6 +45,7 @@ def _make_context(qm=None, logger=None) -> MagicMock:
         "queue_manager": qm or MagicMock(),
         "logger": logger or MagicMock(),
         "wake_event": asyncio.Event(),
+        "cfg": {"output_dir": "/tmp/test_music", "quality": "LOSSLESS"},
     }
     return context
 
@@ -97,9 +102,14 @@ class TestHelpCmd:
 
 
 class TestStatusCmd:
+    def _qm(self):
+        qm = MagicMock()
+        qm.get_users.return_value = []
+        return qm
+
     @pytest.mark.asyncio
     async def test_replies_with_queue_summary(self):
-        qm = MagicMock()
+        qm = self._qm()
         qm.get_status.return_value = {
             "queued": 2, "running": 1, "done": 5, "failed": 0, "next_id": 3,
         }
@@ -122,7 +132,7 @@ class TestStatusCmd:
 
     @pytest.mark.asyncio
     async def test_reports_running_jobs_with_progress(self):
-        qm = MagicMock()
+        qm = self._qm()
         qm.get_status.return_value = {
             "queued": 0, "running": 1, "done": 3, "failed": 0, "next_id": None,
         }
@@ -299,13 +309,21 @@ class TestPurgeCmd:
 
 class TestFixMetadataCmd:
     def _context(self, tmp_path, args=()):
-        context = _make_context()
-        context.application.bot_data["cfg"] = {"output_dir": str(tmp_path)}
+        qm = MagicMock()
+        qm.get_user.return_value = {
+            "telegram_user_id": 12345,
+            "username": "espo",
+            "folder": "espo_Music",
+            "quality": "LOSSLESS",
+        }
+        context = _make_context(qm=qm)
+        context.application.bot_data["cfg"] = {"output_dir": str(tmp_path), "quality": "LOSSLESS"}
+        context.application.bot_data["queue_manager"] = qm
         context.args = list(args)
         return context
 
     @pytest.mark.asyncio
-    async def test_no_args_runs_on_library_root(self, tmp_path):
+    async def test_no_args_runs_on_users_folder(self, tmp_path):
         update = _make_update(text="/fixmetadata")
         context = self._context(tmp_path)
 
@@ -317,13 +335,13 @@ class TestFixMetadataCmd:
         with patch("scripts.fix_metadata.fix_library", new=AsyncMock(return_value=fake)) as m:
             await fixmetadata_cmd(update, context)
 
-        assert str(m.call_args.args[0]) == str(tmp_path)
+        assert str(m.call_args.args[0]) == str(tmp_path / "espo_Music")
         assert m.call_args.kwargs["apply"] is True
 
     @pytest.mark.asyncio
     async def test_multi_word_folder_joins_args(self, tmp_path):
-        album = tmp_path / "Noyz Narcos"
-        album.mkdir()
+        album = tmp_path / "espo_Music" / "Noyz Narcos"
+        album.mkdir(parents=True)
         (album / "a.flac").write_bytes(b"fake")
 
         fake = {
@@ -340,15 +358,15 @@ class TestFixMetadataCmd:
         assert str(m.call_args.args[0]) == str(album)
 
     @pytest.mark.asyncio
-    async def test_resolves_relative_to_output_dir_and_applies(self, tmp_path):
-        album = tmp_path / "MADAME"
-        album.mkdir()
+    async def test_resolves_relative_to_users_folder_and_applies(self, tmp_path):
+        album = tmp_path / "espo_Music" / "MADAME"
+        album.mkdir(parents=True)
         (album / "a.flac").write_bytes(b"fake")
 
         fake = {
             "folders": 1, "total": 1, "fixed": 1, "moved": 1, "failed": 0,
             "failed_files": [],
-            "moved_files": [str(tmp_path / "LUNA" / "a.flac")],
+            "moved_files": [str(tmp_path / "espo_Music" / "LUNA" / "a.flac")],
         }
         update = _make_update(text="/fixmetadata MADAME")
         context = self._context(tmp_path, args=["MADAME"])
@@ -392,6 +410,58 @@ class TestEsc:
         assert esc("AC/DC & Guns") == "AC/DC &amp; Guns"
         assert esc("plain text") == "plain text"
         assert esc(42) == "42"
+
+
+class TestQualityCmd:
+    def _qm(self):
+        qm = MagicMock()
+        qm.get_user.return_value = {
+            "telegram_user_id": 12345,
+            "username": "espo",
+            "folder": "espo_Music",
+            "quality": "LOSSLESS",
+        }
+        return qm
+
+    @pytest.mark.asyncio
+    async def test_no_args_lists_available_qualities(self):
+        update = _make_update(text="/quality")
+        context = _make_context(qm=self._qm())
+        await quality_cmd(update, context)
+        text = update.message.reply_html.call_args[0][0]
+        for q in ["DOLBY_ATMOS", "HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"]:
+            assert q in text
+        assert "LOSSLESS" in text  # current
+
+    @pytest.mark.asyncio
+    async def test_sets_quality(self):
+        qm = self._qm()
+        update = _make_update(text="/quality high")
+        context = _make_context(qm=qm)
+        context.args = ["high"]
+        await quality_cmd(update, context)
+        qm.set_user_quality.assert_called_once_with(12345, "HIGH")
+        text = update.message.reply_html.call_args[0][0]
+        assert "HIGH" in text
+
+    @pytest.mark.asyncio
+    async def test_unknown_quality_shows_list(self):
+        qm = self._qm()
+        update = _make_update(text="/quality bogus")
+        context = _make_context(qm=qm)
+        context.args = ["bogus"]
+        await quality_cmd(update, context)
+        qm.set_user_quality.assert_not_called()
+        text = update.message.reply_html.call_args[0][0]
+        assert "Unknown quality" in text
+        assert "LOSSLESS" in text
+
+    @pytest.mark.asyncio
+    async def test_ignores_unauthorized(self):
+        update = _make_update(user_id=99999, text="/quality")
+        context = _make_context(qm=self._qm())
+        await quality_cmd(update, context)
+        update.message.reply_html.assert_not_awaited()
 
 
 class TestMessageEscaping:

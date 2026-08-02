@@ -360,3 +360,50 @@ class TestQueueManager:
         is_new_flags = [r[1] for r in results]
         assert len(item_ids) == 1, "all threads must get the same item_id"
         assert sum(is_new_flags) == 1, "exactly one thread must get is_new=True"
+
+
+class TestUserColumn:
+    def test_enqueue_stamps_user(self, queue_manager: QueueManager):
+        qm = queue_manager
+        item_id, _ = qm.enqueue_unique("link", "url", user=12345)
+        item = qm.get_item(item_id)
+        assert item["user"] == 12345
+
+    def test_enqueue_without_user_is_none(self, queue_manager: QueueManager):
+        qm = queue_manager
+        item_id, _ = qm.enqueue_unique("link", "url")
+        assert qm.get_item(item_id)["user"] is None
+
+
+class TestUsersTable:
+    def test_upsert_and_get(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.upsert_user(12345, "espo", "espo_Music", "LOSSLESS")
+        row = qm.get_user(12345)
+        assert row["folder"] == "espo_Music"
+        assert row["username"] == "espo"
+        assert row["quality"] == "LOSSLESS"
+
+    def test_upsert_updates_quality_and_username_but_not_folder(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.upsert_user(12345, "espo", "espo_Music", "LOSSLESS")
+        qm.upsert_user(12345, "renamed", "espo_Music", "HIGH")
+        row = qm.get_user(12345)
+        assert row["username"] == "renamed"
+        assert row["quality"] == "HIGH"
+        assert row["folder"] == "espo_Music"
+
+    def test_get_user_missing_returns_none(self, queue_manager: QueueManager):
+        assert queue_manager.get_user(999) is None
+
+    def test_set_user_quality(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.upsert_user(12345, "espo", "espo_Music", "LOSSLESS")
+        qm.set_user_quality(12345, "LOW")
+        assert qm.get_user(12345)["quality"] == "LOW"
+
+    def test_get_users_lists_all(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.upsert_user(1, "a", "a_Music", "LOSSLESS")
+        qm.upsert_user(2, "b", "b_Music", "HIGH")
+        assert [r["telegram_user_id"] for r in qm.get_users()] == [1, 2]

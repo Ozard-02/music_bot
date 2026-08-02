@@ -36,9 +36,10 @@ def format_help() -> str:
         "<b>Commands:</b>\n"
         "/help \u2014 this message\n"
         "/status \u2014 queue status and recent items\n"
+        "/quality [value] \u2014 set your download quality (no arg lists options)\n"
         "/purge \u2014 remove all items\n"
         "/mkplaylist &lt;url&gt; [name] \u2014 build .m3u8 from playlist\n"
-        "/fixmetadata [album folder] \u2014 re-tag + fix Spotify covers (whole library if omitted)"
+        "/fixmetadata [album folder] \u2014 re-tag + fix Spotify covers (your library if omitted)"
     )
 
 

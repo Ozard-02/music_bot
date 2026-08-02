@@ -19,8 +19,9 @@ from config import (
 )
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
+from library import user_cfg
 from resolver import resolve_search
-from downloader import run_url
+from downloader import DownloadResult, run_url
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 
@@ -31,7 +32,7 @@ def _run_url_sync(
     skip_titles: set[str] | None = None,
     progress_cb=None,
     failure_cb=None,
-) -> dict:
+) -> DownloadResult:
     return asyncio.run(run_url(url, cfg, logger, skip_titles, progress_cb, failure_cb))
 
 
@@ -43,7 +44,28 @@ class FailureDecision:
     detail: object = None
 
 
-def decide_failure(item: dict, result: dict, gave_up_titles: set[str], *, now: datetime | None = None) -> FailureDecision:
+def item_age(item: dict, now: datetime | None = None) -> float:
+    """Age in seconds since `created_at`; 0 if the timestamp is unparseable."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        created = datetime.fromisoformat(item["created_at"])
+        return (now - created).total_seconds()
+    except (ValueError, TypeError, KeyError):
+        return 0
+
+
+def is_expired(item: dict, now: datetime | None = None) -> bool:
+    """True when an item is past the queue age or retry limit."""
+    return item_age(item, now) > MAX_QUEUE_AGE or item.get("retries", 0) >= MAX_QUEUE_RETRIES
+
+
+def backoff_delay(retries: int, floor: int = 0) -> int:
+    """Exponential backoff in seconds, capped at MAX_RETRY_BACKOFF."""
+    return max(floor, min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries)))
+
+
+def decide_failure(item: dict, result: DownloadResult, gave_up_titles: set[str], *, now: datetime | None = None) -> FailureDecision:
     """Pure decision logic for failed downloads. Checks, in order:
     1. age > MAX_QUEUE_AGE            → fail ("Timed out in queue")
     2. retries >= MAX_QUEUE_RETRIES    → fail ("Max retries exceeded")
@@ -52,41 +74,33 @@ def decide_failure(item: dict, result: dict, gave_up_titles: set[str], *, now: d
     """
     if now is None:
         now = datetime.now(timezone.utc)
-    retries = item.get("retries", 0)
-    try:
-        created = datetime.fromisoformat(item["created_at"])
-        age = (now - created).total_seconds()
-    except (ValueError, TypeError, KeyError):
-        age = 0
 
-    if age > MAX_QUEUE_AGE:
-        return FailureDecision("fail", "Timed out in queue (>24h)")
-    if retries >= MAX_QUEUE_RETRIES:
-        return FailureDecision("fail", "Max retries exceeded")
+    if is_expired(item, now):
+        reason = "Timed out in queue (>24h)" if item_age(item, now) > MAX_QUEUE_AGE else "Max retries exceeded"
+        return FailureDecision("fail", reason)
 
     still_trying = [
-        title for _track_id, title, _err in result.get("failed_tracks", [])
+        title for _track_id, title, _err in result.failed_tracks
         if title not in gave_up_titles
     ]
     if not still_trying:
         return FailureDecision("done", len(gave_up_titles))
 
-    delay = min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries))
-    return FailureDecision("requeue", delay)
+    return FailureDecision("requeue", backoff_delay(item.get("retries", 0)))
 
 
-def _result_summary(result: dict) -> str:
+def _result_summary(result: DownloadResult) -> str:
     parts = []
-    if result.get("ok"):
-        parts.append(f"✅ {result['ok']} ok")
-    if result.get("skipped"):
-        parts.append(f"⏭ {result['skipped']} skipped")
-    if result.get("failed"):
-        parts.append(f"❌ {result['failed']} failed")
+    if result.ok:
+        parts.append(f"✅ {result.ok} ok")
+    if result.skipped:
+        parts.append(f"⏭ {result.skipped} skipped")
+    if result.failed:
+        parts.append(f"❌ {result.failed} failed")
     return " | ".join(parts)
 
 
-def _done_message(display: str, result: dict, given_up: int) -> str:
+def _done_message(display: str, result: DownloadResult, given_up: int) -> str:
     """Completion message shared by the clean-success and all-gave-up paths."""
     parts = [_result_summary(result)]
     if given_up:
@@ -182,19 +196,42 @@ class Worker:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
-    async def _notify(self, text: str) -> None:
-        """Send a message to the owner. A failed send must never affect the
-        item's DB status or crash the worker — log and move on."""
+    async def _notify(self, text: str, chat_id: int | None = None) -> None:
+        """Send a message to the item's owner (or the default chat). A failed
+        send must never affect the item's DB status or crash the worker —
+        log and move on."""
         try:
-            await self._bot.send_message(chat_id=self._chat_id, text=text, parse_mode="HTML")
+            await self._bot.send_message(chat_id=chat_id or self._chat_id, text=text, parse_mode="HTML")
         except Exception as e:
             self._logger.warning("Failed to send notification: %s", e)
 
+    async def _item_cfg(self, item: dict) -> dict:
+        """Per-item cfg: output_dir resolved to the user's folder and quality
+        set to the user's stored preference. Falls back to the base cfg for
+        legacy items without a user."""
+        cfg = self._cfg
+        uid = item.get("user")
+        if uid:
+            row = await asyncio.to_thread(self._queue.get_user, uid)
+            if row:
+                cfg = user_cfg(self._cfg, row["folder"])
+                quality = row.get("quality")
+                if quality:
+                    cfg = {**cfg, "quality": quality}
+        return cfg
+
+    @staticmethod
+    def _item_chat(item: dict) -> int | None:
+        """Where to notify about this item: the user who queued it, or the
+        default chat for legacy items."""
+        return item.get("user") or None
+
     async def _process(self, item: dict):
         self._logger.info("Processing #%d: %s", item["id"], item["query"])
+        chat = self._item_chat(item)
         try:
-            url, display = await self._resolve(item)
-
+            cfg = await self._item_cfg(item)
+            url, display = await self._resolve(item, cfg)
             skip_titles = await asyncio.to_thread(
                 self._queue.get_give_up_titles, item["id"], MAX_TRACK_RETRIES,
             )
@@ -204,103 +241,115 @@ class Worker:
                     item["id"], len(skip_titles),
                 )
 
-            def progress_cb(done, total, title):
-                self._queue.set_progress(item["id"], f"{done}/{total} · Now: {title}")
+            result = await self._run_download(item, url, display, skip_titles, cfg, chat)
+            if result is None:
+                return  # timed out — requeued by _handle_timeout
 
-            def failure_cb(title, err):
-                self._queue.log_failed_track(item["id"], title, err)
-
-            timeout = self._cfg.get("max_download_timeout", MAX_DOWNLOAD_TIMEOUT)
-            try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        _run_url_sync, url, self._cfg, self._logger, skip_titles, progress_cb, failure_cb,
-                    ),
-                    timeout=timeout,
-                )
-            except asyncio.TimeoutError:
-                await self._handle_timeout(item, display)
-                return
-
-            if result["failed"] == 0:
-                await self._handle_no_failures(item, display, result)
+            if result.failed == 0:
+                await self._handle_no_failures(item, display, result, chat)
             else:
-                await self._handle_failure(item, display, result)
+                await self._handle_failure(item, display, result, chat)
 
         except Exception as e:
             self._logger.error("Failed #%d: %s\n%s", item["id"], e, traceback.format_exc())
             await asyncio.to_thread(self._queue.mark_failed, item["id"], str(e))
             await self._notify(
                 f"❌ <b>Failed #{item['id']}</b>\n  <code>{esc(item['query'])}</code>\n  Internal error — check logs",
+                chat,
             )
 
-    async def _handle_no_failures(self, item: dict, display: str, result: dict):
+    async def _run_download(
+        self,
+        item: dict,
+        url: str,
+        display: str,
+        skip_titles: set[str],
+        cfg: dict,
+        chat: int | None,
+    ) -> DownloadResult | None:
+        """Run the download with callbacks wired to the queue and a whole-job
+        timeout. Returns the result, or None on timeout (already requeued)."""
+
+        def progress_cb(done, total, title):
+            self._queue.set_progress(item["id"], f"{done}/{total} · Now: {title}")
+
+        def failure_cb(title, err):
+            self._queue.log_failed_track(item["id"], title, err)
+
+        timeout = cfg.get("max_download_timeout", MAX_DOWNLOAD_TIMEOUT)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    _run_url_sync, url, cfg, self._logger, skip_titles, progress_cb, failure_cb,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            await self._handle_timeout(item, display, chat)
+            return None
+
+    async def _handle_no_failures(self, item: dict, display: str, result: DownloadResult, chat: int | None):
         await self._mark_done_and_notify(
-            item, display, result, len(result.get("gave_up_tracks", [])),
+            item, display, result, len(result.gave_up_tracks), chat,
         )
 
-    async def _handle_timeout(self, item: dict, display: str):
+    async def _handle_timeout(self, item: dict, display: str, chat: int | None):
         """A whole-job timeout means the download is still running in the
         background (wait_for can't cancel a thread). Requeue with a delay so
         the leaked download can finish; the pre-check will skip anything the
         leaked thread already wrote to disk. Never marks the item failed."""
-        retries = item.get("retries", 0)
-        now = datetime.now(timezone.utc)
-        try:
-            created = datetime.fromisoformat(item["created_at"])
-            age = (now - created).total_seconds()
-        except (ValueError, TypeError, KeyError):
-            age = 0
-
-        if age > MAX_QUEUE_AGE or retries >= MAX_QUEUE_RETRIES:
+        if is_expired(item):
             await asyncio.to_thread(self._queue.mark_failed, item["id"], "Timed out in queue")
             await self._notify(
                 f"❌ <b>{esc(display)}</b>\n  ⏰ In queue over 24h — gave up",
+                chat,
             )
             return
 
-        delay = max(1800, min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries)))
+        retries = item.get("retries", 0)
+        delay = backoff_delay(retries, floor=1800)
         await asyncio.to_thread(self._queue.requeue, item["id"], delay)
         await self._notify(
             f"⏳ <b>{esc(display)}</b>\n  Still downloading, will retry (#{item['id']}, attempt {retries + 1}/{MAX_QUEUE_RETRIES})",
+            chat,
         )
 
-    async def _mark_done_and_notify(self, item: dict, display: str, result: dict, given_up: int):
+    async def _mark_done_and_notify(self, item: dict, display: str, result: DownloadResult, given_up: int, chat: int | None):
         await asyncio.to_thread(
             self._queue.mark_done,
             item["id"],
-            result["ok"],
-            result["skipped"],
+            result.ok,
+            result.skipped,
             given_up,
         )
-        await self._notify(_done_message(display, result, given_up))
-        await self._auto_build_m3u8(item)
+        await self._notify(_done_message(display, result, given_up), chat)
+        await self._auto_build_m3u8(item, await self._item_cfg(item), chat)
 
-    async def _resolve(self, item: dict) -> tuple[str, str]:
+    async def _resolve(self, item: dict, cfg: dict) -> tuple[str, str]:
         if item["input_type"] == "search":
             from SpotiFLAC import AsyncSpotiFLAC
-            async with AsyncSpotiFLAC(output_dir=self._cfg["output_dir"]) as client:
+            async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
                 url, display, _kind = await resolve_search(client, item["query"])
             self._logger.info("Resolved #%d: %s → %s", item["id"], item["query"], display)
             return url, display
         return item["query"], item["query"]
 
-    async def _auto_build_m3u8(self, item: dict):
+    async def _auto_build_m3u8(self, item: dict, cfg: dict, chat: int | None):
         if item["input_type"] != "link":
             return
         parsed = parse_spotify_url(item["query"])
         if parsed.get("type") != "playlist":
             return
         try:
-            result = await build_m3u8(item["query"], cfg=self._cfg)
+            result = await build_m3u8(item["query"], cfg=cfg)
             msg = f"📋 <b>Playlist: {esc(result['playlist_name'])}</b>\n  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk"
             if result.get("cover_path"):
                 msg += "\n  🖼️ Cover"
-            await self._notify(msg)
+            await self._notify(msg, chat)
         except Exception as e:
             self._logger.warning("Auto m3u8 failed for %s: %s", item["query"], e)
 
-    async def _handle_failure(self, item: dict, display: str, result: dict):
+    async def _handle_failure(self, item: dict, display: str, result: DownloadResult, chat: int | None):
         gave_up = await asyncio.to_thread(
             self._queue.get_give_up_titles, item["id"], MAX_TRACK_RETRIES,
         )
@@ -309,16 +358,16 @@ class Worker:
 
         if decision.action == "fail":
             await asyncio.to_thread(self._queue.mark_failed, item["id"], decision.detail)
-            await self._auto_build_m3u8(item)
+            await self._auto_build_m3u8(item, await self._item_cfg(item), chat)
             if decision.detail.startswith("Timed out"):
                 msg = f"❌ <b>{esc(display)}</b>\n  ⏰ In queue over 24h — gave up"
             else:
                 msg = f"❌ <b>{esc(display)}</b>\n  ❌ Failed after {MAX_QUEUE_RETRIES} retries"
-            await self._notify(msg)
+            await self._notify(msg, chat)
             return
 
         if decision.action == "done":
-            await self._mark_done_and_notify(item, display, result, decision.detail)
+            await self._mark_done_and_notify(item, display, result, decision.detail, chat)
             return
 
         delay = decision.detail
@@ -328,5 +377,5 @@ class Worker:
             f"🔄 <b>{esc(display)}</b>\n  {_result_summary(result)}\n"
             f"  🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES}, {when})"
         )
-        await self._notify(msg)
+        await self._notify(msg, chat)
 
