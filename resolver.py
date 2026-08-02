@@ -27,19 +27,19 @@ def parse_input(text: str) -> tuple[str, str]:
 
 def format_help() -> str:
     return (
-        "Send one of:\n\n"
-        "- Spotify <b>link</b> \u2192 download it\n"
-        "- <b>Artist \u2014 Album</b> \u2192 download album\n"
-        "- <b>Album \u2014 Song</b> \u2192 download song\n"
-        "- <b>Artist \u2014 Song</b> \u2192 download song\n\n"
-        "Use a dash with spaces ( \u2014 ) between the two parts.\n\n"
+        "<b>What to send:</b>\n"
+        "  \u2022 Spotify <b>link</b> \u2192 download it\n"
+        "  \u2022 <b>Artist \u2014 Album</b> \u2192 download album\n"
+        "  \u2022 <b>Album \u2014 Song</b> \u2192 download song\n"
+        "  \u2022 <b>Artist \u2014 Song</b> \u2192 download song\n\n"
+        "  Use a dash with spaces ( \u2014 ) between the two parts.\n\n"
         "<b>Commands:</b>\n"
-        "/help \u2014 this message\n"
-        "/status \u2014 queue status and recent items\n"
-        "/quality [value] \u2014 set your download quality (no arg lists options)\n"
-        "/purge \u2014 remove all items\n"
-        "/mkplaylist &lt;url&gt; [name] \u2014 build .m3u8 from playlist\n"
-        "/fixmetadata [album folder] \u2014 re-tag + fix Spotify covers (your library if omitted)"
+        "  /help \u2014 this message\n"
+        "  /status \u2014 queue status and recent items\n"
+        "  /quality [value] \u2014 set your download quality (no arg lists options)\n"
+        "  /purge \u2014 remove all queued items\n"
+        "  /mkplaylist &lt;url&gt; [name] \u2014 build a .m3u8 from tracks on disk\n"
+        "  /fixmetadata [album folder] \u2014 re-tag + fix covers &amp; lyrics (your library if omitted)"
     )
 
 
