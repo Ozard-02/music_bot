@@ -176,7 +176,7 @@ async def fix_album_folder(
                         opts=EmbedOptions(
                             enrich=True,
                             enrich_providers=list(ENRICH_PROVIDERS),
-                            embed_lyrics=False,
+                            embed_lyrics=True,
                             cover_url=track.cover_url or "",
                         ),
                         cover_data=cover_data,
