@@ -39,6 +39,16 @@ class QueueManager:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    telegram_user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    folder TEXT NOT NULL,
+                    quality TEXT NOT NULL DEFAULT 'LOSSLESS',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status)
             """)
             conn.execute("""
@@ -66,13 +76,17 @@ class QueueManager:
                 conn.execute("ALTER TABLE queue ADD COLUMN progress TEXT")
             except sqlite3.OperationalError:
                 pass
+            try:
+                conn.execute("ALTER TABLE queue ADD COLUMN user INTEGER")
+            except sqlite3.OperationalError:
+                pass
 
             # Reset items stranded in 'running' from a killed process
             conn.execute(
                 "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
             )
 
-    def enqueue_unique(self, input_type: str, query: str) -> tuple[int, bool]:
+    def enqueue_unique(self, input_type: str, query: str, user: int | None = None) -> tuple[int, bool]:
         """Atomically check for existing + insert under a single lock.
 
         Returns (item_id, is_new) — closes the TOCTOU race of separate
@@ -89,8 +103,8 @@ class QueueManager:
                 return existing["id"], False
             now = datetime.now(timezone.utc).isoformat()
             cursor = conn.execute(
-                "INSERT INTO queue (input_type, query, created_at) VALUES (?, ?, ?)",
-                (input_type, query, now),
+                "INSERT INTO queue (input_type, query, created_at, user) VALUES (?, ?, ?, ?)",
+                (input_type, query, now, user),
             )
             return cursor.lastrowid, True
 
@@ -254,3 +268,43 @@ class QueueManager:
             (limit,),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+    def upsert_user(self, telegram_user_id: int, username: str, folder: str, quality: str):
+        """Insert the user row, or refresh username/quality. The folder is
+        sticky — once set on first interaction it never changes, so a renamed
+        username doesn't orphan an existing library folder."""
+        with self._lock:
+            conn = self._connect()
+            with conn:
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    "INSERT INTO users (telegram_user_id, username, folder, quality, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(telegram_user_id) DO UPDATE SET "
+                    "username=excluded.username, quality=excluded.quality, updated_at=excluded.updated_at",
+                    (telegram_user_id, username, folder, quality, now, now),
+                )
+
+    def get_user(self, telegram_user_id: int) -> dict | None:
+        conn = self._connect()
+        cursor = conn.execute(
+            "SELECT * FROM users WHERE telegram_user_id=?",
+            (telegram_user_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_users(self) -> list[dict]:
+        conn = self._connect()
+        cursor = conn.execute("SELECT * FROM users ORDER BY telegram_user_id")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def set_user_quality(self, telegram_user_id: int, quality: str):
+        with self._lock:
+            conn = self._connect()
+            with conn:
+                now = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    "UPDATE users SET quality=?, updated_at=? WHERE telegram_user_id=?",
+                    (quality, now, telegram_user_id),
+                )

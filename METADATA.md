@@ -33,6 +33,11 @@ Related problems found in the same library:
 Re-tags files through the **SpotiFLAC metadata pipeline** — the same code that
 tags new downloads — so tags stay consistent with what the downloader writes.
 
+Since SpotiFLAC 1.5.9, fresh downloads also no-op the MusicBrainz lookup at
+download time (`spotiflac_patch._patch_musicbrainz`), so new tracks never get
+bogus `MUSICBRAINZ_*` IDs in the first place — `/fixmetadata` is only needed
+for files downloaded before that patch.
+
 For every FLAC in the target folder it:
 
 1. Resolves the track's real identity: from the embedded `open.spotify.com`

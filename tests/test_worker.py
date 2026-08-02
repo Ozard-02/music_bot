@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 import pytest
 
 from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES, RETRY_BACKOFF_BASE
+from downloader import DownloadResult
 from worker import Worker, decide_failure
 
 
@@ -21,7 +22,7 @@ class TestDecideFailure:
         }
 
     def _result(self, failed_tracks):
-        return {"ok": 0, "skipped": 0, "failed": len(failed_tracks), "failed_tracks": failed_tracks}
+        return DownloadResult(failed=len(failed_tracks), failed_tracks=failed_tracks)
 
     def test_older_than_24h_fails_timeout(self):
         old = datetime.now(timezone.utc) - timedelta(hours=25)
@@ -76,7 +77,7 @@ class TestWorkerProcess:
         qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url", return_value={"ok": 5, "skipped": 2, "failed": 0, "total": 7}):
+        with patch("worker.run_url", return_value=DownloadResult(ok=5, skipped=2, total=7)):
             await worker._process(item)
 
         s = qm.get_status()
@@ -100,7 +101,7 @@ class TestWorkerProcess:
         def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
             captured["progress_cb"] = progress_cb
             captured["failure_cb"] = failure_cb
-            return {"ok": 1, "skipped": 0, "failed": 0, "total": 1}
+            return DownloadResult(ok=1, total=1)
 
         with patch("worker.run_url", side_effect=fake_run_url):
             await worker._process(item)
@@ -121,7 +122,7 @@ class TestWorkerProcess:
 
         def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
             captured["failure_cb"] = failure_cb
-            return {"ok": 0, "skipped": 0, "failed": 2, "failed_tracks": [], "total": 2}
+            return DownloadResult(failed=2, total=2)
 
         with patch("worker.run_url", side_effect=fake_run_url):
             await worker._process(item)
@@ -206,7 +207,7 @@ class TestWorkerProcess:
         qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url", return_value={"ok": 3, "skipped": 0, "failed": 0, "total": 3}):
+        with patch("worker.run_url", return_value=DownloadResult(ok=3, total=3)):
             await worker._process(item)
 
         msg = bot.send_message.call_args[1]["text"]
@@ -218,14 +219,15 @@ class TestWorkerProcess:
         qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url", return_value={
-            "ok": 0, "skipped": 0, "failed": 3, "total": 3,
-            "failed_tracks": [
+        with patch("worker.run_url", return_value=DownloadResult(
+            failed=3,
+            failed_tracks=[
                 ("id1", "Broken Song", "Qobuz 500"),
                 ("id2", "Another Fail", "Tidal 410"),
                 ("id3", "Last One", "Deezer 404"),
             ],
-        }):
+            total=3,
+        )):
             await worker._process(item)
 
         s = qm.get_status()
@@ -248,10 +250,11 @@ class TestWorkerProcess:
         for _ in range(MAX_TRACK_RETRIES):
             qm.log_failed_track(item["id"], "Broken Song", "Qobuz 500")
 
-        with patch("worker.run_url", return_value={
-            "ok": 0, "skipped": 0, "failed": 1, "total": 1,
-            "failed_tracks": [("id1", "Broken Song", "Qobuz 500")],
-        }):
+        with patch("worker.run_url", return_value=DownloadResult(
+            failed=1,
+            failed_tracks=[("id1", "Broken Song", "Qobuz 500")],
+            total=1,
+        )):
             await worker._process(item)
 
         s = qm.get_status()
@@ -270,13 +273,14 @@ class TestWorkerProcess:
         for _ in range(MAX_TRACK_RETRIES):
             qm.log_failed_track(item["id"], "Broken Song", "Qobuz 500")
 
-        with patch("worker.run_url", return_value={
-            "ok": 0, "skipped": 0, "failed": 2, "total": 2,
-            "failed_tracks": [
+        with patch("worker.run_url", return_value=DownloadResult(
+            failed=2,
+            failed_tracks=[
                 ("id1", "Broken Song", "Qobuz 500"),
                 ("id2", "Fresh Fail", "Deezer 404"),
             ],
-        }):
+            total=2,
+        )):
             await worker._process(item)
 
         s = qm.get_status()
@@ -293,7 +297,7 @@ class TestWorkerProcess:
             qm.requeue(item["id"])
         item = qm.dequeue()
 
-        with patch("worker.run_url", return_value={"ok": 0, "skipped": 0, "failed": 3, "total": 3}):
+        with patch("worker.run_url", return_value=DownloadResult(failed=3, total=3)):
             await worker._process(item)
 
         s = qm.get_status()
@@ -329,7 +333,7 @@ class TestWorkerProcess:
         def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
             failure_cb("Broken Song", "Qobuz 500")
             failure_cb("Another Fail", "Tidal 410")
-            return {"ok": 0, "skipped": 0, "failed": 2, "failed_tracks": [], "total": 2}
+            return DownloadResult(failed=2, total=2)
 
         with patch("worker.run_url", side_effect=fake_run_url):
             await worker._process(item)
@@ -348,7 +352,7 @@ class TestWorkerProcess:
         old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
         item["created_at"] = old
 
-        with patch("worker.run_url", return_value={"ok": 0, "skipped": 0, "failed": 3, "total": 3}):
+        with patch("worker.run_url", return_value=DownloadResult(failed=3, total=3)):
             await worker._process(item)
 
         s = qm.get_status()
@@ -372,7 +376,7 @@ class TestNotificationSafety:
         item = qm.dequeue()
         worker._resolve = AsyncMock(return_value=(self.TRACK, "Guns N' Roses & Friends"))
 
-        with patch("worker.run_url", return_value={"ok": 3, "skipped": 0, "failed": 0, "total": 3}):
+        with patch("worker.run_url", return_value=DownloadResult(ok=3, total=3)):
             await worker._process(item)
 
         msg = bot.send_message.call_args[1]["text"]
@@ -390,7 +394,7 @@ class TestNotificationSafety:
         item = qm.dequeue()
         bot.send_message.side_effect = RuntimeError("Telegram parse error")
 
-        with patch("worker.run_url", return_value={"ok": 3, "skipped": 0, "failed": 0, "total": 3}):
+        with patch("worker.run_url", return_value=DownloadResult(ok=3, total=3)):
             await worker._process(item)  # must not raise
 
         s = qm.get_status()
@@ -404,12 +408,60 @@ class TestNotificationSafety:
         item = qm.dequeue()
         bot.send_message.side_effect = RuntimeError("Telegram network error")
 
-        with patch("worker.run_url", return_value={
-            "ok": 0, "skipped": 0, "failed": 2, "total": 2,
-            "failed_tracks": [("id1", "Broken", "Qobuz 500"), ("id2", "Another", "Tidal 410")],
-        }):
+        with patch("worker.run_url", return_value=DownloadResult(
+            failed=2,
+            failed_tracks=[("id1", "Broken", "Qobuz 500"), ("id2", "Another", "Tidal 410")],
+            total=2,
+        )):
             await worker._process(item)
 
         s = qm.get_status()
         assert s["queued"] == 1  # requeued, not failed
         assert s["failed"] == 0
+
+
+class TestWorkerPerUser:
+    """Items carry the queueing user; the worker must download into that
+    user's folder at their quality and notify the user who queued it."""
+
+    @pytest.mark.asyncio
+    async def test_user_item_uses_user_folder_quality_and_chat(self, worker, bot, tmp_path):
+        worker._cfg["output_dir"] = str(tmp_path)
+        qm = worker._queue
+        qm.upsert_user(777, "guest", "guest_Music", "LOW")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc", user=777)
+        item = qm.dequeue()
+
+        captured = {}
+
+        def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
+            captured["cfg"] = cfg
+            return DownloadResult(ok=1, total=1)
+
+        with patch("worker.run_url", side_effect=fake_run_url):
+            await worker._process(item)
+
+        assert captured["cfg"]["output_dir"] == str(tmp_path / "guest_Music")
+        assert captured["cfg"]["quality"] == "LOW"
+        bot.send_message.assert_awaited_once()
+        assert bot.send_message.call_args.kwargs["chat_id"] == 777
+
+    @pytest.mark.asyncio
+    async def test_legacy_item_uses_base_cfg_and_default_chat(self, worker, bot, tmp_path):
+        worker._cfg["output_dir"] = str(tmp_path)
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        captured = {}
+
+        def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
+            captured["cfg"] = cfg
+            return DownloadResult(ok=1, total=1)
+
+        with patch("worker.run_url", side_effect=fake_run_url):
+            await worker._process(item)
+
+        assert captured["cfg"]["output_dir"] == str(tmp_path)
+        bot.send_message.assert_awaited_once()
+        assert bot.send_message.call_args.kwargs["chat_id"] == 12345

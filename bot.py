@@ -30,6 +30,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from config import setup_logger, load_config, bridge_community_session, esc
+from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from resolver import parse_input, format_help
@@ -37,6 +38,27 @@ from worker import Worker
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
+
+
+def _parse_allowed_user_ids() -> set[int]:
+    """Parse the allowlist: comma-separated TELEGRAM_ALLOWED_USER_IDS, with
+    the legacy single TELEGRAM_ALLOWED_USER_ID as a fallback."""
+    ids = set()
+    raw = os.environ.get("TELEGRAM_ALLOWED_USER_IDS")
+    if raw:
+        for part in raw.split(","):
+            part = part.strip()
+            if part.isdigit():
+                ids.add(int(part))
+    if os.environ.get("TELEGRAM_ALLOWED_USER_ID"):
+        try:
+            ids.add(int(os.environ["TELEGRAM_ALLOWED_USER_ID"]))
+        except ValueError:
+            pass
+    return ids
+
+
+ALLOWED_USER_IDS = _parse_allowed_user_ids()
 
 QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", str(Path(__file__).parent / "queue.db")))
 
@@ -91,7 +113,28 @@ class SingleInstanceLock:
 
 def _is_allowed(update: Update) -> bool:
     user = update.effective_user
-    return user and user.id == ALLOWED_USER_ID
+    return bool(user) and user.id in ALLOWED_USER_IDS
+
+
+def _user_folder(user) -> str:
+    """Folder name for a Telegram user, from username or first name."""
+    return user_folder_name(user.username, fallback=user.first_name or "user")
+
+
+def _get_or_create_user(qm: QueueManager, user, default_quality: str) -> dict:
+    """Return the user's row, creating it (with a sticky folder) on first
+    interaction. New users default to the config's download quality."""
+    row = qm.get_user(user.id)
+    if row:
+        return row
+    qm.upsert_user(user.id, user.username, _user_folder(user), default_quality)
+    return qm.get_user(user.id)
+
+
+def _user_cfg(qm: QueueManager, cfg: dict, user) -> dict:
+    """The calling user's cfg: output_dir resolved to their subfolder."""
+    row = _get_or_create_user(qm, user, cfg["quality"])
+    return user_cfg(cfg, row["folder"])
 
 
 def require_auth(func):
@@ -132,6 +175,15 @@ async def status_cmd(update: Update, context) -> None:
     s = await asyncio.to_thread(qm.get_status)
     history = await asyncio.to_thread(qm.get_history, 5)
     running = await asyncio.to_thread(qm.get_running)
+    user_names = {
+        r["telegram_user_id"]: (r.get("username") or r["folder"])
+        for r in await asyncio.to_thread(qm.get_users)
+    }
+
+    def _who(item) -> str:
+        uid = item.get("user")
+        name = user_names.get(uid) if uid else None
+        return f" · {esc(name)}" if name else ""
 
     lines = [
         f"📊 <b>Queue Status</b>",
@@ -156,7 +208,7 @@ async def status_cmd(update: Update, context) -> None:
                     pass
             detail = r.get("progress") or "downloading"
             lines.append(
-                f"  #{r['id']} 🔄 {esc(r['query'][:60])}\n"
+                f"  #{r['id']} 🔄 {esc(r['query'][:60])}{_who(r)}\n"
                 f"    {esc(detail)}{elapsed}"
             )
 
@@ -169,7 +221,7 @@ async def status_cmd(update: Update, context) -> None:
             icon = {"done": "✅", "failed": "❌", "running": "🔄", "queued": "⏳"}.get(
                 h["status"], "❓"
             )
-            label = esc(h["query"][:60])
+            label = esc(h["query"][:60]) + _who(h)
             lines.append(f"  #{h['id']} {icon} {label}")
     await update.message.reply_html("\n".join(lines))
 
@@ -184,9 +236,13 @@ async def mkplaylist_cmd(update: Update, context) -> None:
     url = context.args[0]
     name = " ".join(context.args[1:]) if len(context.args) > 1 else None
 
+    qm: QueueManager = context.application.bot_data["queue_manager"]
+    cfg = context.application.bot_data.get("cfg", {})
+    ucfg = _user_cfg(qm, cfg, update.effective_user)
+
     msg = await update.message.reply_html("⏳ Scanning…")
     try:
-        result = await build_m3u8(url, name)
+        result = await build_m3u8(url, name, cfg=ucfg)
         missing = result.get("missing_count", 0)
         parts = [f"✅ <b>Playlist: {esc(result['playlist_name'])}</b>",
                  f"  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
@@ -209,8 +265,10 @@ async def purge_cmd(update: Update, context) -> None:
 
 @require_auth
 async def fixmetadata_cmd(update: Update, context) -> None:
+    qm: QueueManager = context.application.bot_data["queue_manager"]
     cfg = context.application.bot_data["cfg"]
-    root = Path(cfg["output_dir"])
+    ucfg = _user_cfg(qm, cfg, update.effective_user)
+    root = Path(ucfg["output_dir"])
 
     if not context.args:
         folder = root
@@ -255,6 +313,35 @@ async def fixmetadata_cmd(update: Update, context) -> None:
 
 
 @require_auth
+async def quality_cmd(update: Update, context) -> None:
+    qm: QueueManager = context.application.bot_data["queue_manager"]
+    user = update.effective_user
+    row = _get_or_create_user(qm, user, context.application.bot_data.get("cfg", {}).get("quality", "LOSSLESS"))
+
+    if not context.args:
+        current = row.get("quality", "LOSSLESS")
+        lines = [f"🎚️ <b>Quality</b> (current: {esc(current)})", "  Available:"]
+        lines += [f"  • <code>{esc(q)}</code>" for q in QUALITY_CHOICES]
+        lines.append("  Send /quality &lt;value&gt; to change.")
+        await update.message.reply_html("\n".join(lines))
+        return
+
+    value = " ".join(context.args).strip().upper()
+    if value not in QUALITY_CHOICES:
+        await update.message.reply_html(
+            f"❌ Unknown quality <code>{esc(value)}</code>\n\n"
+            f"Available: {', '.join(esc(q) for q in QUALITY_CHOICES)}"
+        )
+        return
+
+    await asyncio.to_thread(qm.set_user_quality, user.id, value)
+    await update.message.reply_html(
+        f"✅ <b>Quality set to {esc(value)}</b>\n"
+        f"  Applies to new downloads."
+    )
+
+
+@require_auth
 async def handle_message(update: Update, context) -> None:
     text = update.message.text.strip()
     qm: QueueManager = context.application.bot_data["queue_manager"]
@@ -268,8 +355,12 @@ async def handle_message(update: Update, context) -> None:
         )
         return
 
+    user = update.effective_user
+    cfg = context.application.bot_data.get("cfg", {})
+    _get_or_create_user(qm, user, cfg.get("quality", "LOSSLESS"))
+
     item_id, is_new = await asyncio.to_thread(
-        qm.enqueue_unique, input_type, value,
+        qm.enqueue_unique, input_type, value, user.id,
     )
     if not is_new:
         await update.message.reply_html(
@@ -358,8 +449,8 @@ def main() -> None:
     if not TOKEN:
         print("TELEGRAM_BOT_TOKEN not set")
         sys.exit(1)
-    if not ALLOWED_USER_ID:
-        print("TELEGRAM_ALLOWED_USER_ID not set")
+    if not ALLOWED_USER_IDS:
+        print("TELEGRAM_ALLOWED_USER_IDS (or TELEGRAM_ALLOWED_USER_ID) not set")
         sys.exit(1)
 
     logger = setup_logger()
@@ -392,6 +483,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
+    application.add_handler(CommandHandler("quality", quality_cmd))
     application.add_handler(CommandHandler("purge", purge_cmd))
     application.add_handler(CommandHandler("mkplaylist", mkplaylist_cmd))
     application.add_handler(CommandHandler("fixmetadata", fixmetadata_cmd))

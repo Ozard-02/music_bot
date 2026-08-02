@@ -7,11 +7,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
 from flac_utils import embed_cover, fetch_cover
-from track_utils import prune_empty_parents, spotiflac_track_relative_path, track_relative_path
+from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    """Typed outcome of a download job (tracks/albums/playlists)."""
+
+    ok: int = 0
+    skipped: int = 0
+    failed: int = 0
+    failed_tracks: list[tuple] = field(default_factory=list)
+    gave_up_tracks: list[tuple] = field(default_factory=list)
+    total: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 async def run_url(
@@ -21,7 +37,7 @@ async def run_url(
     skip_titles: set[str] | None = None,
     progress_cb=None,
     failure_cb=None,
-) -> dict:
+) -> DownloadResult:
     from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
@@ -51,7 +67,7 @@ async def run_url(
                 logger.exception("Track metadata failed for %s", url)
                 if failure_cb:
                     failure_cb("", url, "metadata_error")
-                return {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("", url, "metadata_error")], "total": 1}
+                return DownloadResult(failed=1, failed_tracks=[("", url, "metadata_error")], total=1)
         else:
             _, tracks = await client.get_playlist(url)
         return await _download_tracks(client, tracks, cfg, logger, skip_titles, progress_cb, failure_cb)
@@ -101,29 +117,9 @@ async def _download_tracks(
     skip_titles: set[str] | None = None,
     progress_cb=None,
     failure_cb=None,
-) -> dict:
-    seen = set()
-    unique = []
-    for t in tracks:
-        if t.id not in seen:
-            seen.add(t.id)
-            unique.append(t)
-    total = len(unique)
-
-    existing = []
-    missing = []
-    given_up = []
-    skip_titles = skip_titles or set()
-    for t in unique:
-        rel = track_relative_path(t, cfg)
-        full = Path(cfg["output_dir"]) / rel
-        if full.exists():
-            existing.append(t)
-        elif t.title in skip_titles:
-            given_up.append(t)
-        else:
-            missing.append(t)
-
+) -> DownloadResult:
+    existing, given_up, missing = partition_tracks(tracks, cfg, skip_titles)
+    total = len(existing) + len(given_up) + len(missing)
     existing_count = len(existing)
     given_up_count = len(given_up)
     logger.info(
@@ -133,12 +129,11 @@ async def _download_tracks(
 
     if not missing:
         logger.info("All %d tracks already on disk — nothing to do", total)
-        return {
-            "ok": 0, "skipped": existing_count, "failed": 0,
-            "failed_tracks": [],
-            "gave_up_tracks": [(t.id, t.title, "gave_up") for t in given_up],
-            "total": total,
-        }
+        return DownloadResult(
+            skipped=existing_count,
+            gave_up_tracks=[(t.id, t.title, "gave_up") for t in given_up],
+            total=total,
+        )
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
     failed_list = []
@@ -171,11 +166,11 @@ async def _download_tracks(
     ok = len(missing) - failed
     skipped = existing_count
     logger.info("PASS — %d ok, %d skipped, %d failed", ok, skipped, failed)
-    return {
-        "ok": ok,
-        "skipped": skipped,
-        "failed": failed,
-        "failed_tracks": [(t.id, t.title, "download_failed") for t in failed_list],
-        "gave_up_tracks": [(t.id, t.title, "gave_up") for t in given_up],
-        "total": total,
-    }
+    return DownloadResult(
+        ok=ok,
+        skipped=skipped,
+        failed=failed,
+        failed_tracks=[(t.id, t.title, "download_failed") for t in failed_list],
+        gave_up_tracks=[(t.id, t.title, "gave_up") for t in given_up],
+        total=total,
+    )
