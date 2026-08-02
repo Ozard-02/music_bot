@@ -149,7 +149,8 @@ def require_auth(func):
 @require_auth
 async def start(update: Update, _context) -> None:
     await update.message.reply_html(
-        "🎵 <b>SpotiLoop Bot</b>\n\n" + format_help()
+        "🎵 <b>SpotiLoop Bot</b>\n"
+        "  Turns Spotify links into FLAC files.\n\n" + format_help()
     )
 
 
@@ -187,15 +188,16 @@ async def status_cmd(update: Update, context) -> None:
 
     lines = [
         f"📊 <b>Queue Status</b>",
-        f"  Queued: {s['queued']}",
-        f"  Running: {s['running']}",
-        f"  Done: {s['done']}",
-        f"  Failed: {s['failed']}",
+        f"  ⏳ Queued: {s['queued']}",
+        f"  🔄 Running: {s['running']}",
+        f"  ✅ Done: {s['done']}",
+        f"  ❌ Failed: {s['failed']}",
     ]
 
     if running:
         now = datetime.now(timezone.utc)
-        lines.append("\n<b>Running:</b>")
+        lines.append("")
+        lines.append("<b>Running:</b>")
         for r in running:
             started = r.get("started_at")
             elapsed = ""
@@ -206,15 +208,16 @@ async def status_cmd(update: Update, context) -> None:
                     )
                 except (ValueError, TypeError):
                     pass
-            detail = r.get("progress") or "downloading"
+            detail = r.get("progress") or "downloading\u2026"
             lines.append(
-                f"  #{r['id']} 🔄 {esc(r['query'][:60])}{_who(r)}\n"
+                f"  #{r['id']} 🔄 <b>{esc(r['query'][:60])}</b>{_who(r)}\n"
                 f"    {esc(detail)}{elapsed}"
             )
 
     done_ids = {r["id"] for r in running}
     if history:
-        lines.append("\n<b>Recent:</b>")
+        lines.append("")
+        lines.append("<b>Recent:</b>")
         for h in history:
             if h["id"] in done_ids:
                 continue
@@ -222,7 +225,7 @@ async def status_cmd(update: Update, context) -> None:
                 h["status"], "❓"
             )
             label = esc(h["query"][:60]) + _who(h)
-            lines.append(f"  #{h['id']} {icon} {label}")
+            lines.append(f"  #{h['id']} {icon} <b>{label}</b>")
     await update.message.reply_html("\n".join(lines))
 
 
@@ -230,7 +233,8 @@ async def status_cmd(update: Update, context) -> None:
 async def mkplaylist_cmd(update: Update, context) -> None:
     if not context.args:
         await update.message.reply_html(
-            "Usage: /mkplaylist &lt;playlist_url&gt; [playlist_name]"
+            "📋 <b>Usage:</b> /mkplaylist &lt;playlist_url&gt; [playlist_name]\n"
+            "  Builds a .m3u8 from tracks already on disk (no downloads)."
         )
         return
     url = context.args[0]
@@ -240,20 +244,20 @@ async def mkplaylist_cmd(update: Update, context) -> None:
     cfg = context.application.bot_data.get("cfg", {})
     ucfg = _user_cfg(qm, cfg, update.effective_user)
 
-    msg = await update.message.reply_html("⏳ Scanning…")
+    msg = await update.message.reply_html("⏳ <b>Building playlist\u2026</b>")
     try:
         result = await build_m3u8(url, name, cfg=ucfg)
         missing = result.get("missing_count", 0)
         parts = [f"✅ <b>Playlist: {esc(result['playlist_name'])}</b>",
                  f"  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
         if missing:
-            parts.append(f"  ❌ {missing} missing — see <code>{esc(result['missing_log_path'])}</code>")
+            parts.append(f"  ❌ {missing} missing \u2014 see <code>{esc(result['missing_log_path'])}</code>")
         if result.get("cover_path"):
             parts.append("  🖼️ Cover saved")
-        parts.append(f"  <code>{esc(result['path'])}</code>")
+        parts.append(f"  📄 <code>{esc(result['path'])}</code>")
         await msg.edit_text("\n".join(parts), parse_mode="HTML")
     except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
+        await msg.edit_text(f"❌ <b>Error:</b> <code>{esc(e)}</code>", parse_mode="HTML")
 
 
 @require_auth
@@ -284,12 +288,15 @@ async def fixmetadata_cmd(update: Update, context) -> None:
     from scripts.fix_metadata import fix_library
 
     msg = await update.message.reply_html(
-        f"⏳ Fixing metadata in <code>{esc(folder)}</code>…"
+        f"⏳ <b>Fix metadata</b>\n  Scanning <code>{esc(folder)}</code>\u2026"
     )
 
     async def progress(current, total, text):
+        pct = f" \u00b7 {current * 100 // total}%" if total else ""
         await msg.edit_text(
-            f"⏳ <b>Fix metadata</b> {current}/{total}\n<code>{esc(text[:200])}</code>"
+            f"⏳ <b>Fix metadata</b> {current}/{total}{pct}\n"
+            f"  <code>{esc(text[:200])}</code>",
+            parse_mode="HTML",
         )
 
     try:
@@ -309,7 +316,7 @@ async def fixmetadata_cmd(update: Update, context) -> None:
                 lines.append(f"  <code>{esc(Path(f).name)} → {esc(Path(f).parent.name)}/</code>")
         await msg.edit_text("\n".join(lines), parse_mode="HTML")
     except Exception as e:
-        await msg.edit_text(f"❌ Fix metadata error: {e}")
+        await msg.edit_text(f"❌ <b>Fix metadata error:</b> <code>{esc(e)}</code>", parse_mode="HTML")
 
 
 @require_auth
@@ -320,8 +327,11 @@ async def quality_cmd(update: Update, context) -> None:
 
     if not context.args:
         current = row.get("quality", "LOSSLESS")
-        lines = [f"🎚️ <b>Quality</b> (current: {esc(current)})", "  Available:"]
-        lines += [f"  • <code>{esc(q)}</code>" for q in QUALITY_CHOICES]
+        lines = [
+            f"🎚️ <b>Quality</b> \u2014 current: <code>{esc(current)}</code>",
+            "  Available:",
+        ]
+        lines += [f"  {'✅' if q == current else '\u2022'} <code>{esc(q)}</code>" for q in QUALITY_CHOICES]
         lines.append("  Send /quality &lt;value&gt; to change.")
         await update.message.reply_html("\n".join(lines))
         return
@@ -329,15 +339,15 @@ async def quality_cmd(update: Update, context) -> None:
     value = " ".join(context.args).strip().upper()
     if value not in QUALITY_CHOICES:
         await update.message.reply_html(
-            f"❌ Unknown quality <code>{esc(value)}</code>\n\n"
-            f"Available: {', '.join(esc(q) for q in QUALITY_CHOICES)}"
+            f"❌ <b>Unknown quality</b> <code>{esc(value)}</code>\n\n"
+            f"  Available: {', '.join(f'<code>{esc(q)}</code>' for q in QUALITY_CHOICES)}"
         )
         return
 
     await asyncio.to_thread(qm.set_user_quality, user.id, value)
     await update.message.reply_html(
-        f"✅ <b>Quality set to {esc(value)}</b>\n"
-        f"  Applies to new downloads."
+        f"✅ <b>Quality set to <code>{esc(value)}</code></b>\n"
+        f"  Applies to new downloads only."
     )
 
 

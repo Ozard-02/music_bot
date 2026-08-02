@@ -128,7 +128,7 @@ class TestFixAlbumFolder:
         opts = kwargs["opts"]
         assert opts.enrich is True
         assert opts.enrich_providers == ["apple", "deezer", "soundcloud"]
-        assert opts.embed_lyrics is False
+        assert opts.embed_lyrics is True
         # no file moved
         assert sorted(p.name for p in folder.iterdir()) == [
             "Madame - CLITO.flac", "Madame - MAREA.flac",

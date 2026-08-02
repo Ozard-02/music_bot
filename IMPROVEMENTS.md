@@ -6,6 +6,8 @@
 - [x] **`bot.py`** — Telegram bot via `python-telegram-bot`
   - [x] `/start` — welcome + instructions
   - [x] `/help` — format reminder
+  - [x] Messages consistently formatted (emoji headers, bold titles, `<code>` blocks, 2-space indent)
+  - [x] `/fixmetadata` progress shows `N/M` + live `%` and renders HTML (no raw `<b>` tags)
   - [x] Link handler — validate Spotify URL, add to queue, reply "Queued (#N)"
   - [x] Search handler — `"Artist - Album"`, `"Album - Song"`, `"Artist - Song"`
   - [x] `/status` — current download + queue position + history stats
