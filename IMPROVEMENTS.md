@@ -22,7 +22,7 @@
   - [x] `queue` table: id, input_type, query, status, timestamps, result counts, error
   - [x] `failed_tracks` table: per-track failure logging with FK → queue
   - [x] Survives restarts: `_init_db()` resets stranded `running` items → `queued` on startup
-  - [x] Methods: `enqueue()`, `find_existing()`, `dequeue()`, `requeue()`, `mark_done()`, `mark_failed()`, `purge_queued()`, `log_failed_track()`, `get_failed_tracks()`, `get_status()`, `get_history()`
+  - [x] Methods: `enqueue_unique()`, `dequeue()`, `requeue()`, `mark_done()`, `mark_failed()`, `purge_all()`, `log_failed_track()`, `get_failed_tracks()`, `get_status()`, `get_history()`
 
 ### Worker
 - [x] **`worker.py`** — sequential queue processor
@@ -32,6 +32,7 @@
   - [x] Logs per-track failures to `failed_tracks` table
   - [x] Requeues with retry counter (up to 50× or 24h), then permanent fail
   - [x] Sends Telegram notification on completion (summary: X ok, Y skipped, Z failed)
+  - [x] Whole-job timeout is graceful: `asyncio.TimeoutError` → requeue with 30-min floor + "⏳ Still downloading" (never "Internal error"); per-track failures logged live via `failure_cb` so give-up advances even when a job times out; timeout budget from `cfg.max_download_timeout` (default 8h)
 
 ### M3U8
 - [x] **`m3u8.py`** — standalone .m3u8 generator for Spotify playlists
@@ -143,4 +144,4 @@ next time: pre-check finds it → skip ✓
 - [x] Removed `track_file_exists` — relies on SpotiFLAC internal skip detection
 - [x] MusicBrainz tag strip — patched tagger.py to avoid Navidrome misgrouping
 - [x] Cover fix — `enrich_providers` excludes qobuz; `fix_covers.py` re-embeds Spotify covers
-- [x] Add tidal to `enrich_providers` — Tidal provides 1280×1280 covers (vs SoundCloud 500×500)
+- [x] Add tidal to `enrich_providers` — Tidal provides 1280×1280 covers (vs SoundCloud 500×500). (Tidal later dropped from downloads — enrich is now `["apple","deezer","soundcloud"]`.)

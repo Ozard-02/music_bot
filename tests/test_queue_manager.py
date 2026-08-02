@@ -12,14 +12,14 @@ from queue_manager import QueueManager
 class TestQueueManager:
     def test_enqueue_returns_increasing_ids(self, queue_manager: QueueManager):
         qm = queue_manager
-        id1 = qm.enqueue("link", "url1")
-        id2 = qm.enqueue("link", "url2")
+        id1, _ = qm.enqueue_unique("link", "url1")
+        id2, _ = qm.enqueue_unique("link", "url2")
         assert id1 == 1
         assert id2 == 2
 
     def test_dequeue_returns_item_and_marks_running(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("search", "Artist - Album")
+        qm.enqueue_unique("search", "Artist - Album")
         item = qm.dequeue()
         assert item is not None
         assert item["query"] == "Artist - Album"
@@ -33,24 +33,24 @@ class TestQueueManager:
 
     def test_dequeue_respects_fifo_order(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "first")
-        qm.enqueue("link", "second")
+        qm.enqueue_unique("link", "first")
+        qm.enqueue_unique("link", "second")
         item = qm.dequeue()
         assert item["query"] == "first"
 
     def test_dequeue_skips_already_running(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "first")
-        qm.enqueue("link", "second")
+        qm.enqueue_unique("link", "first")
+        qm.enqueue_unique("link", "second")
         qm.dequeue()  # marks first as running
         item = qm.dequeue()
         assert item["query"] == "second"
 
     def test_dequeue_skips_done_and_failed(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "good")
-        qm.enqueue("link", "bad")
-        qm.enqueue("link", "next")
+        qm.enqueue_unique("link", "good")
+        qm.enqueue_unique("link", "bad")
+        qm.enqueue_unique("link", "next")
         item1 = qm.dequeue()
         qm.mark_done(item1["id"], 1, 0, 0)
         item2 = qm.dequeue()
@@ -60,7 +60,7 @@ class TestQueueManager:
 
     def test_requeue_increments_retries(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         qm.requeue(item["id"])
         item2 = qm.dequeue()
@@ -69,7 +69,7 @@ class TestQueueManager:
 
     def test_requeue_multiple_times(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         for _ in range(3):
             item = qm.dequeue()
             qm.requeue(item["id"])
@@ -78,7 +78,7 @@ class TestQueueManager:
 
     def test_mark_done_sets_status_and_counts(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         qm.mark_done(item["id"], 5, 2, 0)
         h = qm.get_history(10)
@@ -91,7 +91,7 @@ class TestQueueManager:
 
     def test_mark_failed_sets_status_and_error(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         qm.mark_failed(item["id"], "Something went wrong")
         h = qm.get_history(10)
@@ -103,8 +103,8 @@ class TestQueueManager:
     def test_get_status_counts(self, queue_manager: QueueManager):
         qm = queue_manager
         assert qm.get_status()["queued"] == 0
-        qm.enqueue("link", "a")
-        qm.enqueue("link", "b")
+        qm.enqueue_unique("link", "a")
+        qm.enqueue_unique("link", "b")
         assert qm.get_status()["queued"] == 2
         item = qm.dequeue()
         s = qm.get_status()
@@ -118,13 +118,13 @@ class TestQueueManager:
     def test_get_status_next_id(self, queue_manager: QueueManager):
         qm = queue_manager
         assert qm.get_status()["next_id"] is None
-        qm.enqueue("link", "a")
+        qm.enqueue_unique("link", "a")
         assert qm.get_status()["next_id"] == 1
 
     def test_get_history_returns_newest_first(self, queue_manager: QueueManager):
         qm = queue_manager
         for i in range(5):
-            qm.enqueue("link", f"url{i}")
+            qm.enqueue_unique("link", f"url{i}")
         h = qm.get_history(3)
         assert len(h) == 3
         assert h[0]["id"] == 5
@@ -133,8 +133,8 @@ class TestQueueManager:
 
     def test_get_running_returns_only_running(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "a")
-        qm.enqueue("link", "b")
+        qm.enqueue_unique("link", "a")
+        qm.enqueue_unique("link", "b")
         assert qm.get_running() == []
         first = qm.dequeue()
         second = qm.dequeue()
@@ -145,7 +145,7 @@ class TestQueueManager:
 
     def test_set_progress_updates_row(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "a")
+        qm.enqueue_unique("link", "a")
         item = qm.dequeue()
         assert item["progress"] is None
         qm.set_progress(item["id"], "2/10 · Now: Song X")
@@ -153,7 +153,7 @@ class TestQueueManager:
 
     def test_progress_cleared_on_done(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "a")
+        qm.enqueue_unique("link", "a")
         item = qm.dequeue()
         qm.set_progress(item["id"], "5/5 · Now: Last")
         qm.mark_done(item["id"], 5, 0, 0)
@@ -161,7 +161,7 @@ class TestQueueManager:
 
     def test_requeue_beyond_max_retries(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         for _ in range(MAX_QUEUE_RETRIES + 5):
             qm.requeue(item["id"])
@@ -170,7 +170,7 @@ class TestQueueManager:
 
     def test_log_failed_track(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         qm.log_failed_track(item["id"], "Broken Song", "Qobuz 500")
 
@@ -182,8 +182,8 @@ class TestQueueManager:
 
     def test_get_failed_tracks_all(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "a")
-        qm.enqueue("link", "b")
+        qm.enqueue_unique("link", "a")
+        qm.enqueue_unique("link", "b")
         i1 = qm.dequeue()
         i2 = qm.dequeue()
         qm.log_failed_track(i1["id"], "Song A", "err")
@@ -203,7 +203,7 @@ class TestQueueManager:
 
     def test_get_give_up_titles(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         for _ in range(10):
             qm.log_failed_track(item["id"], "Broken Song", "Qobuz 500")
@@ -214,7 +214,7 @@ class TestQueueManager:
 
     def test_get_give_up_titles_below_threshold(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         qm.log_failed_track(item["id"], "Almost", "Deezer 404")
 
@@ -223,7 +223,7 @@ class TestQueueManager:
 
     def test_log_failed_track_without_error(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         qm.log_failed_track(item["id"], "Track")
         tracks = qm.get_failed_tracks(item_id=item["id"])
@@ -231,7 +231,7 @@ class TestQueueManager:
 
     def test_failed_tracks_foreign_key(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "url")
+        qm.enqueue_unique("link", "url")
         item = qm.dequeue()
         qm.log_failed_track(item["id"], "Song", "err")
         # Verify it persists after reopening (temp file)
@@ -281,10 +281,10 @@ class TestQueueManager:
 
     def test_purge_all_removes_everything(self, queue_manager: QueueManager):
         qm = queue_manager
-        qm.enqueue("link", "a")
+        qm.enqueue_unique("link", "a")
         item = qm.dequeue()
         qm.mark_done(item["id"], 1, 0, 0)
-        qm.enqueue("link", "b")
+        qm.enqueue_unique("link", "b")
         count = qm.purge_all()
         assert count == 2
         s = qm.get_status()
@@ -300,8 +300,8 @@ class TestQueueManager:
         """Simulate bot restart — stranded 'running' items become 'queued'."""
         db = str(tmp_path / "test_restart.db")
         qm1 = QueueManager(db)
-        qm1.enqueue("link", "url1")
-        qm1.enqueue("link", "url2")
+        qm1.enqueue_unique("link", "url1")
+        qm1.enqueue_unique("link", "url2")
         item = qm1.dequeue()  # url1 becomes running
         assert qm1.get_status()["running"] == 1
         del qm1  # simulate kill — no explicit close
@@ -321,8 +321,8 @@ class TestQueueManager:
 
         def add():
             try:
-                for _ in range(50):
-                    qm.enqueue("link", "url")
+                for i in range(50):
+                    qm.enqueue_unique("link", f"url-{i}")
             except Exception as e:
                 errors.append(e)
 
@@ -334,7 +334,7 @@ class TestQueueManager:
 
         assert not errors
         s = qm.get_status()
-        assert s["queued"] == 200
+        assert s["queued"] == 50
 
     def test_concurrent_enqueue_unique(self, queue_manager: QueueManager):
         """Verify all threads get same id and only one is_new=True."""

@@ -73,7 +73,7 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_success_marks_done(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
         with patch("worker.run_url", return_value={"ok": 5, "skipped": 2, "failed": 0, "total": 7}):
@@ -92,13 +92,14 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_progress_cb_wired_into_run_url(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
         captured = {}
 
-        def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None):
+        def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
             captured["progress_cb"] = progress_cb
+            captured["failure_cb"] = failure_cb
             return {"ok": 1, "skipped": 0, "failed": 0, "total": 1}
 
         with patch("worker.run_url", side_effect=fake_run_url):
@@ -111,9 +112,98 @@ class TestWorkerProcess:
         spy.assert_called_once_with(item["id"], "3/10 · Now: Song X")
 
     @pytest.mark.asyncio
+    async def test_failure_cb_logs_failed_tracks_live(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        captured = {}
+
+        def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
+            captured["failure_cb"] = failure_cb
+            return {"ok": 0, "skipped": 0, "failed": 2, "failed_tracks": [], "total": 2}
+
+        with patch("worker.run_url", side_effect=fake_run_url):
+            await worker._process(item)
+
+        fb = captured["failure_cb"]
+        assert fb is not None
+        fb("Broken Song", "Qobuz 500")
+        fb("Another Fail", "Tidal 410")
+        tracks = qm.get_failed_tracks(item_id=item["id"])
+        assert len(tracks) == 2
+        titles = {t["track_title"] for t in tracks}
+        assert titles == {"Broken Song", "Another Fail"}
+
+    @pytest.mark.asyncio
+    async def test_timeout_requeues_not_fails(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        async def slow_run_url(*args, **kwargs):
+            await asyncio.sleep(0.2)
+            return {"ok": 1, "skipped": 0, "failed": 0, "total": 1}
+
+        worker._cfg = dict(worker._cfg, max_download_timeout=0.05)
+        with patch("worker.run_url", new=slow_run_url):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["failed"] == 0
+        assert s["queued"] == 1
+        item_from_db = qm.get_item(item["id"])
+        assert item_from_db["retries"] == 1
+        assert item_from_db["retry_at"] is not None
+
+        bot.send_message.assert_awaited()
+        msg = bot.send_message.call_args[1]["text"]
+        assert "Still downloading" in msg
+
+    @pytest.mark.asyncio
+    async def test_timeout_persists_failures_from_failure_cb(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        async def slow_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
+            failure_cb("Broken Song", "Qobuz 500")
+            await asyncio.sleep(0.2)
+            return {"ok": 0, "skipped": 0, "failed": 0, "failed_tracks": [], "total": 1}
+
+        worker._cfg = dict(worker._cfg, max_download_timeout=0.05)
+        with patch("worker.run_url", new=slow_run_url):
+            await worker._process(item)
+
+        tracks = qm.get_failed_tracks(item_id=item["id"])
+        assert len(tracks) == 1
+        assert tracks[0]["track_title"] == "Broken Song"
+
+    @pytest.mark.asyncio
+    async def test_timeout_after_max_retries_fails(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        for _ in range(MAX_QUEUE_RETRIES):
+            item = qm.dequeue()
+            qm.requeue(item["id"])
+        item = qm.dequeue()
+
+        async def slow_run_url(*args, **kwargs):
+            await asyncio.sleep(0.2)
+            return {"ok": 1, "skipped": 0, "failed": 0, "total": 1}
+
+        worker._cfg = dict(worker._cfg, max_download_timeout=0.05)
+        with patch("worker.run_url", new=slow_run_url):
+            await worker._process(item)
+
+        s = qm.get_status()
+        assert s["failed"] == 1
+        assert s["queued"] == 0
+
+    @pytest.mark.asyncio
     async def test_success_sends_correct_message(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
         with patch("worker.run_url", return_value={"ok": 3, "skipped": 0, "failed": 0, "total": 3}):
@@ -125,7 +215,7 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_failure_requeues_within_limits(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
         with patch("worker.run_url", return_value={
@@ -152,7 +242,7 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_track_gives_up_after_max_attempts(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
         for _ in range(MAX_TRACK_RETRIES):
@@ -174,7 +264,7 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_requeues_when_other_tracks_still_trying(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
         for _ in range(MAX_TRACK_RETRIES):
@@ -197,7 +287,7 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_max_retries_permanent_fail(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         for _ in range(MAX_QUEUE_RETRIES):
             item = qm.dequeue()
             qm.requeue(item["id"])
@@ -216,7 +306,7 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_exception_during_download_fails_item(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
         with patch("worker.run_url", side_effect=RuntimeError("Connection failed")):
@@ -233,17 +323,15 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_logs_failed_tracks_to_db(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
 
-        with patch("worker.run_url", return_value={
-            "ok": 0, "skipped": 0, "failed": 2,
-            "failed_tracks": [
-                ("id1", "Broken Song", "Qobuz 500"),
-                ("id2", "Another Fail", "Tidal 410"),
-            ],
-            "total": 2,
-        }):
+        def fake_run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None):
+            failure_cb("Broken Song", "Qobuz 500")
+            failure_cb("Another Fail", "Tidal 410")
+            return {"ok": 0, "skipped": 0, "failed": 2, "failed_tracks": [], "total": 2}
+
+        with patch("worker.run_url", side_effect=fake_run_url):
             await worker._process(item)
 
         tracks = qm.get_failed_tracks(item_id=item["id"])
@@ -255,7 +343,7 @@ class TestWorkerProcess:
     @pytest.mark.asyncio
     async def test_overnight_timeout_gives_up(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", "https://open.spotify.com/track/abc")
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
         old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
         item["created_at"] = old
@@ -280,7 +368,7 @@ class TestNotificationSafety:
     @pytest.mark.asyncio
     async def test_display_with_special_chars_is_escaped(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", self.TRACK)
+        qm.enqueue_unique("link", self.TRACK)
         item = qm.dequeue()
         worker._resolve = AsyncMock(return_value=(self.TRACK, "Guns N' Roses & Friends"))
 
@@ -298,7 +386,7 @@ class TestNotificationSafety:
     @pytest.mark.asyncio
     async def test_send_failure_does_not_flip_done_to_failed(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", self.TRACK)
+        qm.enqueue_unique("link", self.TRACK)
         item = qm.dequeue()
         bot.send_message.side_effect = RuntimeError("Telegram parse error")
 
@@ -312,7 +400,7 @@ class TestNotificationSafety:
     @pytest.mark.asyncio
     async def test_send_failure_does_not_crash_requeue_path(self, worker, bot):
         qm = worker._queue
-        qm.enqueue("link", self.TRACK)
+        qm.enqueue_unique("link", self.TRACK)
         item = qm.dequeue()
         bot.send_message.side_effect = RuntimeError("Telegram network error")
 

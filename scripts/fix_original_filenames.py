@@ -23,7 +23,7 @@ from mutagen.flac import FLAC
 
 from config import load_config
 from flac_utils import iter_flacs
-from track_utils import sanitize
+from track_utils import prune_empty_parents, sanitize
 
 log = logging.getLogger("fix_original_filenames")
 
@@ -86,14 +86,7 @@ def main(dry_run: bool = False):
             os.rename(fpath, target)
             log.info("  RENAMED\n    %s\n    -> %s", fpath, target)
             renamed += 1
-
-            parent = os.path.dirname(fpath)
-            while parent != cfg["output_dir"]:
-                try:
-                    os.rmdir(parent)
-                except OSError:
-                    break
-                parent = os.path.dirname(parent)
+            prune_empty_parents(Path(fpath), Path(cfg["output_dir"]))
         except Exception as e:
             log.error("  FAIL %s — %s", fpath, e)
             errors += 1

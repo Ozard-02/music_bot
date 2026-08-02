@@ -87,9 +87,10 @@ def best_track_match(tracks: list, artist_hint: str = "", title_hint: str = ""):
     """Return the search result that best matches the hints, else the first.
 
     `artist_hint` matches against the track's artists (substring, case-
-    insensitive); `title_hint` matches exactly against the title.  Falls back
+    insensitive); `title_hint` matches exactly against the title.      Falls back
     to `tracks[0]`, or None if there are no results.  Shared by the resolver
-    and the maintenance scripts (fix_metadata, backfill_urls, retag_missing).
+    and the maintenance scripts (fix_metadata and the archived
+    backfill_urls/retag_missing).
     """
     artist = (artist_hint or "").strip().lower()
     title = (title_hint or "").strip().lower()

@@ -61,3 +61,14 @@ def get_jpeg_dimensions(data: bytes) -> tuple[int, int]:
         i += 2 + seg_len
     return (0, 0)
 
+
+def prune_empty_parents(path: Path, root: Path) -> None:
+    """Remove empty ancestor directories of `path` up to (but excluding) `root`."""
+    parent = path.parent
+    while parent != root:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+

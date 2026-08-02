@@ -30,8 +30,9 @@ def _run_url_sync(
     logger: logging.Logger,
     skip_titles: set[str] | None = None,
     progress_cb=None,
+    failure_cb=None,
 ) -> dict:
-    return asyncio.run(run_url(url, cfg, logger, skip_titles, progress_cb))
+    return asyncio.run(run_url(url, cfg, logger, skip_titles, progress_cb, failure_cb))
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,7 @@ class Worker:
         self._max_parallel = max_parallel
         self._shutdown = False
         self._tasks: set[asyncio.Task] = set()
+        self._active: dict[int, int] = {}
 
     async def run(self):
         self._logger.info("Worker started (max_parallel=%d)", self._max_parallel)
@@ -154,10 +156,18 @@ class Worker:
 
     async def _run_with_sem(self, item: dict):
         task = asyncio.current_task()
+        item_id = item["id"]
+        if item_id in self._active:
+            self._logger.info("#%d: already in flight, deferring", item_id)
+            await asyncio.to_thread(self._queue.requeue, item_id, 1800)
+            self._sem.release()
+            return
+        self._active[item_id] = item.get("retries", 0)
         self._tasks.add(task)
         try:
             await self._process(item)
         finally:
+            self._active.pop(item_id, None)
             self._tasks.discard(task)
             self._sem.release()
             self._wake_event.set()
@@ -197,18 +207,20 @@ class Worker:
             def progress_cb(done, total, title):
                 self._queue.set_progress(item["id"], f"{done}/{total} · Now: {title}")
 
-            result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _run_url_sync, url, self._cfg, self._logger, skip_titles, progress_cb,
-                ),
-                timeout=MAX_DOWNLOAD_TIMEOUT,
-            )
+            def failure_cb(title, err):
+                self._queue.log_failed_track(item["id"], title, err)
 
-            if result["failed"] > 0:
-                for _track_id, title, err in result.get("failed_tracks", []):
-                    await asyncio.to_thread(
-                        self._queue.log_failed_track, item["id"], title, err,
-                    )
+            timeout = self._cfg.get("max_download_timeout", MAX_DOWNLOAD_TIMEOUT)
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _run_url_sync, url, self._cfg, self._logger, skip_titles, progress_cb, failure_cb,
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                await self._handle_timeout(item, display)
+                return
 
             if result["failed"] == 0:
                 await self._handle_no_failures(item, display, result)
@@ -225,6 +237,32 @@ class Worker:
     async def _handle_no_failures(self, item: dict, display: str, result: dict):
         await self._mark_done_and_notify(
             item, display, result, len(result.get("gave_up_tracks", [])),
+        )
+
+    async def _handle_timeout(self, item: dict, display: str):
+        """A whole-job timeout means the download is still running in the
+        background (wait_for can't cancel a thread). Requeue with a delay so
+        the leaked download can finish; the pre-check will skip anything the
+        leaked thread already wrote to disk. Never marks the item failed."""
+        retries = item.get("retries", 0)
+        now = datetime.now(timezone.utc)
+        try:
+            created = datetime.fromisoformat(item["created_at"])
+            age = (now - created).total_seconds()
+        except (ValueError, TypeError, KeyError):
+            age = 0
+
+        if age > MAX_QUEUE_AGE or retries >= MAX_QUEUE_RETRIES:
+            await asyncio.to_thread(self._queue.mark_failed, item["id"], "Timed out in queue")
+            await self._notify(
+                f"❌ <b>{esc(display)}</b>\n  ⏰ In queue over 24h — gave up",
+            )
+            return
+
+        delay = max(1800, min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries)))
+        await asyncio.to_thread(self._queue.requeue, item["id"], delay)
+        await self._notify(
+            f"⏳ <b>{esc(display)}</b>\n  Still downloading, will retry (#{item['id']}, attempt {retries + 1}/{MAX_QUEUE_RETRIES})",
         )
 
     async def _mark_done_and_notify(self, item: dict, display: str, result: dict, given_up: int):

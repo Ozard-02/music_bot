@@ -13,7 +13,6 @@ import builtins
 import logging
 import sys
 import threading
-from contextlib import contextmanager
 
 _CONSOLE_PRINTS = (
     "print_source_banner",
@@ -204,13 +203,6 @@ def silence_spotiflac_loggers() -> None:
             logging.getLogger(name).setLevel(logging.CRITICAL)
     for noisy in ("httpx", "httpcore", "nodriver"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
-
-
-@contextmanager
-def silence_spotiflac():
-    """Idempotent guard — console silencing is installed permanently at import."""
-    install_console_silencing()
-    yield
 
 
 install_console_silencing()

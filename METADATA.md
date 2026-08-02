@@ -85,11 +85,12 @@ rescan (Settings → Scan) so the split albums collapse back into one.
   continues; it never aborts the rest.
 - Filenames are left untouched (except the move into the real album folder).
 
-### Related one-off scripts (in `scripts/`)
+### Related one-off scripts
 
-- `scripts/fix_mb_tags.py` — strips `MUSICBRAINZ_*` from every FLAC in `~/Music`
-  (the same cleanup, offline, but does not retag anything else).
 - `scripts/fix_covers.py` — re-embeds Spotify cover art into every FLAC with a
-  Spotify track URL (same engine as the bot's `/rescan`).
-- `scripts/retag_missing.py` — retags a hardcoded list of tagless files (a manual
-  predecessor of `fix_metadata.py`).
+  Spotify track URL (same engine as `/fixmetadata`'s cover refresh).
+- `scripts/archive/fix_mb_tags.py` — strips `MUSICBRAINZ_*` from every FLAC
+  (the same cleanup, offline, but does not retag anything else); superseded by
+  `/fixmetadata`.
+- `scripts/archive/retag_missing.py` — retags a hardcoded list of tagless files
+  (a manual predecessor of `fix_metadata.py`).

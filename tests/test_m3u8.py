@@ -12,6 +12,7 @@ from m3u8 import (
     load_config,
     write_m3u8,
 )
+from config import MAX_DOWNLOAD_TIMEOUT
 from track_utils import (
     sanitize,
     spotiflac_sanitize,
@@ -270,6 +271,17 @@ class TestLoadConfig:
         with patch("builtins.open", mock_open(read_data="not json")):
             cfg = load_config(logging.getLogger("test"))
         assert cfg["output_dir"] == str(Path.home() / "Music")
+
+    def test_max_download_timeout_default(self):
+        with patch("builtins.open", side_effect=FileNotFoundError):
+            cfg = load_config(logging.getLogger("test"))
+        assert cfg["max_download_timeout"] == MAX_DOWNLOAD_TIMEOUT
+
+    def test_max_download_timeout_override(self):
+        data = json.dumps({"maxDownloadTimeout": 7200})
+        with patch("builtins.open", mock_open(read_data=data)):
+            cfg = load_config(logging.getLogger("test"))
+        assert cfg["max_download_timeout"] == 7200
 
 
 class TestBuildM3u8Async:

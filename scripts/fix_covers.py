@@ -5,7 +5,8 @@ Reads the Spotify track URL from each FLAC's URL tag, fetches the cover
 from Spotify's CDN, and embeds it with proper JPEG width/height so
 Navidrome displays it correctly.
 
-Same feature as the bot's /rescan command (maintenance.rescan_library).
+Thin CLI over maintenance.rescan_library() (also used by the bot's
+/fixmetadata cover refresh).
 """
 
 import asyncio
