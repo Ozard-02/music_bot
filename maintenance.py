@@ -1,6 +1,6 @@
 """Library maintenance: re-embed Spotify cover art into existing FLACs.
 
-Used by the bot's /rescan command and the fix_covers.py CLI script.
+Used by the fix_covers.py CLI script.
 """
 
 from __future__ import annotations

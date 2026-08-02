@@ -8,17 +8,18 @@
 Constants: SERVICES=["qobuz","deezer","amazon"], MAX_CONCURRENT=2,
            PER_TRACK_TIMEOUT=100, PER_TRACK_RETRIES=3,
            MAX_QUEUE_RETRIES=15, MAX_TRACK_RETRIES=10,
-           MAX_DOWNLOAD_TIMEOUT=3600, MAX_QUEUE_AGE=86400
+           MAX_DOWNLOAD_TIMEOUT=28800, MAX_QUEUE_AGE=86400
 
-load_config(logger) → dict               # read ~/.spotiflac/config.json
+load_config(logger) → dict               # read ~/.spotiflac/config.json (incl. maxDownloadTimeout override)
 setup_logger(log_path) → logger          # RotatingFileHandler (5MB×3) + stream
 bridge_community_session(logger)         # copy desktop Tidal session
 ```
 
 ### `downloader.py` — download engine only
 ```
-run_url(url, cfg, logger, skip_titles=None, progress_cb=None) → {ok, skipped, failed, failed_tracks, gave_up_tracks}  ← entry point
+run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None) → {ok, skipped, failed, failed_tracks, gave_up_tracks}  ← entry point
   progress_cb(done, total, title) — called per completed track (via asyncio.to_thread) for live /status
+  failure_cb(title, err)          — called per failed track (live, so give-up advances even if the job times out)
 ├─ parse_spotify_url(url)
 ├─ if "track":
 │  ├─ get_track_metadata(url)
@@ -85,7 +86,6 @@ _patch_musicbrainz()          — runs once at import; no-ops SpotiFLAC's per-tr
   import-copied names in already-imported SpotiFLAC modules (same sweep as
   console silencing). Downloads now match /fixmetadata output out of the box.
 silence_spotiflac_loggers()  — set all SpotiFLAC.* loggers to CRITICAL + httpx/httpcore to WARNING
-silence_spotiflac()          — idempotent guard; silencing is installed permanently at import
 ```
 
 ### `flac_utils.py` — shared FLAC/tag/cover helpers
@@ -103,6 +103,8 @@ sanitize(text, spotiflac_mode=False)  # preserve special chars; only `/` → `�
 spotiflac_sanitize / spotiflac_track_relative_path   # SpotiFLAC's `_`-sanitized variant
 track_relative_path(track, cfg)       # {AlbumArtist}/{Album}/{Artist} - {Title}.flac
 get_jpeg_dimensions(data) → (w, h)    # JPEG SOF0/1/2 scan (0,0 if not JPEG)
+prune_empty_parents(path, root)       # rmdir empty ancestor dirs up to root (shared
+                                      # by downloader rename + fix_original_filenames)
 ```
 
 ## Bot system
@@ -136,20 +138,20 @@ main()
 ```
 QueueManager(db_path)
   Persistent connection (check_same_thread=False) with threading.Lock
-  enqueue(type, query) → id
-  find_existing(type, query) → id | None   # duplicate check
+  enqueue_unique(type, query) → (id, is_new)  # atomic dedup check + insert
   dequeue() → item | None                   # atomically set status='running'
   get_item(id) → item | None                # fetch current DB row
   requeue(id)                               # increment retries, set 'queued' (clears progress)
+  get_next_retry_at() → datetime | None     # earliest retry_at of queued items
   mark_done(id, ok, skipped, failed)        # clears progress
   mark_failed(id, error)                    # clears progress
   set_progress(id, text)                    # live "3/10 · Now: Song" for /status
+  get_status() → {queued, running, done, failed, next_id}
   get_running() → [item, ...]               # status='running' rows
-  purge_all() → count                       # DELETE all rows
   log_failed_track(item_id, title, error)   # per-track failures
   get_failed_tracks(item_id=None, limit=50)
   get_give_up_titles(item_id, threshold) → set   # titles failed ≥ threshold×
-  get_status() → {queued, running, done, failed, next_id}
+  purge_all() → count                       # DELETE all rows
   get_history(limit) → [item, ...]
 
 Tables:
@@ -192,8 +194,11 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     "link"   → url = item.query
     "search" → AsyncSpotiFLAC → resolve_search() → url
     skip_titles = get_give_up_titles(item, MAX_TRACK_RETRIES=10)  # tracks that gave up
-    run_url(url, skip_titles) via asyncio.wait_for(timeout=MAX_DOWNLOAD_TIMEOUT) → result
-    ├─ if any failed → log_failed_track() per track → _handle_failure()
+    run_url(url, skip_titles, progress_cb, failure_cb) via asyncio.wait_for(timeout=cfg.max_download_timeout)
+    ├─ failure_cb → log_failed_track() live, per failed track (give-up advances even on timeout)
+    ├─ asyncio.TimeoutError → _handle_timeout(): requeue w/ delay (floor 30 min) + "⏳ Still downloading"
+    │  (never mark_failed; the leaked thread's tracks get skipped by pre-check on retry)
+    ├─ if any failed → _handle_failure()
     │  └─ decide_failure(item, result, gave_up_titles) → FailureDecision  (pure function)
     │     ├─ "fail" (age >24h)     → mark_failed("Timed out") + _auto_build_m3u8()
     │     ├─ "fail" (retries ≥MAX) → mark_failed("Max retries") + _auto_build_m3u8()
@@ -201,6 +206,8 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     │     └─ "requeue" (delay)     → requeue with exponential backoff
     └─ if all ok → _handle_no_failures(): mark_done + _auto_build_m3u8() + send summary
        (given-up tracks reported separately as "❌ N given up")
+  _run_with_sem(item): in-flight guard via self._active {item_id: retries} — an item already
+    running (or requeued after a timeout, its leaked thread still alive) is deferred 30 min, never duplicated
   _mark_done_and_notify(item, display, result, given_up) — shared completion path
     (mark_done + `_done_message()` + notify + auto-m3u8) for clean success AND all-gave-up partials
     on exception → mark_failed() → send error
@@ -222,11 +229,8 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 
 - `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`, so the **upgraded Spotify cover is embedded** and enrichment covers can't override it; a failed fetch still retags. CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
 - `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
-- `scripts/fix_mb_tags.py` — strip MUSICBRAINZ_* tags from all FLACs in ~/Music
 - `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths (regression-tested, incl. dry-run + empty-dir pruning)
-- `scripts/retag_missing.py` — retag a hardcoded list of tagless files (predecessor of fix_metadata)
-- `scripts/backfill_urls.py` — write Spotify URL tags into FLACs that lack them
-- `scripts/fix_qvc.py` — personal one-off: fix Gemitaiz QVC album metadata (gitignored)
+- `scripts/archive/` — superseded one-off scripts kept for reference: `fix_mb_tags.py` (strip MUSICBRAINZ_* — superseded by `/fixmetadata`), `retag_missing.py` (hardcoded tagless files — predecessor of fix_metadata), `backfill_urls.py` (write Spotify URL tags). Not wired into the bot or tests.
 
 ## Other root modules
 - `m3u8.py` — generate .m3u8 for a Spotify playlist from tracks already on disk, download cover sidecar

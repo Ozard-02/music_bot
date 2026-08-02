@@ -1,6 +1,5 @@
 """SQLite queue persistence for download jobs."""
 
-import math
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -72,17 +71,6 @@ class QueueManager:
             conn.execute(
                 "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
             )
-
-    def enqueue(self, input_type: str, query: str) -> int:
-        with self._lock:
-            conn = self._connect()
-            with conn:
-                now = datetime.now(timezone.utc).isoformat()
-                cursor = conn.execute(
-                    "INSERT INTO queue (input_type, query, created_at) VALUES (?, ?, ?)",
-                    (input_type, query, now),
-                )
-                return cursor.lastrowid
 
     def enqueue_unique(self, input_type: str, query: str) -> tuple[int, bool]:
         """Atomically check for existing + insert under a single lock.

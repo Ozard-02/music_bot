@@ -301,6 +301,67 @@ class TestRunUrl:
         assert result == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "gave_up_tracks": [], "total": 1}
 
     @pytest.mark.asyncio
+    async def test_failure_cb_called_for_failed_track(self, config, logger):
+        t1 = _mock_track("t1", "OK Song")
+        t2 = _mock_track("t2", "Bad Song")
+        failed = [_mock_track("t2", "Bad Song")]
+        calls = []
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "album", "id": "alb123"}
+            client = _make_client(
+                playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+            )
+            client.download_track = AsyncMock(side_effect=[[], failed])
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+
+        assert result["failed"] == 1
+        assert calls == [("Bad Song", "download_failed")]
+
+    @pytest.mark.asyncio
+    async def test_failure_cb_called_on_exception(self, config, logger):
+        track = _mock_track("abc123", "Test Track")
+        calls = []
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "track", "id": "abc123"}
+            client = _make_client(track_return=track)
+            client.download_track = AsyncMock(side_effect=RuntimeError("Network error"))
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+
+        assert result["failed"] == 1
+        assert len(calls) == 1
+        assert calls[0][0] == "Test Track"
+
+    @pytest.mark.asyncio
+    async def test_failure_cb_not_called_on_success(self, config, logger):
+        track = _mock_track("abc123", "Test Track")
+        calls = []
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "track", "id": "abc123"}
+            client = _make_client(track_return=track)
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+
+        assert result["ok"] == 1
+        assert calls == []
+
+    @pytest.mark.asyncio
     async def test_album_dedup_counts_unique(self, config, logger):
         t1 = _mock_track("t1", "Song A")
         t2 = _mock_track("t2", "Song B")
@@ -404,7 +465,7 @@ class TestConsoleInterception:
 
 
 class TestConsoleSilencing:
-    """silence_spotiflac's console no-ops must reach SpotiFLAC's module-level
+    """install_console_silencing's console no-ops must reach SpotiFLAC's module-level
     copies (`from .core.console import print_summary`), not just the console
     module attributes — otherwise the banners, timeout lines and the qobuz
     grant prompt leak into production logs (import-copy gotcha)."""
@@ -438,23 +499,6 @@ class TestConsoleSilencing:
 
         prompt = "Incolla qui il grant (da DevTools ...): "
         assert builtins.input(prompt) == ""
-        out, err = capsys.readouterr()
-        assert out == "" and err == ""
-
-    def test_concurrent_manager_exit_does_not_resurrect_prints(self, capsys):
-        """Regression: the old context manager restored builtins.input/console
-        in `finally`, so with one manager per download thread the first thread
-        to exit un-patched the others mid-download."""
-        import builtins
-        from spotiflac_patch import silence_spotiflac
-
-        with silence_spotiflac():
-            with silence_spotiflac():
-                pass
-
-        import SpotiFLAC.core.console as console
-        assert console.print_summary(1, 1, [], 0.0) is None
-        assert builtins.input("no prompt") == ""
         out, err = capsys.readouterr()
         assert out == "" and err == ""
 

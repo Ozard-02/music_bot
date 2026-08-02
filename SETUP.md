@@ -71,7 +71,7 @@ Press `Ctrl+C` to abort. Rerun to resume — existing files skipped.
 | `Dockerfile` | Container image (python:3.14-slim + chromium) |
 | `docker-compose.yml` | Single-service Docker Compose |
 | `.dockerignore` | Excludes venv, caches, logs, secrets |
-| `scripts/` | Maintenance CLIs: fix_metadata (also bot-called), fix_covers, fix_mb_tags, fix_original_filenames, retag_missing, backfill_urls, fix_qvc |
+| `scripts/` | Maintenance CLIs: fix_metadata (also bot-called), fix_covers, fix_original_filenames; archived superseded one-offs in scripts/archive/ |
 | `spoty_loop.log` | Full log (all runs) |
 
 Config is read from `~/.spotiflac/config.json` (created by the desktop app). If missing, a warning points to `config.default.json` and hardcoded defaults are used.
