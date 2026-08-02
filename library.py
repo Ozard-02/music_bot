@@ -14,8 +14,6 @@ from track_utils import sanitize
 # the default; LOW/HIGH are lossy and the typical choice for guest users.
 QUALITY_CHOICES = ["DOLBY_ATMOS", "HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW"]
 
-DEFAULT_QUALITY = "LOSSLESS"
-
 # Folder suffix for user libraries. Kept as a constant so migration scripts
 # and the bot agree on the naming scheme.
 FOLDER_SUFFIX = "_Music"
