@@ -128,11 +128,71 @@ class TestFixAlbumFolder:
         opts = kwargs["opts"]
         assert opts.enrich is True
         assert opts.enrich_providers == ["apple", "deezer", "soundcloud"]
-        assert opts.embed_lyrics is True
+        assert opts.embed_lyrics is False  # default: no lyrics fetch (slow)
         # no file moved
         assert sorted(p.name for p in folder.iterdir()) == [
             "Madame - CLITO.flac", "Madame - MAREA.flac",
         ]
+
+    @pytest.mark.asyncio
+    async def test_lyrics_flag_embeds_lyrics(self, tmp_path):
+        folder = self._make_folder(tmp_path)
+        mock_embed = AsyncMock()
+
+        with self._patch_flac(urls={"Madame - MAREA.flac": "open.spotify.com/track/abc123", "Madame - CLITO.flac": "open.spotify.com/track/clito"}), patch(
+            "SpotiFLAC.core.tagger.embed_metadata_async", mock_embed
+        ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls:
+            client = client_cls.return_value
+            client.get_track_async = AsyncMock(return_value=_track(album="MADAME"))
+
+            res = await fix_album_folder(folder, apply=True, lyrics=True)
+
+        assert res["fixed"] == 2
+        _, kwargs = mock_embed.call_args
+        assert kwargs["opts"].embed_lyrics is True
+
+    @pytest.mark.asyncio
+    async def test_existing_lyrics_preserved_when_not_fetching(self, tmp_path):
+        folder = self._make_folder(tmp_path, names=["Madame - MAREA.flac"])
+        files: dict = {}
+
+        class FakeFLAC:
+            def __init__(self, path):
+                self._path = str(path)
+                files.setdefault(self._path, {})
+                self._tags = files[self._path]
+
+            def get(self, tag, default=None):
+                if tag in ("LYRICS", "UNSYNCEDLYRICS"):
+                    val = self._tags.get(tag)
+                    return [val] if val else default
+                return default
+
+            def __setitem__(self, key, value):
+                self._tags[key] = value
+
+            def save(self):
+                pass
+
+        target = folder / "Madame - MAREA.flac"
+        files[str(target)] = {"LYRICS": "old lyric line 1"}
+
+        async def _embed(filepath=None, metadata=None, opts=None, cover_data=None):
+            # simulate SpotiFLAC wiping all tags then rewriting without lyrics
+            files.get(str(filepath), {}).pop("LYRICS", None)
+
+        with patch("scripts.fix_metadata.FLAC", side_effect=FakeFLAC), patch(
+            "SpotiFLAC.core.tagger.embed_metadata_async", side_effect=_embed
+        ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls:
+            client = client_cls.return_value
+            client.search_tracks_async = AsyncMock(
+                return_value=[_track(album="MADAME")]
+            )
+
+            res = await fix_album_folder(folder, apply=True)
+
+        assert res["fixed"] == 1
+        assert files[str(target)]["LYRICS"] == "old lyric line 1"
 
     @pytest.mark.asyncio
     async def test_tagless_file_uses_search(self, tmp_path):

@@ -274,6 +274,11 @@ async def fixmetadata_cmd(update: Update, context) -> None:
     ucfg = _user_cfg(qm, cfg, update.effective_user)
     root = Path(ucfg["output_dir"])
 
+    lyrics = False
+    if context.args and context.args[0].lower() == "--lyrics":
+        lyrics = True
+        context.args = context.args[1:]
+
     if not context.args:
         folder = root
     else:
@@ -287,8 +292,10 @@ async def fixmetadata_cmd(update: Update, context) -> None:
 
     from scripts.fix_metadata import fix_library
 
+    mode = "fetch lyrics" if lyrics else "keep lyrics as-is"
     msg = await update.message.reply_html(
-        f"⏳ <b>Fix metadata</b>\n  Scanning <code>{esc(folder)}</code>\u2026"
+        f"⏳ <b>Fix metadata</b>\n  Scanning <code>{esc(folder)}</code>\u2026\n"
+        f"  🎤 {mode}"
     )
 
     async def progress(current, total, text):
@@ -300,13 +307,14 @@ async def fixmetadata_cmd(update: Update, context) -> None:
         )
 
     try:
-        result = await fix_library(folder, apply=True, progress=progress)
+        result = await fix_library(folder, apply=True, progress=progress, lyrics=lyrics)
         lines = [
             f"✅ <b>Fix metadata done</b>",
             f"  Folders: {result['folders']}",
             f"  Re-tagged: {result['fixed']}",
             f"  Moved: {result['moved']}",
             f"  Failed: {result['failed']}",
+            f"  🎤 Lyrics: {'fetched' if lyrics else 'kept as-is'}",
         ]
         if result["failed_files"]:
             lines.append("  ❌ <code>" + ", ".join(esc(f) for f in result["failed_files"]) + "</code>")

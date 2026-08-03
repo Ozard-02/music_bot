@@ -395,6 +395,29 @@ class TestFixMetadataCmd:
         assert "Not a folder" in text
 
     @pytest.mark.asyncio
+    async def test_lyrics_flag_passed_through(self, tmp_path):
+        album = tmp_path / "espo_Music" / "MADAME"
+        album.mkdir(parents=True)
+        (album / "a.flac").write_bytes(b"fake")
+
+        fake = {
+            "folders": 1, "total": 1, "fixed": 1, "moved": 0, "failed": 0,
+            "failed_files": [],
+            "moved_files": [],
+        }
+        update = _make_update(text="/fixmetadata --lyrics MADAME")
+        context = self._context(tmp_path, args=["--lyrics", "MADAME"])
+
+        with patch("scripts.fix_metadata.fix_library", new=AsyncMock(return_value=fake)) as m:
+            await fixmetadata_cmd(update, context)
+
+        assert str(m.call_args.args[0]) == str(album)
+        assert m.call_args.kwargs["lyrics"] is True
+        msg_mock = update.message.reply_html.return_value
+        last_call = msg_mock.edit_text.call_args_list[-1]
+        assert "Lyrics: fetched" in last_call[0][0]
+
+    @pytest.mark.asyncio
     async def test_ignores_unauthorized(self, tmp_path):
         update = _make_update(user_id=99999, text="/fixmetadata MADAME")
         context = self._context(tmp_path, args=["MADAME"])

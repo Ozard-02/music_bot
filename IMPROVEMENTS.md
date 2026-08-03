@@ -14,6 +14,7 @@
   - [x] `/quality [value]` — set per-user download quality (no arg lists options)
   - [x] `/mkplaylist <url> [name]` — generate .m3u8 for a Spotify playlist from tracks on disk
   - [x] `/fixmetadata [folder]` — re-tag all FLACs in a folder (whole library if omitted) via SpotiFLAC (Apple-first enrichment); strips bogus MUSICBRAINZ_* and moves files to their real album folder
+  - [x] `/fixmetadata --lyrics [folder]` — opt-in lyrics fetch; default re-tags WITHOUT fetching lyrics (slow), and never destroys existing LYRICS tags (restored after re-tag)
   - [x] `/purge` — remove all queued items
   - [x] Duplicate prevention — warns "Already queued as #N" when same input is already active
   - [x] Chat ID whitelist: only your user ID can interact; others silently ignored

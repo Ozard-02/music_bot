@@ -14,6 +14,7 @@ in are moved into the folder of their real album. Nothing is ever deleted.
 Examples:
     python scripts/fix_metadata.py Albums/MADAME --dry-run
     python scripts/fix_metadata.py Albums/MADAME --apply
+    python scripts/fix_metadata.py Albums/MADAME --apply --lyrics   # also fetch lyrics
     python scripts/fix_metadata.py /mnt/server/files/Albums --apply   # whole library
 """
 
@@ -61,6 +62,26 @@ def _read_existing(filepath: str | Path) -> dict[str, str]:
         return {"album": "", "albumartist": ""}
 
 
+def _read_lyrics(filepath: str | Path) -> str:
+    try:
+        audio = FLAC(str(filepath))
+        for tag in ("LYRICS", "UNSYNCEDLYRICS"):
+            val = audio.get(tag, [""])[0] if audio.get(tag) else ""
+            if val and val.strip():
+                return val
+    except Exception:
+        pass
+    return ""
+
+
+def _write_lyrics(filepath: str | Path, text: str) -> None:
+    if not text or not text.strip():
+        return
+    audio = FLAC(str(filepath))
+    audio["LYRICS"] = text
+    audio.save()
+
+
 def _majority(values: list[str]) -> str:
     counts: dict[str, int] = {}
     for v in values:
@@ -104,6 +125,7 @@ async def fix_album_folder(
     apply: bool = False,
     progress=None,
     logger: logging.Logger | None = None,
+    lyrics: bool = False,
 ) -> dict:
     """Re-tag every FLAC directly inside `folder`."""
     llog = logger or log
@@ -164,6 +186,7 @@ async def fix_album_folder(
                     return
 
                 if apply:
+                    old_lyrics = _read_lyrics(fpath)
                     cover_data = None
                     if getattr(track, "cover_url", None):
                         try:
@@ -176,7 +199,7 @@ async def fix_album_folder(
                         opts=EmbedOptions(
                             enrich=True,
                             enrich_providers=list(ENRICH_PROVIDERS),
-                            embed_lyrics=True,
+                            embed_lyrics=lyrics,
                             cover_url=track.cover_url or "",
                         ),
                         cover_data=cover_data,
@@ -189,6 +212,7 @@ async def fix_album_folder(
                     f"OK   {fpath.name} — {track.album} / {track.album_artist}"
                 )
 
+                final_path = fpath
                 if _is_foreign(track, folder, majority_album):
                     target_dir = folder.parent / sanitize(track.album, "Unknown Album")
                     if target_dir.resolve() != folder.resolve():
@@ -199,12 +223,16 @@ async def fix_album_folder(
                             new_path = _move_file(fpath, target_dir)
                             res["moved"] += 1
                             res["moved_files"].append(str(new_path))
+                            final_path = new_path
                         else:
                             res["details"].append(
                                 f"  (dry-run) would move into {target_dir.name}/"
                             )
                     else:
                         res["details"].append(f"  (stays in {folder.name}/)")
+
+                if apply and old_lyrics and not _read_lyrics(final_path):
+                    _write_lyrics(final_path, old_lyrics)
 
             except Exception as exc:
                 res["failed"] += 1
@@ -233,6 +261,7 @@ async def fix_library(
     apply: bool = False,
     progress=None,
     logger: logging.Logger | None = None,
+    lyrics: bool = False,
 ) -> dict:
     """Walk `root` and re-tag every album folder (dir containing FLACs)."""
     llog = logger or log
@@ -254,7 +283,7 @@ async def fix_library(
         if progress:
             await progress(i, len(todo), f"Folder: {folder.relative_to(root)}")
         sub = await fix_album_folder(
-            folder, apply=apply, progress=None, logger=llog
+            folder, apply=apply, progress=None, logger=llog, lyrics=lyrics
         )
         for key in ("total", "fixed", "moved", "failed", "skipped", "would_fix"):
             agg[key] += sub[key]
@@ -276,6 +305,10 @@ async def _main() -> None:
         "--apply", action="store_true",
         help="Write changes. Default is a read-only dry run.",
     )
+    parser.add_argument(
+        "--lyrics", action="store_true",
+        help="Also fetch and embed lyrics (slow). Default keeps existing lyrics as-is.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -289,7 +322,7 @@ async def _main() -> None:
     mode = "APPLY" if args.apply else "DRY-RUN"
     log.info("=== fix_metadata %s: %s ===", mode, target)
 
-    res = await fix_library(target, apply=args.apply, logger=log)
+    res = await fix_library(target, apply=args.apply, logger=log, lyrics=args.lyrics)
 
     log.info("")
     log.info("=== Results ===")
