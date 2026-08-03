@@ -91,7 +91,9 @@ silence_spotiflac_loggers()  — set all SpotiFLAC.* loggers to CRITICAL + httpx
 ```
 get_spotify_id_from_file(path) → str | None   # read URL/comment tag, extract track ID
 upgrade_cover_url(url)                        # Spotify CDN 300×300 (1e02) → 640×640 (b273)
-fetch_cover(url, timeout=10) → bytes | None   # async GET of upgraded cover (shared by downloader/rescan/fixmetadata)
+upgrade_apple_cover(url, size="3000x3000")    # iTunes artwork 100×100 → HD size
+resolve_cover_data(track) → bytes | None      # best cover: Apple HD (3000², ISRC enrichment) else upgraded Spotify 640
+fetch_cover(url, timeout=10) → bytes | None   # async GET of upgraded Spotify cover (used by maintenance.py)
 embed_cover(path, data)                       # replace pictures with JPEG front cover + dimensions
 iter_flacs(root)                              # yield every .flac under root (sorted)
 ```

@@ -15,6 +15,11 @@ _TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
 _SPOTIFY_COVER_UPGRADE = re.compile(r"(ab67616d0000)1e02")
 
 
+def upgrade_apple_cover(url: str, size: str = "3000x3000") -> str:
+    """Scale an iTunes artwork URL to the requested size (Apple serves up to 3000x3000)."""
+    return url.replace("100x100", size)
+
+
 def get_spotify_id_from_file(fpath: str | Path) -> str | None:
     try:
         audio = FLAC(str(fpath))
@@ -41,6 +46,42 @@ async def fetch_cover(url: str, timeout: float = 10) -> bytes | None:
         if resp.status_code != 200:
             return None
         return resp.content
+
+
+async def _fetch_bytes(url: str, timeout: float = 10) -> bytes | None:
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as http:
+            resp = await http.get(url)
+            if resp.status_code != 200:
+                return None
+            return resp.content
+    except Exception:
+        return None
+
+
+async def resolve_cover_data(track, timeout: float = 10) -> bytes | None:
+    """Fetch the best available cover for `track`: Apple HD (3000x3000)
+    via ISRC enrichment when it can, otherwise the upgraded Spotify 640x640
+    cover. Returns raw bytes, or None when neither source works."""
+    from SpotiFLAC.core.metadata_enrichment import enrich_metadata_async
+
+    try:
+        enriched = await enrich_metadata_async(
+            track.title,
+            track.first_artist,
+            isrc=track.isrc or "",
+            providers=["apple"],
+        )
+        if enriched.cover_url_hd:
+            data = await _fetch_bytes(upgrade_apple_cover(enriched.cover_url_hd), timeout)
+            if data:
+                return data
+    except Exception:
+        pass
+
+    if track.cover_url:
+        return await _fetch_bytes(upgrade_cover_url(track.cover_url), timeout)
+    return None
 
 
 def embed_cover(fpath: str | Path, data: bytes) -> None:
