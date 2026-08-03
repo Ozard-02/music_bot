@@ -39,7 +39,7 @@ def format_help() -> str:
         "  /quality [value] \u2014 set your download quality (no arg lists options)\n"
         "  /purge \u2014 remove all queued items\n"
         "  /mkplaylist &lt;url&gt; [name] \u2014 build a .m3u8 from tracks on disk\n"
-        "  /fixmetadata [album folder] \u2014 re-tag + fix covers &amp; lyrics (your library if omitted)"
+        "  /fixmetadata [album folder] \u2014 re-tag + fix covers (--lyrics also embeds lyrics; your library if omitted)"
     )
 
 
