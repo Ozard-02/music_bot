@@ -18,6 +18,8 @@ User → Telegram Bot (bot.py)
          downloader.run_url() — full retry loop, parallel downloads
 ```
 
+Module APIs, Docker, and CI/CD details live in [STRUCTURE.md](STRUCTURE.md). Metadata/cover deep-dives: [METADATA.md](METADATA.md).
+
 ### Files
 
 | File | Job |
@@ -140,6 +142,12 @@ docker compose up -d
 - **Album metadata quality** — investigate whether enrich_providers (Apple/Deezer/Tidal/SoundCloud) contaminate album-level metadata (genre, label, year, etc.). Possibly drop enrich_providers entirely and use only Spotify metadata for consistency.
 - **Cross-folder album merging** — `/fixmetadata` moves single-track folders (e.g. `OK`, `ROSSO COME IL FANGO`) into their real album folder only when run on the library root or on that folder; folders are never auto-deleted when emptied.
 - **Shared-track dedup (`shared_Music`)** — deferred from the multi-user pass. A track present in ≥2 user folders could be promoted to `~/Music/shared_Music/` at best quality with duplicates removed; requires shared-aware pre-check/`partition_tracks` + a quality comparison (`get_flac_quality` via mutagen). On-the-fly promotion only consolidates tracks a second request re-touches; a `/dedup` full-scan is the complete solution.
+
+### Deferred from 2026-08-03 log
+
+1. **Whole-job transient errors permanently fail an item** (`worker.py`) — `_process()`'s `except Exception` calls `mark_failed()` unconditionally on *any* whole-job exception (e.g. a DNS blip `httpx.ConnectError` on `clienttoken.spotify.com`), bypassing the track-level retry budget. Fix: a dedicated `_handle_whole_job_exception(item, err, chat)` reusing `is_expired()` (guard → real fail), `backoff_delay` + `queue.requeue`, treating all whole-job exceptions as retryable and capped by `is_expired`. Write here when started.
+2. **SpotiFLAC executor write-race** (`worker.py`) — `run_url()` can report `PASS N/N ok` while SpotiFLAC's executor threads are still flushing files; the retry pre-check then sees fewer tracks on disk → wasted re-downloads + ~300s `executor did not finish joining threads` stall. Fix (preferred): truthful accounting — reconcile against disk after the wrapper returns and use real numbers for `mark_done`/notification; never trust SpotiFLAC's `ok` count. (No data loss — files were all eventually written.) Variant B fallback: only fix the message, accept re-download-on-heal.
+3. **`/fixmetadata` lyrics toggle** — `--lyrics` opts *in* to lyrics fetch; default re-tags without fetching lyrics and never destroys existing `LYRICS` tags (restored after re-tag). Document the toggle in the command help.
 61. **Kill 3× duplicate log lines (root logger pollution)** — SpotiFLAC 1.5.9's `core/progress.py:install_console_interception()` runs once per track download (`client.download_track` → `SpotiflacDownloader.run_async` → `DownloadWorker.run_async`). It strips every `StreamHandler` off the root logger (including our asctime stdout handler AND the `RotatingFileHandler`, which is a StreamHandler subclass — the file log froze after the first track) and adds a `TqdmLoggingHandler` (`[%(levelname)s] %(name)s: %(message)s`) that `uninstall_console_interception()` never removes. Root handlers piled up one per track → every record (incl. ours, name `spoty_loop`) printed N× foreign-format with µs-identical timestamps. This was never parallelism/containers (the single-instance lock #60 was still needed, but was not the cause). `_disable_progress_manager()` now also no-ops `install_/uninstall_console_interception` in both `SpotiFLAC.core.progress` and `SpotiFLAC.downloader` (the module-level name actually called at downloader.py:436), plus `initialize_master_bar`. `Dockerfile` pins `SpotiFLAC==1.5.9` so the image can't drift from what we test. Reproduced locally before fixing (3 installs → 3 root handlers → 3× output). 160 tests.
 62. **Refactor: complexity reduction (no behavior change)** —
     - `spotiflac_patch.py` — all monkey-patching (`disable_progress_manager`, `reset_progress_manager`, `silence_spotiflac`, `silence_spotiflac_loggers`) moved out of `downloader.py`/`fix_metadata.py`. Import-time side-effect preserved (regression-tested).

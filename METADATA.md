@@ -99,3 +99,15 @@ rescan (Settings → Scan) so the split albums collapse back into one.
   `/fixmetadata`.
 - `scripts/archive/retag_missing.py` — retags a hardcoded list of tagless files
   (a manual predecessor of `fix_metadata.py`).
+
+## Cover art
+
+Two problems: (1) Qobuz enrichment returns wrong HD covers for some albums (e.g. Ditonellapiaga "Chimica"), and (2) enrichment covers shouldn't override the artist's real album art. Both are handled by `flac_utils.resolve_cover_data(track)` — the single cover-quality resolver used by downloads (`downloader._fix_cover`) and `/fixmetadata` (`scripts/fix_metadata.py`):
+
+1. **Apple HD first** — enriches via Apple (`enrich_metadata_async(providers=["apple"])`); if an ISRC-matched Apple release exposes `cover_url_hd`, the URL is bumped to 3000×3000 (`upgrade_apple_cover`: `100x100`→`3000x3000`) and fetched. High-res, Apple-verified.
+2. **Spotify fallback** — if Apple yields nothing, uses the track's Spotify `cover_url`, upgraded `1e02`→`b273` for 640×640 (`upgrade_cover_url`).
+3. **Embed, never enrich-overwrite** — the chosen bytes are passed as `cover_data` into `SpotiFLAC`'s tagger (its `if not cover_data` guard means enrichment covers can never override it); `flac_utils.embed_cover()` writes a single JPEG front cover (dimensions read via `track_utils.get_jpeg_dimensions`) after replacing the file's pictures.
+
+Bad-provider guard: downloads enrich with `["apple","deezer","soundcloud"]` (qobuz excluded — see [STRUCTURE.md#core-download-engine](STRUCTURE.md#core-download-engine)), so the qobuz wrong-cover source never feeds `enrich_providers`.
+
+Cover management API (`resolve_cover_data`, `upgrade_apple_cover`, `upgrade_cover_url`, `fetch_cover`, `embed_cover`): [STRUCTURE.md#flac_utils](STRUCTURE.md#flac_utils). Re-embed on existing files: `python scripts/fix_covers.py` (wraps `maintenance.rescan_library()`).
