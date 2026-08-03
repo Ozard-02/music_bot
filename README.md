@@ -41,7 +41,7 @@ cp .env.example .env   # fill in your token and user ID
 python bot.py          # or: docker compose up -d
 ```
 
-See [SETUP.md](SETUP.md) for full setup (bare-metal, Docker, TrueNAS).
+See [STRUCTURE.md](STRUCTURE.md) (Docker/TrueNAS) and [PLAN.md](PLAN.md) (setup) for full details.
 
 ## Configuration
 

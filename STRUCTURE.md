@@ -39,7 +39,7 @@ run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None) �
        after each successful download → `_rename_after_download()` + `_fix_cover()`
        (moves SpotiFLAC's `_`-path to original-symbols path, overwrites cover with Spotify art)
 ```
-Cover/rename helpers use `flac_utils.embed_cover()` + `upgrade_cover_url()`. The
+Cover/rename helpers use `flac_utils.resolve_cover_data()` + `flac_utils.embed_cover()`. The
 SpotiFLAC monkey-patches live in `spotiflac_patch.py` (imported here for its
 import-time side-effect). Downloads enrich with `["apple","deezer","soundcloud"]`
 (no tidal) and embed no MusicBrainz tags (see `_patch_musicbrainz`), so fresh
@@ -50,7 +50,7 @@ downloads already match `/fixmetadata` output.
 rescan_library(cfg, logger, progress=None, dry_run=False) → {ok, skipped, failed}
   ├─ walk output_dir for *.flac (flac_utils.iter_flacs)
   ├─ for each: read URL tag → parse Spotify track ID (flac_utils.get_spotify_id_from_file)
-  ├─ SpotifyMetadataClient → get_track_async(id) → fetch 640px cover → embed (flac_utils.embed_cover)
+  ├─ SpotifyMetadataClient → get_track_async(id) → fetch upgraded Spotify cover (flac_utils.fetch_cover) → embed (flac_utils.embed_cover)
   ├─ asyncio.Semaphore(SCRIPT_MAX_CONCURRENT=5) limiting concurrency
   └─ progress(current, total, text) callback for UI updates
 ```
@@ -283,7 +283,6 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
   ```
 
 - `config.default.json` — reference config (6 keys)
-- `IMPROVEMENTS.md` — planned Docker + enhancements
 
 ## Docker deployment files
 
@@ -327,4 +326,8 @@ for bare-metal usage.
 ### `.github/workflows/docker.yml`
 GitHub Actions workflow: on push to `main`, builds the Docker image and pushes to
 `ghcr.io/ozard-02/music_loop:latest`. Auth uses `secrets.GHCR_TOKEN` (PAT with
-`write:packages` scope, stored as repo secret).
+   `write:packages` scope, stored as repo secret).
+
+## Tests
+
+`pytest tests/ -v` — mock-based, no network, no real SpotiFLAC calls. Per-module test counts are noted inline in [PLAN.md#done](PLAN.md#done).
