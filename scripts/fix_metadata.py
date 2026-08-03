@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutagen.flac import FLAC
 
 from config import SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
-from flac_utils import fetch_cover, get_spotify_id_from_file
+from flac_utils import get_spotify_id_from_file, resolve_cover_data
 from resolver import best_track_match
 from spotiflac_patch import reset_progress_manager, silence_spotiflac_loggers
 from track_utils import sanitize
@@ -187,12 +187,7 @@ async def fix_album_folder(
 
                 if apply:
                     old_lyrics = _read_lyrics(fpath)
-                    cover_data = None
-                    if getattr(track, "cover_url", None):
-                        try:
-                            cover_data = await fetch_cover(track.cover_url)
-                        except Exception as exc:
-                            llog.debug("Cover fetch failed for %s: %s", fpath.name, exc)
+                    cover_data = await resolve_cover_data(track)
                     await embed_metadata_async(
                         filepath=str(fpath),
                         metadata=track,

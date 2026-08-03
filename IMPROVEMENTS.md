@@ -1,5 +1,46 @@
 # Improvements
 
+## [x] Covers — Apple HD (3000×3000), else upgraded Spotify 640 (2026-08-03)
+- **`flac_utils.py`**: new `resolve_cover_data(track)` — tries Apple HD via ISRC enrichment (`enrich_metadata_async(providers=["apple"])`), falling back to the upgraded Spotify 640×640 cover; returns raw bytes or `None`. New `upgrade_apple_cover()` (100x100 → 3000x3000) mirrors the existing `upgrade_cover_url()`. New `_fetch_bytes()` for the HTTP get (follow_redirects, catches failures → `None`).
+- **`downloader.py`** `_fix_cover` now uses `resolve_cover_data(track)` instead of fetching the Spotify 640 URL directly.
+- **`scripts/fix_metadata.py`** `process()` passes `cover_data=await resolve_cover_data(track)` instead of the pre-fetched Spotify cover.
+- Metadata enrichment (genre/label/BPM/UPC) is unchanged (apple→deezer→soundcloud); only the *cover* source changed.
+- Tests: new `tests/test_flac_utils.py` (upgrade helpers + `resolve_cover_data` apple-wins / spotify-fallback / none); `test_fix_metadata.py` cover tests now mock `resolve_cover_data`. **231 tests passing.**
+
+## TODO — Production reliability fixes (from 2026-08-03 log), deferred
+
+Context: TrueNAS docker, log-only evidence (not local environments). Both bugs below are agreed to fix **later** (write to PLAN.md when started).
+
+### Whole-job transient errors permanently fail an item (`worker.py:253`)
+- **Bug:** `_process()` `except Exception` calls `mark_failed()` unconditionally — no `is_expired` check, no retry/backoff.
+  At 08:34:34 job #106 died permanently from a transient DNS error
+  (`httpx.ConnectError [Errno -3] Temporary failure in name resolution` on
+  `clienttoken.spotify.com`), bypassing the retry budget that exists for track-level failures.
+- **Review verdict:** the DB is NOT at fault (single conn + `threading.Lock`, no lock across `await`,
+  tz-consistent `retry_at`/created_at comparisons). The 1/12 pre-check reads the filesystem, not the DB.
+- **Plan (best for maintenance):** dedicated `_handle_whole_job_exception(item, err, chat)` reusing existing
+  primitives — `is_expired` (guard → real fail), `backoff_delay` (delay), `queue.requeue`, and the existing
+  message style. Treat *all* whole-job exceptions as retryable (consistent with track-failure policy), capped
+  by `is_expired`. No transient/non-transient heuristic, avoids bending `decide_failure()` with a fake result.
+
+### SpotiFLAC executor write-race: optimistic `ok` / "missing" scare (#107)
+- 08:30:56 `PASS 6 ok, 6 failed` for #1076 but the retry pre-check (08:36:03) saw only `1/12` on disk;
+  **all songs were eventually downloaded** (user-confirmed). So files were still being flushed by SpotiFLAC
+  executor threads after `run_url()` returned / item requeued. Coincides with repeated
+  `asyncio` `RuntimeWarning: executor did not finish joining threads within 300 seconds`
+  (from `asyncio.run()` teardown, `_run_url_sync` worker.py:36).
+- Net effect: wasted re-downloads + ~300s slot stall; NOT data loss.
+- **Plan (preferred): truthful accounting — don't trust SpotiFLAC's `ok` count; reconcile against disk after
+  the wrapper returns and use real numbers for `mark_done`/notification. Keeps wrapper thin, honest messages,
+  no re-download pile-up.**
+  - Variant B (fallback): only stop us lying in messages; accepts re-download-on-heal.
+
+### Notes
+- Telegram "Failed to send notification: Timed out" (08:26:47) is handled gracefully by `_notify()` — same DNS
+  hiccup, no bug.
+- q: to ask before implementing — retry #2 variant A vs B; and confirm changes staged locally,
+  NOT auto-committed, for the user to push on the box.
+
 ## Telegram Bot + SQLite Queue
 
 ### Bot
@@ -22,7 +63,7 @@
   - [x] Blocking async calls (`run_url`, `build_m3u8`) offloaded to thread executor — bot stays responsive
 
 ### Queue
-- [x] **`queue_manager.py`** — SQLite persistence
+  - [x] **`queue_manager.py`** — SQLite persistence
   - [x] `queue` table: id, input_type, query, status, timestamps, result counts, error
   - [x] `failed_tracks` table: per-track failure logging with FK → queue
   - [x] Survives restarts: `_init_db()` resets stranded `running` items → `queued` on startup

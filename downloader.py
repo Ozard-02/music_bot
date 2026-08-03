@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
-from flac_utils import embed_cover, fetch_cover
+from flac_utils import embed_cover, resolve_cover_data
 from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
 
 
@@ -76,12 +76,11 @@ async def run_url(
 async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
     rel = track_relative_path(track, cfg)
     fpath = Path(cfg["output_dir"]) / rel
-    cover_url = getattr(track, "cover_url", None)
-    if not fpath.exists() or not cover_url:
+    if not fpath.exists():
         return
 
     try:
-        data = await fetch_cover(cover_url)
+        data = await resolve_cover_data(track)
         if data is None:
             return
         await asyncio.to_thread(embed_cover, fpath, data)
