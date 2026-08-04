@@ -24,7 +24,7 @@ PER_TRACK_TIMEOUT = 100
 PER_TRACK_RETRIES = 3
 
 # Queue
-MAX_PARALLEL_JOBS = 3
+MAX_PARALLEL_JOBS = 2
 MAX_QUEUE_RETRIES = 15
 MAX_TRACK_RETRIES = 10  # give up on a track after this many failed attempts
 MAX_DOWNLOAD_TIMEOUT = 28800  # 8h — last-resort cap on a whole job (per-track timeouts are the primary limiter)

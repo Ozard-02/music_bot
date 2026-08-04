@@ -465,3 +465,12 @@ class TestWorkerPerUser:
         assert captured["cfg"]["output_dir"] == str(tmp_path)
         bot.send_message.assert_awaited_once()
         assert bot.send_message.call_args.kwargs["chat_id"] == 12345
+
+
+def test_trim_rss_runs_without_raising():
+    """RSS trim must never crash the worker — even on platforms without
+    glibc's malloc_trim."""
+    from worker import _trim_rss
+    with patch("worker.ctypes.CDLL", side_effect=OSError("no libc")):
+        _trim_rss()
+    _trim_rss()
