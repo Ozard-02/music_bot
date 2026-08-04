@@ -92,7 +92,12 @@ silence_spotiflac_loggers()  — set all SpotiFLAC.* loggers to CRITICAL + httpx
 get_spotify_id_from_file(path) → str | None   # read URL/comment tag, extract track ID
 upgrade_cover_url(url)                        # Spotify CDN 300×300 (1e02) → 640×640 (b273)
 upgrade_apple_cover(url, size="3000x3000")    # iTunes artwork 100×100 → HD size
-resolve_cover_data(track) → bytes | None      # best cover: Apple HD (3000², ISRC enrichment) else upgraded Spotify 640
+_images_similar(a, b, threshold=0.005)        # perceptual same-artwork check (32×32 grid,
+                                              # normalized mean-abs-diff; decode fail → False)
+resolve_cover_data(track) → bytes | None      # Spotify 640 baseline + Apple/Deezer HD candidates,
+                                              # HD accepted only if same artwork AND ≥ baseline res —
+                                              # a stray single-release image can't overwrite album art
+_cover_candidates(track) → list[bytes]        # Apple then Deezer HD cover bytes (ISRC enrichment)
 fetch_cover(url, timeout=10) → bytes | None   # async GET of upgraded Spotify cover (used by maintenance.py)
 embed_cover(path, data)                       # replace pictures with JPEG front cover + dimensions
 iter_flacs(root)                              # yield every .flac under root (sorted)
@@ -266,7 +271,7 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 `from scripts.fix_metadata import fix_library`). Each script bootstraps
 `sys.path` so it also runs standalone: `python scripts/<name>.py`.
 
-- `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`, so the **upgraded Spotify cover is embedded** and enrichment covers can't override it; a failed fetch still retags. CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
+- `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`; after tagging, `flac_utils.embed_cover()` is called to *replace* pictures — SpotiFLAC's FLAC tagger `audio.delete()` clears tags but not pictures, so without this old/wrong covers survive (and multiple identical PICTURE blocks pile up). CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
 - `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
 - `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths (regression-tested, incl. dry-run + empty-dir pruning)
 - `scripts/migrate_library.py` — one-time move of root-level `~/Music/{Album}/...` entries into the owner's `{username}_Music/` folder (excludes `*_Music`, `shared_Music`, dotfiles; `.m3u8` files move with their tracks so relative paths stay valid). CLI: `python scripts/migrate_library.py --username espo [--dry-run]`.

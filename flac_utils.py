@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import re
 from pathlib import Path
 
@@ -9,6 +10,8 @@ import httpx
 from mutagen.flac import FLAC, Picture
 
 from track_utils import get_jpeg_dimensions
+
+_IMAGE_SIMILAR_THRESHOLD = 0.005  # normalized mean-abs-diff: same art ~0.0001, different ~0.01+
 
 _TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
 
@@ -59,11 +62,65 @@ async def _fetch_bytes(url: str, timeout: float = 10) -> bytes | None:
         return None
 
 
+def _images_similar(a: bytes, b: bytes, threshold: float = _IMAGE_SIMILAR_THRESHOLD) -> bool:
+    """True if two JPEGs show the same artwork (perceptual similarity).
+
+    Downscales both to a 32x32 RGB grid and compares normalized mean-abs-diff
+    of channel values.  Same artwork at different resolutions/compression is
+    ~0.0001; different artwork is ~0.01+.  Returns False on any decode error
+    (fail-safe: a broken/foreign image never wins over the Spotify baseline).
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return False
+    try:
+        def _grid(data: bytes):
+            return Image.open(io.BytesIO(data)).convert("RGB").resize((32, 32)).tobytes()
+        ga, gb = _grid(a), _grid(b)
+        if len(ga) != len(gb):
+            return False
+        total = sum(abs(x - y) for x, y in zip(ga, gb))
+        return total / (len(ga) * 255) < threshold
+    except Exception:
+        return False
+
+
 async def resolve_cover_data(track, timeout: float = 10) -> bytes | None:
-    """Fetch the best available cover for `track`: Apple HD (3000x3000)
-    via ISRC enrichment when it can, otherwise the upgraded Spotify 640x640
-    cover. Returns raw bytes, or None when neither source works."""
-    from SpotiFLAC.core.metadata_enrichment import enrich_metadata_async
+    """Fetch the best available cover for `track`.
+
+    The Spotify album cover (upgraded 640x640) is the always-correct baseline.
+    Higher-resolution candidates from Apple and Deezer enrichment are only
+    accepted when they are the *same artwork* as the baseline (perceptual
+    similarity check) and at least as large — so a stray single-release image
+    can never overwrite the album cover, but a genuine HD copy still upgrades
+    quality.  Returns raw bytes, or None when no source works.
+    """
+    baseline = None
+    if track.cover_url:
+        baseline = await _fetch_bytes(upgrade_cover_url(track.cover_url), timeout)
+
+    candidates = await _cover_candidates(track, timeout)
+    if baseline is not None:
+        base_w, base_h = get_jpeg_dimensions(baseline)
+        base_area = base_w * base_h
+        best = baseline
+        best_area = base_area
+        for data in candidates:
+            w, h = get_jpeg_dimensions(data)
+            if _images_similar(data, baseline) and (w or 0) * (h or 0) >= best_area:
+                best, best_area = data, (w or 0) * (h or 0)
+        return best
+    return max(candidates, key=lambda d: (get_jpeg_dimensions(d)[0] or 0) * (get_jpeg_dimensions(d)[1] or 0), default=None)
+
+
+async def _cover_candidates(track, timeout: float = 10) -> list[bytes]:
+    """Apple then Deezer HD cover candidates; each independently best-effort."""
+    candidates: list[bytes] = []
+    from SpotiFLAC.core.metadata_enrichment import (
+        _deezer_fetch_async,
+        enrich_metadata_async,
+    )
 
     try:
         enriched = await enrich_metadata_async(
@@ -75,13 +132,20 @@ async def resolve_cover_data(track, timeout: float = 10) -> bytes | None:
         if enriched.cover_url_hd:
             data = await _fetch_bytes(upgrade_apple_cover(enriched.cover_url_hd), timeout)
             if data:
-                return data
+                candidates.append(data)
     except Exception:
         pass
 
-    if track.cover_url:
-        return await _fetch_bytes(upgrade_cover_url(track.cover_url), timeout)
-    return None
+    try:
+        enriched = await _deezer_fetch_async(track.isrc or "")
+        if enriched.cover_url_hd:
+            data = await _fetch_bytes(upgrade_apple_cover(enriched.cover_url_hd), timeout)
+            if data:
+                candidates.append(data)
+    except Exception:
+        pass
+
+    return candidates
 
 
 def embed_cover(fpath: str | Path, data: bytes) -> None:
