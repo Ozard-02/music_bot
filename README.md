@@ -78,4 +78,9 @@ Provider order, quality, and download options go in `~/.spotiflac/config.json`.
 
 Downloading copyrighted music may violate terms of service or applicable laws in your jurisdiction. The authors assume no liability for how you use this software.
 
+## Contributors
+
+- **Ozard-02** — original author
+- **DeepSeek V4 Flash** (via opencode) — AI coding assistant
+
 MIT License — see [LICENSE](LICENSE).
