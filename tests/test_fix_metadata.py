@@ -183,6 +183,8 @@ class TestFixAlbumFolder:
 
         with patch("scripts.fix_metadata.FLAC", side_effect=FakeFLAC), patch(
             "SpotiFLAC.core.tagger.embed_metadata_async", side_effect=_embed
+        ), patch(
+            "scripts.fix_metadata.resolve_cover_data", AsyncMock(return_value=None)
         ), patch("SpotiFLAC.client.SpotifyMetadataClient") as client_cls:
             client = client_cls.return_value
             client.search_tracks_async = AsyncMock(

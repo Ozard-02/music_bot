@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutagen.flac import FLAC
 
 from config import SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
-from flac_utils import get_spotify_id_from_file, resolve_cover_data
+from flac_utils import embed_cover, get_spotify_id_from_file, resolve_cover_data
 from resolver import best_track_match
 from spotiflac_patch import reset_progress_manager, silence_spotiflac_loggers
 from track_utils import sanitize
@@ -199,6 +199,11 @@ async def fix_album_folder(
                         ),
                         cover_data=cover_data,
                     )
+                    if cover_data:
+                        # SpotiFLAC's tagger appends pictures instead of replacing
+                        # them, so old (possibly wrong) covers survive.  Force a
+                        # single clean cover.
+                        await asyncio.to_thread(embed_cover, fpath, cover_data)
                     res["fixed"] += 1
                 else:
                     res["would_fix"] += 1
