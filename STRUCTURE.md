@@ -221,6 +221,12 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     is_expired(item, now=None) → bool       # age > MAX_QUEUE_AGE or retries >= MAX_QUEUE_RETRIES
     backoff_delay(retries, floor=0) → int   # min(MAX_RETRY_BACKOFF, BASE * 2**retries), floored
     decide_failure(item, result, gave_up_titles) → FailureDecision  # fail-timeout/fail-max/done-partial/requeue
+    _trim_rss() → None                      # gc.collect() + glibc malloc_trim(0): returns freed
+                                            # heap pages to the OS so idle RSS settles instead of
+                                            # staying at the last download peak (each job's throwaway
+                                            # thread leaves arenas resident). Called after every job
+                                            # and once per idle epoch (when _poll reaches the 300s cap).
+                                            # No-op on non-glibc platforms.
   Per-item context:
     _item_cfg(item) → dict                  # user_cfg(base, user.folder) + user.quality;
                                             # legacy items (no user) keep the base cfg

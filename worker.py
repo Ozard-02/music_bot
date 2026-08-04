@@ -1,6 +1,8 @@
 """Background queue processor."""
 
 import asyncio
+import ctypes
+import gc
 import logging
 import traceback
 from dataclasses import dataclass
@@ -34,6 +36,23 @@ def _run_url_sync(
     failure_cb=None,
 ) -> DownloadResult:
     return asyncio.run(run_url(url, cfg, logger, skip_titles, progress_cb, failure_cb))
+
+
+def _trim_rss() -> None:
+    """Return freed heap pages to the OS so idle RSS settles instead of staying
+    at the last download peak.
+
+    Each job runs in a throwaway thread (`asyncio.to_thread` → `asyncio.run`).
+    When the thread exits, glibc/Python allocator arenas keep the pages
+    resident, so RSS = peak RSS forever.  gc.collect() releases Python cycles,
+    then malloc_trim(0) hands free glibc heap pages back.  No-op on platforms
+    without glibc's malloc_trim.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6", use_errno=True).malloc_trim(0)
+    except Exception:
+        pass  # ponytail: non-glibc — nothing to trim, keep going
 
 
 @dataclass(frozen=True)
@@ -154,6 +173,8 @@ class Worker:
                         self._poll = max(5, min(300, remaining))
                     else:
                         self._poll = min(300, self._poll * 2)
+                        if self._poll == 300:
+                            await asyncio.to_thread(_trim_rss)
             except Exception as e:
                 self._logger.error("Worker error: %s", e)
                 self._poll = min(300, self._poll * 2)
@@ -185,6 +206,7 @@ class Worker:
             self._tasks.discard(task)
             self._sem.release()
             self._wake_event.set()
+            await asyncio.to_thread(_trim_rss)
 
     async def shutdown(self):
         if self._shutdown:
