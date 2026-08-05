@@ -411,7 +411,52 @@ class TestRunUrl:
         assert result.ok == 2
         assert sorted(t for _, _, t in calls) == ["Song A", "Song B"]
         assert all(total == 2 for _, total, _ in calls)
-        assert [d for d, _, _ in calls] == sorted([1, 2])
+        # done-counts are 1 and 2; order is nondeterministic under concurrency
+        assert sorted(d for d, _, _ in calls) == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_writes_lrc_sidecar_when_lyrics_embedded(self, tmp_path):
+        """A track that already has line-synced LRC in its LYRICS tag gets a
+        .lrc sidecar on download (Navidrome reads sidecar .lrc as synced)."""
+        logger = logging.getLogger("test")
+        cfg = {
+            "output_dir": str(tmp_path),
+            "filename_format": "{artist} - {title}",
+            "use_artist_subfolders": True,
+            "use_album_subfolders": True,
+            "first_artist_only": True,
+            "embed_lyrics": True,
+            "quality": "LOSSLESS",
+            "services": ["qobuz", "deezer", "amazon"],
+        }
+        track = _mock_track("abc123", "Test Track")
+
+        flac_path = tmp_path / "AlbumArtist" / "Album" / "Artist - Test Track.flac"
+        lrc_path = flac_path.with_suffix(".lrc")
+
+        async def _download(_url):
+            # download_track creates the file on disk
+            flac_path.parent.mkdir(parents=True, exist_ok=True)
+            flac_path.write_bytes(b"")
+            return []
+
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("downloader.resolve_cover_data", new=AsyncMock(return_value=None)),
+            patch("downloader.read_lrc", new=lambda p: "[01:23.45]hello\n[02:30.00]bye"),
+        ):
+            mock_parse.return_value = {"type": "track", "id": "abc123"}
+            client = _make_client(track_return=track)
+            client.download_track = AsyncMock(side_effect=_download)
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.TRACK_URL, cfg, logger)
+
+        assert result.ok == 1
+        assert lrc_path.exists()
+        assert "[01:23.45]hello" in lrc_path.read_text(encoding="utf-8")
 
 
 class TestConsoleInterception:

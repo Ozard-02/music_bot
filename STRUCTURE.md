@@ -100,6 +100,8 @@ resolve_cover_data(track) → bytes | None      # Spotify 640 baseline + Apple/D
 _cover_candidates(track) → list[bytes]        # Apple then Deezer HD cover bytes (ISRC enrichment)
 fetch_cover(url, timeout=10) → bytes | None   # async GET of upgraded Spotify cover (used by maintenance.py)
 embed_cover(path, data)                       # replace pictures with JPEG front cover + dimensions
+read_lrc(path) → str | None                   # return timestamped LRC from LYRICS/UNSYNCEDLYRICS tag (None if plain)
+write_lrc_sidecar(path, lrc_text)             # write a real .lrc sidecar next to the flac
 iter_flacs(root)                              # yield every .flac under root (sorted)
 ```
 

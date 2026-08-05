@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutagen.flac import FLAC
 
 from config import SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
-from flac_utils import embed_cover, get_spotify_id_from_file, resolve_cover_data
+from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
 from resolver import best_track_match
 from spotiflac_patch import reset_progress_manager, silence_spotiflac_loggers
 from track_utils import sanitize
@@ -233,6 +233,11 @@ async def fix_album_folder(
 
                 if apply and old_lyrics and not _read_lyrics(final_path):
                     _write_lyrics(final_path, old_lyrics)
+
+                if lyrics:
+                    lrc = read_lrc(final_path)
+                    if lrc:
+                        write_lrc_sidecar(final_path, lrc)
 
             except Exception as exc:
                 res["failed"] += 1
