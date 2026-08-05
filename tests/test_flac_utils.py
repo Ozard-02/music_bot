@@ -139,3 +139,72 @@ class TestResolveCoverData:
         p1, p2 = _patch_sources()
         with p1, p2, _fetch_map([]):
             assert await resolve_cover_data(_track()) is None
+
+
+class _FakeAudio:
+    """Minimal stand-in for mutagen's FLAC used by read_lrc/write paths."""
+
+    def __init__(self, tags: dict[str, str]):
+        self._tags = tags
+
+    def get(self, tag, default=None):
+        val = self._tags.get(tag)
+        return [val] if val else default
+
+
+class TestReadLrc:
+    LRC = "[01:23.45]hello world\n[02:30.00]bye"
+    PLAIN = "just some words\nno timestamps here"
+
+    def test_returns_synced_from_lyrics_tag(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "flac_utils.FLAC", lambda p: _FakeAudio({"LYRICS": self.LRC})
+        )
+        from flac_utils import read_lrc
+        assert read_lrc(tmp_path / "x.flac") == self.LRC
+
+    def test_falls_through_to_unsyncedlyrics(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "flac_utils.FLAC", lambda p: _FakeAudio({"UNSYNCEDLYRICS": self.LRC})
+        )
+        from flac_utils import read_lrc
+        assert read_lrc(tmp_path / "x.flac") == self.LRC
+
+    def test_returns_none_for_plain_lyrics(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "flac_utils.FLAC", lambda p: _FakeAudio({"LYRICS": self.PLAIN})
+        )
+        from flac_utils import read_lrc
+        assert read_lrc(tmp_path / "x.flac") is None
+
+    def test_returns_none_when_no_tag(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("flac_utils.FLAC", lambda p: _FakeAudio({}))
+        from flac_utils import read_lrc
+        assert read_lrc(tmp_path / "x.flac") is None
+
+    def test_returns_none_on_unreadable_file(self, tmp_path, monkeypatch):
+        def _raise(_p):
+            raise KeyError("nope")
+        monkeypatch.setattr("flac_utils.FLAC", _raise)
+        from flac_utils import read_lrc
+        assert read_lrc(tmp_path / "missing.flac") is None
+
+
+class TestWriteLrcSidecar:
+    def test_writes_sidecar(self, tmp_path):
+        from flac_utils import write_lrc_sidecar
+        fpath = tmp_path / "Artist - Title.flac"
+        fpath.touch()
+        write_lrc_sidecar(fpath, "[01:23.45]line one\n[02:30.00]line two")
+        sidecar = tmp_path / "Artist - Title.lrc"
+        assert sidecar.exists()
+        text = sidecar.read_text(encoding="utf-8")
+        assert "[01:23.45]line one" in text
+        assert text.endswith("\n")
+
+    def test_no_sidecar_for_empty(self, tmp_path):
+        from flac_utils import write_lrc_sidecar
+        fpath = tmp_path / "t.flac"
+        fpath.touch()
+        write_lrc_sidecar(fpath, "")
+        assert not (tmp_path / "t.lrc").exists()

@@ -17,6 +17,9 @@ _TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
 
 _SPOTIFY_COVER_UPGRADE = re.compile(r"(ab67616d0000)1e02")
 
+# Matches an LRC timestamped line, e.g. [01:23.45] or [01:23:45]
+_LRC_TS_RE = re.compile(r"\[\d{1,2}:\d{2}[.:]\d{2,3}\]")
+
 
 def upgrade_apple_cover(url: str, size: str = "3000x3000") -> str:
     """Scale an iTunes artwork URL to the requested size (Apple serves up to 3000x3000)."""
@@ -160,6 +163,35 @@ def embed_cover(fpath: str | Path, data: bytes) -> None:
     audio.clear_pictures()
     audio.add_picture(pic)
     audio.save()
+
+
+def read_lrc(fpath: str | Path) -> str | None:
+    """Return timestamped (LRC) lyrics from a file's LYRICS/UNSYNCEDLYRICS tag.
+
+    SpotiFLAC embeds fetched lyrics verbatim into the FLAC `LYRICS` Vorbis
+    comment — including any `[mm:ss.xx]` timestamps when the source was
+    line-synced.  That text is valid LRC, but buried in a plain-text tag no
+    player treats as "synced".  Reading it back here lets callers write a
+    proper `.lrc` sidecar.  Returns None when there are no timestamps (plain
+    lyrics carry no timing, so a sidecar would be pointless).
+    """
+    try:
+        audio = FLAC(str(fpath))
+    except Exception:
+        return None
+    for tag in ("LYRICS", "UNSYNCEDLYRICS"):
+        val = audio.get(tag, [""])[0] if audio.get(tag) else ""
+        if val and val.strip() and _LRC_TS_RE.search(val):
+            return val.strip()
+    return None
+
+
+def write_lrc_sidecar(fpath: str | Path, lrc_text: str) -> None:
+    """Write `lrc_text` as a `.lrc` sidecar next to `fpath`."""
+    if not lrc_text or not lrc_text.strip():
+        return
+    sidecar = Path(fpath).with_suffix(".lrc")
+    sidecar.write_text(lrc_text.strip() + "\n", encoding="utf-8")
 
 
 def iter_flacs(root: str | Path):

@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
-from flac_utils import embed_cover, resolve_cover_data
+from flac_utils import embed_cover, read_lrc, resolve_cover_data, write_lrc_sidecar
 from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
 
 
@@ -89,6 +89,27 @@ async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
         logger.debug("Cover overwrite failed for %s", rel)
 
 
+def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
+    """Write a .lrc sidecar from lyrics already embedded by SpotiFLAC.
+
+    SpotiFLAC stores fetched (possibly line-synced) lyrics in the FLAC LYRICS
+    tag as plain text — no player reads that as 'synchronized'.  Reading the
+    tag back and emitting a real `.lrc` sidecar makes the timing usable.
+    Reuses the just-emitted tag: no extra network fetch.
+    """
+    rel = track_relative_path(track, cfg)
+    fpath = Path(cfg["output_dir"]) / rel
+    if not fpath.exists():
+        return
+    try:
+        lrc = read_lrc(fpath)
+        if lrc:
+            write_lrc_sidecar(fpath, lrc)
+            logger.debug("Lyrics sidecar written for %s", rel)
+    except Exception:
+        logger.debug("Lyrics sidecar failed for %s", rel)
+
+
 def _rename_after_download(track, cfg: dict, logger: logging.Logger):
     spoti_rel = spotiflac_track_relative_path(track, cfg)
     orig_rel = track_relative_path(track, cfg)
@@ -151,6 +172,8 @@ async def _download_tracks(
                 else:
                     await asyncio.to_thread(_rename_after_download, track, cfg, logger)
                     await _fix_cover(track, cfg, logger)
+                    if cfg.get("embed_lyrics"):
+                        await asyncio.to_thread(_write_lyrics_sidecar, track, cfg, logger)
             except Exception as exc:
                 failed_list.append(track)
                 if failure_cb:
