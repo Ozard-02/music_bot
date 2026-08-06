@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from downloader import _rename_after_download, run_url
+from SpotiFLAC.core.models import TrackMetadata
 from track_utils import partition_tracks, spotiflac_track_relative_path, track_relative_path
 
 
@@ -275,7 +276,8 @@ class TestRunUrl:
     async def test_album_partial_failure(self, config, logger):
         t1 = _mock_track("t1", "OK Song")
         t2 = _mock_track("t2", "Bad Song")
-        failed = [("t2", "Bad Song", "Artist", "Qobuz 500")]
+        failed = [TrackMetadata(id="t2", title="Bad Song", artists="Artist",
+                                album="Album", album_artist="Artist")]
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
             patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
@@ -315,6 +317,33 @@ class TestRunUrl:
     async def test_failure_cb_called_for_failed_track(self, config, logger):
         t1 = _mock_track("t1", "OK Song")
         t2 = _mock_track("t2", "Bad Song")
+        failed = [TrackMetadata(id="t2", title="Bad Song", artists="Artist",
+                                album="Album", album_artist="Artist")]
+        calls = []
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "album", "id": "alb123"}
+            client = _make_client(
+                playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+            )
+            client.download_track = AsyncMock(side_effect=[[], failed])
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+
+        assert result.failed == 1
+        assert result.failed_tracks == [("t2", "Bad Song", "download_failed")]
+        assert calls == [("Bad Song", "download_failed")]
+
+    @pytest.mark.asyncio
+    async def test_failure_cb_tuple_shape_defensive(self, config, logger):
+        """Older SpotiFLAC versions return (id, title, artists, error) tuples;
+        that shape must still work (and carry the real error string)."""
+        t1 = _mock_track("t1", "OK Song")
+        t2 = _mock_track("t2", "Bad Song")
         failed = [("t2", "Bad Song", "Artist", "Qobuz 500")]
         calls = []
         with (
@@ -332,6 +361,7 @@ class TestRunUrl:
             result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
 
         assert result.failed == 1
+        assert result.failed_tracks == [("t2", "Bad Song", "download_failed")]
         assert calls == [("Bad Song", "Qobuz 500")]
 
     @pytest.mark.asyncio

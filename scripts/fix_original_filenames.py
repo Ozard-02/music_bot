@@ -81,6 +81,11 @@ def main(dry_run: bool = False):
             renamed += 1
             continue
 
+        if target.exists():
+            log.warning("  SKIP (target exists) %s -> %s", fpath, target)
+            skipped += 1
+            continue
+
         try:
             os.makedirs(os.path.dirname(target), exist_ok=True)
             os.rename(fpath, target)

@@ -40,11 +40,15 @@ run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None) �
        after each successful download → `_rename_after_download()` + `_fix_cover()`
        (moves SpotiFLAC's `_`-path to original-symbols path, overwrites cover with Spotify art)
 ```
-`_dl` handles SpotiFLAC's tuple-shaped download results — `download_track()`
-returns `list[(id, title, artists, err)]`, not TrackMetadata; the failed
-track is appended to `failed_list` once and `failure_cb(f[1], f[3] or
-"download_failed")` fires per failing tuple (job can't crash → whole job
-can't be flipped to failed). `_rename_after_download(track, cfg, logger, started)`
+`_dl` handles SpotiFLAC's failure-shaped download results — `download_track()`
+actually returns the **failed** tracks as `list[TrackMetadata]` (the
+`(id, title, artists, err)` tuples are internal to `DownloadWorker._failed`;
+`_run_worker_async` converts them, downloader.py:902-904). The code normalizes
+both shapes (TrackMetadata → `(f.title, "download_failed")`, tuple → `(f[1],
+f[3] or "download_failed")`), appends the failed track to `failed_list`
+exactly once and fires `failure_cb(title, err)` per failing track — a job
+reports exactly one failed row per genuinely failed track and can never crash
+the whole job. `_rename_after_download(track, cfg, logger, started)`
 is freshness-gated: `started = time.time()` is captured before each
 `download_track()`, and the SpotiFLAC path is only renamed/unlinked when its
 `st_mtime >= started` — a pre-existing file at that path (SpotiFLAC 1.5.9
@@ -299,7 +303,7 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 
 - `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`; after tagging, `flac_utils.embed_cover()` is called to *replace* pictures — SpotiFLAC's FLAC tagger `audio.delete()` clears tags but not pictures, so without this old/wrong covers survive (and multiple identical PICTURE blocks pile up). CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
 - `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
-- `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths (regression-tested, incl. dry-run + empty-dir pruning)
+- `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths (regression-tested, incl. dry-run + empty-dir pruning). Renames are skipped (warn) when the target already exists — `os.rename` would silently overwrite it.
 - `scripts/migrate_library.py` — one-time move of root-level `~/Music/{Album}/...` entries into the owner's `{username}_Music/` folder (excludes `*_Music`, `shared_Music`, dotfiles; `.m3u8` files move with their tracks so relative paths stay valid). CLI: `python scripts/migrate_library.py --username espo [--dry-run]`.
 - `scripts/archive/` — superseded one-off scripts kept for reference: `fix_mb_tags.py` (strip MUSICBRAINZ_* — superseded by `/fixmetadata`), `retag_missing.py` (hardcoded tagless files — predecessor of fix_metadata), `backfill_urls.py` (write Spotify URL tags). Not wired into the bot or tests.
 
@@ -321,7 +325,7 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 ```
 FROM python:3.14-slim
 ├─ apt: chromium (for nodriver CDP)
-├─ pip: spotiflac + python-telegram-bot
+├─ pip: spotiflac (1.6.0) + python-telegram-bot
 ├─ COPY . /app
 ├─ ENV CHROME_PATH=/usr/bin/chromium
 ├─ ENV CHROME_FLAGS="--no-sandbox --disable-dev-shm-usage"
