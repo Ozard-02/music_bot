@@ -66,6 +66,10 @@ def partition_tracks(
         full = Path(cfg["output_dir"]) / track_relative_path(t, cfg)
         if full.exists():
             existing.append(t)
+        elif (Path(cfg["output_dir"]) / spotiflac_track_relative_path(t, cfg)).exists():
+            # present under SpotiFLAC's sanitized naming (older downloads,
+            # naming drift) — treat as existing, never re-download
+            existing.append(t)
         elif t.title in skip:
             given_up.append(t)
         else:
