@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -110,7 +111,15 @@ def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
         logger.debug("Lyrics sidecar failed for %s", rel)
 
 
-def _rename_after_download(track, cfg: dict, logger: logging.Logger):
+def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: float | None = None):
+    """Normalize a freshly downloaded file from SpotiFLAC's naming to ours.
+
+    Only touches files this download actually wrote: `started` (wall clock
+    captured before the download) is compared against the file's mtime.  A
+    file that pre-dates the download is left completely untouched — never
+    deleted or moved, since naming drift can make `spoti_path` point at an
+    older, unrelated file (data-loss hazard).  Never raises.
+    """
     spoti_rel = spotiflac_track_relative_path(track, cfg)
     orig_rel = track_relative_path(track, cfg)
     if spoti_rel == orig_rel:
@@ -119,14 +128,23 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger):
     orig_path = Path(cfg["output_dir"]) / orig_rel
     if not spoti_path.exists():
         return
-    if orig_path.exists():
-        logger.warning("Target exists, removing duplicate: %s", spoti_path)
-        spoti_path.unlink()
-        return
-    orig_path.parent.mkdir(parents=True, exist_ok=True)
-    spoti_path.rename(orig_path)
-    logger.info("Renamed %s -> %s", spoti_rel, orig_rel)
-    prune_empty_parents(spoti_path, Path(cfg["output_dir"]))
+    try:
+        if started is None or spoti_path.stat().st_mtime < started:
+            logger.warning(
+                "Not renaming %s — file pre-dates this download",
+                spoti_rel,
+            )
+            return
+        if orig_path.exists():
+            logger.warning("Target exists, removing duplicate: %s", spoti_path)
+            spoti_path.unlink()
+            return
+        orig_path.parent.mkdir(parents=True, exist_ok=True)
+        spoti_path.rename(orig_path)
+        logger.info("Renamed %s -> %s", spoti_rel, orig_rel)
+        prune_empty_parents(spoti_path, Path(cfg["output_dir"]))
+    except Exception as exc:
+        logger.warning("Rename %s -> %s failed: %s", spoti_rel, orig_rel, exc)
 
 
 async def _download_tracks(
@@ -163,14 +181,16 @@ async def _download_tracks(
         nonlocal done_count
         async with sem:
             try:
+                started = time.time()
                 fl = await client.download_track(track.external_url)
                 if fl:
-                    failed_list.extend(fl)
+                    failed_list.append(track)
                     if failure_cb:
                         for f in fl:
-                            failure_cb(f.title, "download_failed")
+                            # SpotiFLAC returns (id, title, artists, error) tuples
+                            failure_cb(f[1], f[3] or "download_failed")
                 else:
-                    await asyncio.to_thread(_rename_after_download, track, cfg, logger)
+                    await asyncio.to_thread(_rename_after_download, track, cfg, logger, started)
                     await _fix_cover(track, cfg, logger)
                     if cfg.get("embed_lyrics"):
                         await asyncio.to_thread(_write_lyrics_sidecar, track, cfg, logger)

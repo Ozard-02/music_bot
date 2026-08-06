@@ -137,7 +137,7 @@ class TestWorkerProcess:
         assert titles == {"Broken Song", "Another Fail"}
 
     @pytest.mark.asyncio
-    async def test_timeout_requeues_not_fails(self, worker, bot):
+    async def test_timeout_marks_failed_not_requeued(self, worker, bot):
         qm = worker._queue
         qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
         item = qm.dequeue()
@@ -151,15 +151,14 @@ class TestWorkerProcess:
             await worker._process(item)
 
         s = qm.get_status()
-        assert s["failed"] == 0
-        assert s["queued"] == 1
+        assert s["failed"] == 1
+        assert s["queued"] == 0
         item_from_db = qm.get_item(item["id"])
-        assert item_from_db["retries"] == 1
-        assert item_from_db["retry_at"] is not None
+        assert item_from_db["status"] == "failed"
 
         bot.send_message.assert_awaited()
         msg = bot.send_message.call_args[1]["text"]
-        assert "Still downloading" in msg
+        assert "timed out" in msg
 
     @pytest.mark.asyncio
     async def test_timeout_persists_failures_from_failure_cb(self, worker, bot):

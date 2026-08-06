@@ -8,9 +8,10 @@
 Constants: SERVICES=["qobuz","deezer","amazon"], MAX_CONCURRENT=2,
            MAX_PARALLEL_JOBS=3, PER_TRACK_TIMEOUT=100, PER_TRACK_RETRIES=3,
            MAX_QUEUE_RETRIES=15, MAX_TRACK_RETRIES=10,
-           MAX_DOWNLOAD_TIMEOUT=28800, MAX_QUEUE_AGE=86400
+           MAX_DOWNLOAD_TIMEOUT=7200, STALL_TIMEOUT=1800, MAX_QUEUE_AGE=86400
 
-load_config(logger) → dict               # read ~/.spotiflac/config.json (incl. maxDownloadTimeout override)
+load_config(logger) → dict               # read ~/.spotiflac/config.json (incl. maxDownloadTimeout
+                                         # and stallTimeoutSeconds overrides)
 setup_logger(log_path) → logger          # RotatingFileHandler (5MB×3) + stream
 bridge_community_session(logger)         # copy desktop Tidal session
 ```
@@ -39,6 +40,17 @@ run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None) �
        after each successful download → `_rename_after_download()` + `_fix_cover()`
        (moves SpotiFLAC's `_`-path to original-symbols path, overwrites cover with Spotify art)
 ```
+`_dl` handles SpotiFLAC's tuple-shaped download results — `download_track()`
+returns `list[(id, title, artists, err)]`, not TrackMetadata; the failed
+track is appended to `failed_list` once and `failure_cb(f[1], f[3] or
+"download_failed")` fires per failing tuple (job can't crash → whole job
+can't be flipped to failed). `_rename_after_download(track, cfg, logger, started)`
+is freshness-gated: `started = time.time()` is captured before each
+`download_track()`, and the SpotiFLAC path is only renamed/unlinked when its
+`st_mtime >= started` — a pre-existing file at that path (SpotiFLAC 1.5.9
+uses `first_artist/…`, we compute `album_artist/…`, plus metadata re-fetch)
+is logged and never touched. The whole body is try/except-wrapped and never
+raises.
 Cover/rename helpers use `flac_utils.resolve_cover_data()` + `flac_utils.embed_cover()`. The
 SpotiFLAC monkey-patches live in `spotiflac_patch.py` (imported here for its
 import-time side-effect). Downloads enrich with `["apple","deezer","soundcloud"]`
@@ -112,7 +124,10 @@ spotiflac_sanitize / spotiflac_track_relative_path   # SpotiFLAC's `_`-sanitized
 track_relative_path(track, cfg)       # {AlbumArtist}/{Album}/{Artist} - {Title}.flac
 partition_tracks(tracks, cfg, skip_titles=None) → (existing, given_up, missing)
                                       # dedup by track.id, split by on-disk path check +
-                                      # title in skip_titles (shared by downloader + m3u8)
+                                      # title in skip_titles (shared by downloader + m3u8);
+                                      # a track counts as existing if the file is under
+                                      # EITHER naming scheme (original-symbols OR
+                                      # spotiflac `_`-sanitized path)
 get_jpeg_dimensions(data) → (w, h)    # JPEG SOF0/1/2 scan (0,0 if not JPEG)
 prune_empty_parents(path, root)       # rmdir empty ancestor dirs up to root (shared
                                       # by downloader rename + fix_original_filenames)
@@ -254,10 +269,13 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     └─ all ok → _handle_no_failures(): mark_done + _auto_build_m3u8() + send summary
        (given-up tracks reported separately as "❌ N given up")
   _run_download(item, url, display, skip_titles, cfg, chat): wires progress_cb
-    (→set_progress) + failure_cb (→log_failed_track live) into _run_url_sync, runs it
-    via asyncio.wait_for (timeout=cfg.max_download_timeout); on asyncio.TimeoutError
-    → _handle_timeout() and returns None
-  _handle_timeout(): is_expired() → mark_failed + give-up msg; else requeue w/ backoff_delay(retries, floor=1800)
+    (→set_progress, also bumps a monotonic stall clock) + failure_cb (→log_failed_track
+    live) into _run_url_sync, runs it via a shielded asyncio.wait_for loop with
+    timeout=min(cfg.max_download_timeout, cfg.stall_timeout) per slice — no progress for
+    a full slice → "stalled"; total time over cfg.max_download_timeout → "timed out"
+  _handle_timeout(item, display, chat, reason): mark_failed + give-up msg (no requeue —
+    the leaked thread keeps downloading in the background, its files get picked up by
+    later pre-checks, but the queue slot + next item move on immediately)
   _run_with_sem(item): in-flight guard via self._active {item_id: retries} — an item already
     running (or requeued after a timeout, its leaked thread still alive) is deferred 30 min, never duplicated
   _mark_done_and_notify(item, display, result, given_up, chat) — shared completion path

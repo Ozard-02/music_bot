@@ -27,7 +27,8 @@ PER_TRACK_RETRIES = 3
 MAX_PARALLEL_JOBS = 2
 MAX_QUEUE_RETRIES = 15
 MAX_TRACK_RETRIES = 10  # give up on a track after this many failed attempts
-MAX_DOWNLOAD_TIMEOUT = 28800  # 8h — last-resort cap on a whole job (per-track timeouts are the primary limiter)
+MAX_DOWNLOAD_TIMEOUT = 7200  # 2h — last-resort cap on a whole job (per-track timeouts are the primary limiter)
+STALL_TIMEOUT = 1800         # 30min — a job that makes no per-track progress this long is stuck
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
 RETRY_BACKOFF_BASE = 5    # seconds, doubles each retry
 MAX_RETRY_BACKOFF = 3600  # 1h cap
@@ -59,6 +60,7 @@ def load_config(logger: logging.Logger) -> dict:
         "quality": cfg.get("tidalQuality", "LOSSLESS"),
         "services": services,
         "max_download_timeout": int(cfg.get("maxDownloadTimeout", MAX_DOWNLOAD_TIMEOUT)),
+        "stall_timeout": int(cfg.get("stallTimeoutSeconds", STALL_TIMEOUT)),
     }
 
 

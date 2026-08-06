@@ -4,6 +4,7 @@ import asyncio
 import ctypes
 import gc
 import logging
+import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from config import (
     MAX_TRACK_RETRIES,
     MAX_DOWNLOAD_TIMEOUT,
     MAX_QUEUE_AGE,
+    STALL_TIMEOUT,
     RETRY_BACKOFF_BASE,
     MAX_RETRY_BACKOFF,
     esc,
@@ -290,49 +292,59 @@ class Worker:
         chat: int | None,
     ) -> DownloadResult | None:
         """Run the download with callbacks wired to the queue and a whole-job
-        timeout. Returns the result, or None on timeout (already requeued)."""
+        timeout plus a no-progress stall watchdog. Returns the result, or None
+        when the job timed out / stalled (already marked failed — the leaked
+        download thread keeps running in the background and pre-check picks up
+        whatever it writes on a future run)."""
+
+        stall = {"last": time.monotonic()}
 
         def progress_cb(done, total, title):
+            stall["last"] = time.monotonic()
             self._queue.set_progress(item["id"], f"{done}/{total} · Now: {title}")
 
         def failure_cb(title, err):
             self._queue.log_failed_track(item["id"], title, err)
 
         timeout = cfg.get("max_download_timeout", MAX_DOWNLOAD_TIMEOUT)
+        stall_timeout = cfg.get("stall_timeout", STALL_TIMEOUT)
+        task = asyncio.create_task(asyncio.to_thread(
+            _run_url_sync, url, cfg, self._logger, skip_titles, progress_cb, failure_cb,
+        ))
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    _run_url_sync, url, cfg, self._logger, skip_titles, progress_cb, failure_cb,
-                ),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            await self._handle_timeout(item, display, chat)
-            return None
+            while True:
+                wait = min(timeout, stall_timeout)
+                try:
+                    return await asyncio.wait_for(asyncio.shield(task), timeout=wait)
+                except asyncio.TimeoutError:
+                    if time.monotonic() - stall["last"] >= stall_timeout:
+                        await self._handle_timeout(item, display, chat, reason="stall")
+                        return None
+                    timeout -= wait
+                    if timeout <= 0:
+                        await self._handle_timeout(item, display, chat, reason="timeout")
+                        return None
+        except asyncio.CancelledError:
+            raise
 
     async def _handle_no_failures(self, item: dict, display: str, result: DownloadResult, chat: int | None):
         await self._mark_done_and_notify(
             item, display, result, len(result.gave_up_tracks), chat,
         )
 
-    async def _handle_timeout(self, item: dict, display: str, chat: int | None):
-        """A whole-job timeout means the download is still running in the
-        background (wait_for can't cancel a thread). Requeue with a delay so
-        the leaked download can finish; the pre-check will skip anything the
-        leaked thread already wrote to disk. Never marks the item failed."""
-        if is_expired(item):
-            await asyncio.to_thread(self._queue.mark_failed, item["id"], "Timed out in queue")
-            await self._notify(
-                f"❌ <b>{esc(display)}</b>\n  ⏰ In queue over 24h — gave up",
-                chat,
-            )
-            return
-
-        retries = item.get("retries", 0)
-        delay = backoff_delay(retries, floor=1800)
-        await asyncio.to_thread(self._queue.requeue, item["id"], delay)
+    async def _handle_timeout(self, item: dict, display: str, chat: int | None, reason: str = "timeout"):
+        """A whole-job timeout or stall means the download thread is still
+        running in the background (wait_for can't cancel a thread).  Mark the
+        item failed so the queue advances to the next item; the leaked thread
+        keeps downloading and pre-check will pick up whatever it writes on a
+        future run.  Never requeues — a stuck item must not hog the queue."""
+        if reason == "stall":
+            detail = "stalled (no progress for a long time)"
+        else:
+            detail = "download timed out"
+        await asyncio.to_thread(self._queue.mark_failed, item["id"], detail)
         await self._notify(
-            f"⏳ <b>{esc(display)}</b>\n  Still downloading, will retry (#{item['id']}, attempt {retries + 1}/{MAX_QUEUE_RETRIES})",
+            f"❌ <b>{esc(display)}</b>\n  ⏰ {detail} — failed, next item in queue",
             chat,
         )
 

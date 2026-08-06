@@ -2,11 +2,22 @@
 
 import asyncio
 import logging
+import os
+import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from downloader import run_url
+from downloader import _rename_after_download, run_url
+from track_utils import partition_tracks, spotiflac_track_relative_path, track_relative_path
+
+
+def _touch(path: Path, mtime: float | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
 
 
 def _mock_track(track_id: str, title: str, **kwargs):
@@ -264,7 +275,7 @@ class TestRunUrl:
     async def test_album_partial_failure(self, config, logger):
         t1 = _mock_track("t1", "OK Song")
         t2 = _mock_track("t2", "Bad Song")
-        failed = [_mock_track("t2", "Bad Song")]
+        failed = [("t2", "Bad Song", "Artist", "Qobuz 500")]
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
             patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
@@ -281,7 +292,7 @@ class TestRunUrl:
 
         assert result.ok == 1
         assert result.failed == 1
-        assert len(result.failed_tracks) == 1
+        assert result.failed_tracks == [("t2", "Bad Song", "download_failed")]
 
     @pytest.mark.asyncio
     async def test_download_raises_exception(self, config, logger):
@@ -304,7 +315,7 @@ class TestRunUrl:
     async def test_failure_cb_called_for_failed_track(self, config, logger):
         t1 = _mock_track("t1", "OK Song")
         t2 = _mock_track("t2", "Bad Song")
-        failed = [_mock_track("t2", "Bad Song")]
+        failed = [("t2", "Bad Song", "Artist", "Qobuz 500")]
         calls = []
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
@@ -321,7 +332,7 @@ class TestRunUrl:
             result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
 
         assert result.failed == 1
-        assert calls == [("Bad Song", "download_failed")]
+        assert calls == [("Bad Song", "Qobuz 500")]
 
     @pytest.mark.asyncio
     async def test_failure_cb_called_on_exception(self, config, logger):
@@ -587,3 +598,105 @@ class TestQobuzLockPatch:
 
         assert results == [True, True]
         assert not any(t.is_alive() for t in threads)
+
+
+class TestRenameAfterDownload:
+    """_rename_after_download must only touch files the current download wrote:
+    pre-existing files (naming drift) are never deleted or moved."""
+
+    def _track(self):
+        return _mock_track(
+            "t1", "Song? <Nice>",
+            album_artist="AC/DC", album="Greatest Hits: Vol 1", first_artist="M/A/R/R/S",
+        )
+
+    def _cfg(self, tmp_path):
+        return {
+            "output_dir": str(tmp_path),
+            "filename_format": "{artist} - {title}",
+            "use_artist_subfolders": True,
+            "use_album_subfolders": True,
+            "first_artist_only": True,
+        }
+
+    def _paths(self, tmp_path, t):
+        cfg = self._cfg(tmp_path)
+        return (
+            Path(cfg["output_dir"]) / spotiflac_track_relative_path(t, cfg),
+            Path(cfg["output_dir"]) / track_relative_path(t, cfg),
+        )
+
+    def test_fresh_duplicate_deleted_when_target_exists(self, tmp_path, logger):
+        t = self._track()
+        spoti, orig = self._paths(tmp_path, t)
+        _touch(spoti)
+        _touch(orig)
+        _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
+        assert orig.exists()
+        assert not spoti.exists()
+
+    def test_pre_existing_spoti_never_deleted(self, tmp_path, logger):
+        t = self._track()
+        spoti, orig = self._paths(tmp_path, t)
+        _touch(spoti, mtime=time.time() - 3600)
+        _touch(orig)
+        _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time())
+        assert spoti.exists()
+        assert orig.exists()
+
+    def test_fresh_file_renamed_when_target_absent(self, tmp_path, logger):
+        t = self._track()
+        spoti, orig = self._paths(tmp_path, t)
+        _touch(spoti)
+        _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
+        assert orig.exists()
+        assert not spoti.exists()
+
+    def test_stale_file_left_alone_when_target_absent(self, tmp_path, logger):
+        t = self._track()
+        spoti, orig = self._paths(tmp_path, t)
+        _touch(spoti, mtime=time.time() - 3600)
+        _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time())
+        assert spoti.exists()
+        assert not orig.exists()
+
+
+class TestPartitionTracksNaming:
+    """Pre-check counts a track as existing under either naming scheme, so
+    tracks already on disk are never re-downloaded (or fed to the post-download
+    hooks)."""
+
+    def _track(self):
+        return _mock_track(
+            "t1", "Song? <Nice>",
+            album_artist="AC/DC", album="Greatest Hits: Vol 1", first_artist="M/A/R/R/S",
+        )
+
+    def _cfg(self, tmp_path):
+        return {
+            "output_dir": str(tmp_path),
+            "filename_format": "{artist} - {title}",
+            "first_artist_only": True,
+        }
+
+    def test_sanitized_named_file_counts_as_existing(self, tmp_path):
+        t = self._track()
+        cfg = self._cfg(tmp_path)
+        _touch(Path(cfg["output_dir"]) / spotiflac_track_relative_path(t, cfg))
+        existing, given_up, missing = partition_tracks([t], cfg)
+        assert existing == [t]
+        assert missing == []
+
+    def test_symbol_preserving_file_counts_as_existing(self, tmp_path):
+        t = self._track()
+        cfg = self._cfg(tmp_path)
+        _touch(Path(cfg["output_dir"]) / track_relative_path(t, cfg))
+        existing, given_up, missing = partition_tracks([t], cfg)
+        assert existing == [t]
+        assert missing == []
+
+    def test_missing_when_absent(self, tmp_path):
+        t = self._track()
+        existing, given_up, missing = partition_tracks([t], self._cfg(tmp_path))
+        assert existing == []
+        assert missing == [t]
