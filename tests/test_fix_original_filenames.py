@@ -99,3 +99,31 @@ class TestFixOriginalFilenames:
 
         assert f.exists()
         assert "RENAMED" not in caplog.text
+
+    def test_existing_target_is_not_overwritten(self, tmp_path, caplog):
+        """os.rename would silently destroy a pre-existing target (two files
+        resolving to the same path) — the rename must be skipped instead."""
+        src = _make_flac(
+            tmp_path / "Artist" / "Album_ With Colon",
+            "Artist - Title_ Part.flac",
+        )
+        target = tmp_path / "Artist" / "Album: With Colon" / "Artist - Title: Part.flac"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"precious")
+        audio = _fake_flac(
+            {
+                "ARTIST": "Artist",
+                "ALBUMARTIST": "Artist",
+                "ALBUM": "Album: With Colon",
+                "TITLE": "Title: Part",
+            }
+        )
+
+        with caplog.at_level(logging.INFO), patch(
+            "scripts.fix_original_filenames.load_config", return_value=_cfg(tmp_path)
+        ), patch("scripts.fix_original_filenames.FLAC", return_value=audio):
+            main()
+
+        assert src.exists()
+        assert target.read_bytes() == b"precious"
+        assert "SKIP (target exists)" in caplog.text

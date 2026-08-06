@@ -187,8 +187,14 @@ async def _download_tracks(
                     failed_list.append(track)
                     if failure_cb:
                         for f in fl:
-                            # SpotiFLAC returns (id, title, artists, error) tuples
-                            failure_cb(f[1], f[3] or "download_failed")
+                            # SpotiFLAC's download_track returns the failed tracks,
+                            # as TrackMetadata (1.5.x/1.6.x) or (id, title, artists,
+                            # error) tuples (older versions). Normalize both shapes.
+                            if isinstance(f, tuple):
+                                title, err = f[1], f[3] or "download_failed"
+                            else:
+                                title, err = f.title, "download_failed"
+                            failure_cb(title, err)
                 else:
                     await asyncio.to_thread(_rename_after_download, track, cfg, logger, started)
                     await _fix_cover(track, cfg, logger)
