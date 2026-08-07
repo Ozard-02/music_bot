@@ -166,3 +166,33 @@ def test_already_canonical_untouched(tmp_path):
 
     assert counts == {"moved": 0, "deduped": 0, "skipped": 0, "errors": 0}
     assert canonical.exists()
+
+
+def test_never_leaves_user_folder(tmp_path):
+    """Multi-user layout: a file already canonical inside {username}_Music
+    must stay there — never move up into the shared root."""
+    cfg = _cfg(tmp_path)
+    inside = tmp_path / "Espo02_Music" / "Stromae" / "Cheese" / "Stromae - Dodo.flac"
+    _write_flac(inside, title="Dodo", artist="Stromae",
+                album_artist="Stromae", album="Cheese", track_id="t1")
+
+    counts = consolidate(cfg, dry_run=False)
+
+    assert counts == {"moved": 0, "deduped": 0, "skipped": 0, "errors": 0}
+    assert inside.exists()
+    assert not (tmp_path / "Stromae" / "Cheese" / "Stromae - Dodo.flac").exists()
+
+
+def test_scattered_file_stays_inside_user_folder(tmp_path):
+    cfg = _cfg(tmp_path)
+    scattered = tmp_path / "Espo02_Music" / "The Cars" / "Soundtrack_ Live" / "The Cars - Drive On.flac"
+    _write_flac(scattered, title="Drive On", artist="The Cars",
+                album_artist="Various Artists", album="Soundtrack: Live", track_id="t1")
+
+    counts = consolidate(cfg, dry_run=False)
+
+    assert counts["moved"] == 1
+    assert not scattered.exists()
+    canonical = tmp_path / "Espo02_Music" / "Various Artists" / "Soundtrack: Live" / "The Cars - Drive On.flac"
+    assert canonical.exists()
+    assert not (tmp_path / "Various Artists" / "Soundtrack: Live" / "The Cars - Drive On.flac").exists()

@@ -5,8 +5,10 @@ SpotiFLAC writes files under first_artist/album/ with sanitized (char-removed)
 names, while this project's canonical layout is album_artist/album/ with
 original symbols — so tracks of compilations/special-char albums end up
 scattered and the pre-check never sees them.  This script finds every FLAC
-via its tags, moves it to the canonical path, and removes only *provable*
-duplicates (same embedded Spotify ID at both paths — never anything else).
+via its tags, moves it to the canonical path *inside the user folder it
+already lives in* (`{username}_Music` — files never leave their user folder),
+and removes only *provable* duplicates (same embedded Spotify ID at both
+paths — never anything else).
 
 Usage:
     python scripts/consolidate_library.py           # real consolidation
@@ -32,6 +34,16 @@ from track_utils import prune_empty_parents
 log = logging.getLogger("consolidate_library")
 
 
+def _user_root(fpath: Path, output_dir: Path) -> Path:
+    """The per-user folder (`{username}_Music`, library.py) containing `fpath`,
+    else the output root itself.  Files must never be moved *out* of their
+    user folder — each user's library stays self-contained."""
+    for anc in fpath.parents:
+        if anc.name.endswith("_Music"):
+            return anc
+    return output_dir
+
+
 def consolidate(cfg: dict, dry_run: bool = False) -> dict:
     root = Path(cfg["output_dir"])
     moved = deduped = skipped = errors = 0
@@ -48,13 +60,14 @@ def consolidate(cfg: dict, dry_run: bool = False) -> dict:
             log.warning("  SKIP (unreadable/incomplete tags) %s", fpath)
             skipped += 1
             continue
-        target = root / rel
+        user_root = _user_root(fpath, root)
+        target = user_root / rel
         if fpath == target:
             continue
 
         try:
             if not target.exists():
-                _move_with_sidecar(fpath, target, root, dry_run, log)
+                _move_with_sidecar(fpath, target, user_root, dry_run, log)
                 moved += 1
                 continue
             # Target exists: remove the duplicate ONLY when both files provably
@@ -66,7 +79,7 @@ def consolidate(cfg: dict, dry_run: bool = False) -> dict:
                     log.info("  WOULD REMOVE duplicate\n    %s\n    (same track as %s)", fpath, target)
                 else:
                     fpath.unlink()
-                    prune_empty_parents(fpath, root)
+                    prune_empty_parents(fpath, user_root)
                     log.info("  REMOVED duplicate\n    %s\n    (same track as %s)", fpath, target)
                 deduped += 1
             else:
