@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
-from flac_utils import embed_cover, read_lrc, resolve_cover_data, write_lrc_sidecar
+from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
 from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
 
 
@@ -111,6 +111,13 @@ def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
         logger.debug("Lyrics sidecar failed for %s", rel)
 
 
+# Cross-job in-flight guard: overlapping jobs (same track/album/playlist in the
+# queue in parallel) download each track exactly once; the second job counts
+# the track as skipped instead of writing a competing .part file.
+_in_flight: set[str] = set()
+_in_flight_lock = asyncio.Lock()
+
+
 def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: float | None = None):
     """Normalize a freshly downloaded file from SpotiFLAC's naming to ours.
 
@@ -136,8 +143,17 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: fl
             )
             return
         if orig_path.exists():
-            logger.warning("Target exists, removing duplicate: %s", spoti_path)
-            spoti_path.unlink()
+            # The fresh download duplicated an existing canonical file.
+            # Delete the duplicate ONLY when it provably is the same track
+            # (embedded Spotify ID matches); never delete what we can't prove.
+            if get_spotify_id_from_file(spoti_path) == track.id:
+                logger.warning("Target exists, removing duplicate: %s", spoti_path)
+                spoti_path.unlink()
+                return
+            logger.warning(
+                "Target exists but ID mismatch, keeping both: %s (skip unlink)",
+                spoti_path,
+            )
             return
         orig_path.parent.mkdir(parents=True, exist_ok=True)
         spoti_path.rename(orig_path)
@@ -175,11 +191,17 @@ async def _download_tracks(
 
     sem = asyncio.Semaphore(MAX_CONCURRENT)
     failed_list = []
+    skipped_inflight = []
     done_count = 0
 
     async def _dl(track):
         nonlocal done_count
         async with sem:
+            async with _in_flight_lock:
+                if track.id in _in_flight:
+                    skipped_inflight.append(track)
+                    return
+                _in_flight.add(track.id)
             try:
                 started = time.time()
                 fl = await client.download_track(track.external_url)
@@ -204,15 +226,38 @@ async def _download_tracks(
                 failed_list.append(track)
                 if failure_cb:
                     failure_cb(track.title, str(exc))
+            finally:
+                async with _in_flight_lock:
+                    _in_flight.discard(track.id)
             done_count += 1
             if progress_cb:
                 await asyncio.to_thread(progress_cb, done_count, len(missing), track.title)
 
     await asyncio.gather(*[_dl(t) for t in missing], return_exceptions=True)
 
+    # Reconcile: a track counts as ok only if a file actually exists on disk
+    # (canonical layout or SpotiFLAC layout) — "success but no file" (naming
+    # drift, provider glitch) is reported as failed, not silently ok.
+    failed_ids = {t.id for t in failed_list}
+    skip_ids = {t.id for t in skipped_inflight}
+    base = Path(cfg["output_dir"])
+    for t in missing:
+        if t.id in failed_ids or t.id in skip_ids:
+            continue
+        if not (base / track_relative_path(t, cfg)).exists() and not (
+            base / spotiflac_track_relative_path(t, cfg)
+        ).exists():
+            failed_list.append(t)
+            failed_ids.add(t.id)
+            logger.warning("Reconcile: no file on disk after download: %s", t.title)
+            if failure_cb:
+                failure_cb(t.title, "no_file_after_download")
+
     failed = len(failed_list)
-    ok = len(missing) - failed
-    skipped = existing_count
+    ok = len(missing) - failed - len(skipped_inflight)
+    skipped = existing_count + len(skipped_inflight)
+    if skipped_inflight:
+        logger.info("Skipped %d track(s) already in flight in another job", len(skipped_inflight))
     logger.info("PASS — %d ok, %d skipped, %d failed", ok, skipped, failed)
     return DownloadResult(
         ok=ok,

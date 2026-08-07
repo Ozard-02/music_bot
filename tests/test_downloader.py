@@ -31,11 +31,64 @@ def _mock_track(track_id: str, title: str, **kwargs):
     t.album_artist = kwargs.get("album_artist", "AlbumArtist")
     t.album = kwargs.get("album", "Album")
     t.duration_seconds = 0
+    # SpotiFLAC's build_filename() reads these — real types, not MagicMocks
+    t.isrc = ""
+    t.release_date = ""
+    t.year = ""
+    t.disc_number = 0
+    t.track_number = 0
     return t
 
 
+# Minimal real FLAC (1 silent 0.05s frame) — mutagen can reopen and re-tag it.
+_MINIMAL_FLAC_B64 = (
+    "ZkxhQwAAACIQABAAAABFAABFAPoA8AAAACh9IM/5764f4/t0wbC25gK2AwAAEgAAAAA"
+    "AAAAAAAAAAAAAAAAAKAQAAFUgAAAAcmVmZXJlbmNlIGxpYkZMQUMgMS41LjAgMjAyNTAy"
+    "MTEBAAAAKQAAAFVSTD1odHRwczovL29wZW4uc3BvdGlmeS5jb20vdHJhY2svYWJjMTIz"
+    "gQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAD/+GwIACcEZ0YCWAnWD+MN5rSrjGIm5zGFI0Bq/dcDtU2sERH4E1LXYH5qam2UV1nU"
+    "5vxmcNEQq+yXf4DMr4g5OhCwVK8="
+)
+
+
+def _write_flac(path: Path, track_id: str) -> None:
+    """Write a minimal real FLAC carrying the Spotify track URL tag."""
+    import base64
+
+    from mutagen.flac import FLAC
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(base64.b64decode(_MINIMAL_FLAC_B64))
+    f = FLAC(str(path))
+    f["URL"] = f"https://open.spotify.com/track/{track_id}"
+    f.save(str(path))
+
+
 def _make_client(track_return=None, playlist_return=None,
-                 download_return=None):
+                 download_return=None, cfg=None):
     client = AsyncMock()
     if track_return is not None:
         client.get_track_metadata = AsyncMock(return_value=track_return)
@@ -43,7 +96,32 @@ def _make_client(track_return=None, playlist_return=None,
         client.get_track_metadata = AsyncMock()
     if playlist_return is not None:
         client.get_playlist = AsyncMock(return_value=playlist_return)
-    client.download_track = AsyncMock(return_value=download_return or [])
+
+    # Map track id -> TrackMetadata so a "successful" download writes the file
+    # at the real SpotiFLAC path (as SpotiFLAC does) — the reconcile check then
+    # sees what production sees.
+    registry = {}
+    if track_return is not None:
+        registry[track_return.id] = track_return
+    if playlist_return:
+        for t in playlist_return[1]:
+            registry[t.id] = t
+
+    async def _download_track(url):
+        tid = url.rsplit("/", 1)[-1].split("?")[0]
+        t = registry.get(tid)
+        if download_return:
+            # failed entries: TrackMetadata or (id, title, artists, err) tuples
+            matching = [f for f in download_return if (f.id if hasattr(f, "id") else f[0]) == tid]
+            if matching:
+                return matching
+        if t is not None and cfg is not None:
+            p = Path(cfg["output_dir"]) / spotiflac_track_relative_path(t, cfg)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.touch()
+        return []
+
+    client.download_track = AsyncMock(side_effect=_download_track)
     return client
 
 
@@ -59,7 +137,7 @@ class TestRunUrl:
             patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
-            client = _make_client(track_return=track, download_return=[])
+            client = _make_client(track_return=track, download_return=[], cfg=config)
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
@@ -160,9 +238,19 @@ class TestRunUrl:
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_album_all_new(self, config, logger):
+    async def test_album_all_new(self, tmp_path, logger):
         t1 = _mock_track("t1", "Song A")
         t2 = _mock_track("t2", "Song B")
+        cfg = {
+            "output_dir": str(tmp_path),
+            "filename_format": "{artist} - {title}",
+            "use_artist_subfolders": True,
+            "use_album_subfolders": True,
+            "first_artist_only": True,
+            "embed_lyrics": True,
+            "quality": "LOSSLESS",
+            "services": ["qobuz", "deezer", "amazon"],
+        }
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
             patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
@@ -171,11 +259,11 @@ class TestRunUrl:
             client = _make_client(
                 playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
                 download_return=[],
+                cfg=cfg,
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            cfg = {**config, "output_dir": "/tmp/does-not-exist-xyz"}
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
         assert result.to_dict() == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
@@ -212,6 +300,7 @@ class TestRunUrl:
             client = _make_client(
                 playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
                 download_return=[],
+                cfg=cfg,
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -236,6 +325,7 @@ class TestRunUrl:
             client = _make_client(
                 playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
                 download_return=[],
+                cfg=config,
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -285,8 +375,9 @@ class TestRunUrl:
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
                 playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+                download_return=failed,
+                cfg=config,
             )
-            client.download_track = AsyncMock(side_effect=[[], failed])
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
@@ -327,8 +418,9 @@ class TestRunUrl:
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
                 playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+                download_return=failed,
+                cfg=config,
             )
-            client.download_track = AsyncMock(side_effect=[[], failed])
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
@@ -353,8 +445,9 @@ class TestRunUrl:
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
                 playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]),
+                download_return=failed,
+                cfg=config,
             )
-            client.download_track = AsyncMock(side_effect=[[], failed])
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
@@ -393,7 +486,7 @@ class TestRunUrl:
             patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
-            client = _make_client(track_return=track)
+            client = _make_client(track_return=track, download_return=[], cfg=config)
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
@@ -414,6 +507,7 @@ class TestRunUrl:
             client = _make_client(
                 playlist_return=({"name": "Test", "type": "album"}, [t1, t2, t1]),
                 download_return=[],
+                cfg=config,
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -427,6 +521,73 @@ class TestRunUrl:
         client.download_track.assert_any_call(t2.external_url)
 
     @pytest.mark.asyncio
+    async def test_success_but_no_file_reported_failed(self, config, logger):
+        """Reconcile: a 'successful' download that leaves no file on disk is
+        reported as failed (no silent ok), so the pre-check churn is visible."""
+        track = _mock_track("abc123", "Test Track")
+        calls = []
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "track", "id": "abc123"}
+            client = _make_client(track_return=track)  # no cfg -> writes nothing
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.TRACK_URL, config, logger,
+                                   failure_cb=lambda title, err: calls.append((title, err)))
+
+        assert result.ok == 0
+        assert result.failed == 1
+        assert calls == [("Test Track", "no_file_after_download")]
+
+    @pytest.mark.asyncio
+    async def test_overlapping_parallel_jobs_download_each_track_once(self, tmp_path, logger):
+        """Two jobs downloading the same track concurrently must produce one
+        download: the second job skips the in-flight track, never double-writes."""
+        from downloader import _download_tracks
+
+        cfg = {
+            "output_dir": str(tmp_path),
+            "filename_format": "{artist} - {title}",
+            "use_artist_subfolders": True,
+            "use_album_subfolders": True,
+            "first_artist_only": True,
+            "embed_lyrics": True,
+            "quality": "LOSSLESS",
+            "services": ["qobuz"],
+        }
+        t = _mock_track("abc123", "Song A")
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def _slow_download(url):
+            calls.append(url)
+            started.set()
+            await release.wait()
+            p = Path(cfg["output_dir"]) / spotiflac_track_relative_path(t, cfg)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.touch()
+            return []
+
+        client = AsyncMock()
+        client.get_track_metadata = AsyncMock(return_value=t)
+        client.download_track = AsyncMock(side_effect=_slow_download)
+
+        job1 = asyncio.create_task(_download_tracks(client, [t], cfg, logger))
+        await started.wait()
+        job2 = asyncio.create_task(_download_tracks(client, [t], cfg, logger))
+        await asyncio.sleep(0.1)
+        release.set()
+        r1, r2 = await asyncio.gather(job1, job2)
+
+        assert len(calls) == 1
+        assert r1.ok + r1.skipped == 1 and r2.ok + r2.skipped == 1
+        assert r1.failed == 0 and r2.failed == 0
+
+    @pytest.mark.asyncio
     async def test_progress_cb_reports_per_track(self, config, logger):
         t1 = _mock_track("t1", "Song A")
         t2 = _mock_track("t2", "Song B")
@@ -438,6 +599,7 @@ class TestRunUrl:
             client = _make_client(
                 playlist_return=({"name": "Test", "type": "album"}, [t1, t2]),
                 download_return=[],
+                cfg=config,
             )
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
@@ -659,11 +821,31 @@ class TestRenameAfterDownload:
     def test_fresh_duplicate_deleted_when_target_exists(self, tmp_path, logger):
         t = self._track()
         spoti, orig = self._paths(tmp_path, t)
-        _touch(spoti)
+        _write_flac(spoti, t.id)  # provably the same track (embedded Spotify ID)
         _touch(orig)
         _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
         assert orig.exists()
         assert not spoti.exists()
+
+    def test_duplicate_with_mismatched_id_never_deleted(self, tmp_path, logger):
+        """The unlink must never fire without proof the file is the same track:
+        a different (or unknown) embedded ID keeps both files."""
+        t = self._track()
+        spoti, orig = self._paths(tmp_path, t)
+        _write_flac(spoti, "other_track_id")
+        _touch(orig)
+        _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
+        assert spoti.exists()
+        assert orig.exists()
+
+    def test_duplicate_without_id_tag_never_deleted(self, tmp_path, logger):
+        t = self._track()
+        spoti, orig = self._paths(tmp_path, t)
+        _touch(spoti)  # empty file: no tags, no proof
+        _touch(orig)
+        _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
+        assert spoti.exists()
+        assert orig.exists()
 
     def test_pre_existing_spoti_never_deleted(self, tmp_path, logger):
         t = self._track()

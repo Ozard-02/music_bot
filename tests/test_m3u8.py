@@ -15,7 +15,6 @@ from m3u8 import (
 from config import MAX_DOWNLOAD_TIMEOUT
 from track_utils import (
     sanitize,
-    spotiflac_sanitize,
     spotiflac_track_relative_path,
     track_relative_path,
 )
@@ -39,6 +38,12 @@ def make_track(
     t.album = album
     t.album_artist = album_artist
     t.duration_seconds = duration_seconds
+    # SpotiFLAC's build_filename() reads these — real types, not MagicMocks
+    t.isrc = ""
+    t.release_date = ""
+    t.year = ""
+    t.disc_number = 0
+    t.track_number = 0
     return t
 
 
@@ -58,21 +63,6 @@ class TestSanitize:
 
     def test_preserves_special_chars(self):
         assert sanitize('Song? <Nice>', fallback='unknown') == 'Song? <Nice>'
-
-
-class TestSpotiflacSanitize:
-    def test_replaces_special_chars(self):
-        assert spotiflac_sanitize('My:Playlist/1', fallback='playlist') == 'My_Playlist_1'
-
-    def test_strips_whitespace(self):
-        assert spotiflac_sanitize('  Test  ', fallback='playlist') == 'Test'
-
-    def test_empty_fallback(self):
-        assert spotiflac_sanitize('', fallback='playlist') == 'playlist'
-        assert spotiflac_sanitize('   ', fallback='playlist') == 'playlist'
-
-    def test_keeps_valid(self):
-        assert spotiflac_sanitize('Summer Vibes 2024', fallback='playlist') == 'Summer Vibes 2024'
 
 
 class TestTrackRelativePath:
@@ -124,9 +114,11 @@ class TestSpotiflacTrackRelativePath:
         assert spotiflac_track_relative_path(t, cfg) == "Test Artist/Test Album/Test Artist - Test Track.flac"
 
     def test_first_artist_only_off(self):
+        """Real SpotiFLAC always uses the first_artist folder; only the
+        filename's {artist} placeholder honors the flag."""
         cfg = {"first_artist_only": False, "filename_format": "{artist} - {title}"}
         t = make_track(artists="Artist A, Artist B", first_artist="Artist A")
-        assert spotiflac_track_relative_path(t, cfg) == "Test Artist/Test Album/Artist A, Artist B - Test Track.flac"
+        assert spotiflac_track_relative_path(t, cfg) == "Artist A/Test Album/Artist A, Artist B - Test Track.flac"
 
     def test_custom_filename_template(self):
         cfg = {"first_artist_only": True, "filename_format": "{title} - {artist}"}
@@ -134,9 +126,11 @@ class TestSpotiflacTrackRelativePath:
         assert spotiflac_track_relative_path(t, cfg) == "Test Artist/Test Album/Test Track - Test Artist.flac"
 
     def test_different_album_artist(self):
+        """Compilation tracks land under the *first artist* folder, not the
+        album artist — that is why our pre-check used to miss them."""
         cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
         t = make_track(album_artist="Various Artists")
-        assert spotiflac_track_relative_path(t, cfg) == "Various Artists/Test Album/Test Artist - Test Track.flac"
+        assert spotiflac_track_relative_path(t, cfg) == "Test Artist/Test Album/Test Artist - Test Track.flac"
 
     def test_replaces_unsafe_chars(self):
         cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
@@ -146,9 +140,12 @@ class TestSpotiflacTrackRelativePath:
             first_artist="M/A/R/R/S",
             title="Song? <Nice>",
         )
-        assert spotiflac_track_relative_path(t, cfg) == "AC_DC/Greatest Hits_ Vol 1/M_A_R_R_S - Song_ _Nice_.flac"
+        # folders: unsafe chars -> _, filename: unsafe chars removed
+        assert spotiflac_track_relative_path(t, cfg) == "M_A_R_R_S/Greatest Hits_ Vol 1/MARRS - Song Nice.flac"
 
-    def test_collapses_whitespace(self):
+    def test_keeps_folder_whitespace(self):
+        """SpotiFLAC sanitizes folders with plain re.sub (no whitespace
+        normalization); only the filename collapses whitespace."""
         cfg = {"first_artist_only": True, "filename_format": "{artist} - {title}"}
         t = make_track(
             album_artist="  The   Artist  ",
@@ -156,7 +153,56 @@ class TestSpotiflacTrackRelativePath:
             first_artist="  Test  ",
             title="  Hello   World  ",
         )
-        assert spotiflac_track_relative_path(t, cfg) == "The Artist/My Album/Test - Hello World.flac"
+        assert spotiflac_track_relative_path(t, cfg) == "  Test  /  My   Album  /Test - Hello World.flac"
+
+
+class TestSpotiFlacPathParity:
+    """spotiflac_track_relative_path must equal what the installed SpotiFLAC
+    really writes, for the whole tricky surface.  Regression for the
+    pre-check-miss / never-renamed-files bug (files scattered under
+    first_artist/ with char-removed names)."""
+
+    def _real_path(self, t, cfg):
+        import re
+
+        from SpotiFLAC.core.models import build_filename
+
+        parts = []
+        if cfg.get("use_artist_subfolders", True):
+            parts.append(re.sub(r'[<>:"/\\|?*]', "_", t.first_artist or ""))
+        if cfg.get("use_album_subfolders", True):
+            parts.append(re.sub(r'[<>:"/\\|?*]', "_", t.album or ""))
+        fn = build_filename(t, cfg["filename_format"], first_artist_only=cfg["first_artist_only"])
+        return str(Path(*parts) / fn) if parts else fn
+
+    @pytest.mark.parametrize("kw", [
+        {},
+        {"title": "Song? <Nice>", "album": "Greatest Hits: Vol 1",
+         "first_artist": "M/A/R/R/S", "album_artist": "AC/DC"},
+        {"album_artist": "Various Artists", "first_artist": "The Cars"},
+        {"album": "  My   Album  ", "first_artist": "  Test  ", "title": "  Hello   World  "},
+        {"artists": "Artist A, Artist B", "first_artist": "Artist A"},
+    ])
+    def test_matches_installed_spotiflac(self, kw):
+        cfg = {
+            "first_artist_only": True,
+            "filename_format": "{artist} - {title}",
+            "use_artist_subfolders": True,
+            "use_album_subfolders": True,
+        }
+        t = make_track(**kw)
+        assert spotiflac_track_relative_path(t, cfg) == self._real_path(t, cfg)
+
+    def test_no_subfolders_flat(self):
+        cfg = {
+            "first_artist_only": True,
+            "filename_format": "{artist} - {title}",
+            "use_artist_subfolders": False,
+            "use_album_subfolders": False,
+        }
+        t = make_track()
+        assert spotiflac_track_relative_path(t, cfg) == "Test Artist - Test Track.flac"
+        assert spotiflac_track_relative_path(t, cfg) == self._real_path(t, cfg)
 
 
 class TestBuildM3u8Lines:
