@@ -5,26 +5,21 @@ from pathlib import Path
 
 from SpotiFLAC import TrackMetadata
 
-_RE_SPOTIFLAC = re.compile(r'[<>:"/\\|?*]')
+# SpotiFLAC folder sanitizer: `re.sub(r'[<>:"/\\|?*]', "_", ...)` with no
+# whitespace normalization (SpotiFLAC/downloader.py `_track_output_dir_async`).
+_SPOTIFLAC_FOLDER_RE = re.compile(r'[<>:"/\\|?*]')
 
 
-def sanitize(text: str, fallback: str = "Unknown", *, spotiflac_mode: bool = False) -> str:
+def sanitize(text: str, fallback: str = "Unknown") -> str:
     if not text:
         return fallback
-    if spotiflac_mode:
-        cleaned = _RE_SPOTIFLAC.sub("_", text)
-    else:
-        cleaned = re.sub(r"/", "\u2215", text)
+    cleaned = re.sub(r"/", "\u2215", text)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned or fallback
 
 
-def spotiflac_sanitize(text: str, fallback: str = "Unknown") -> str:
-    return sanitize(text, fallback=fallback, spotiflac_mode=True)
-
-
-def _make_relative_path(track: TrackMetadata, cfg: dict, *, spotiflac_mode: bool = False) -> str:
-    _san = lambda s: sanitize(s, spotiflac_mode=spotiflac_mode)
+def _make_relative_path(track: TrackMetadata, cfg: dict) -> str:
+    _san = sanitize
     artist = _san(track.first_artist if cfg["first_artist_only"] else track.artists)
     album_artist = _san(track.album_artist)
     album = _san(track.album)
@@ -34,11 +29,30 @@ def _make_relative_path(track: TrackMetadata, cfg: dict, *, spotiflac_mode: bool
 
 
 def track_relative_path(track: TrackMetadata, cfg: dict) -> str:
-    return _make_relative_path(track, cfg, spotiflac_mode=False)
+    return _make_relative_path(track, cfg)
 
 
 def spotiflac_track_relative_path(track: TrackMetadata, cfg: dict) -> str:
-    return _make_relative_path(track, cfg, spotiflac_mode=True)
+    """The path SpotiFLAC really writes, mirroring its own code exactly.
+
+    Folders: first_artist/album with `[<>:"/\\|?*]` replaced by `_` (no
+    whitespace normalization).  Filename: SpotiFLAC's `build_filename()`
+    (chars *removed*, whitespace collapsed).  Reusing the installed package's
+    own functions keeps parity by construction.
+    """
+    from SpotiFLAC.core.models import build_filename
+
+    parts: list[str] = []
+    if cfg.get("use_artist_subfolders", True):
+        parts.append(_SPOTIFLAC_FOLDER_RE.sub("_", track.first_artist or ""))
+    if cfg.get("use_album_subfolders", True):
+        parts.append(_SPOTIFLAC_FOLDER_RE.sub("_", track.album or ""))
+    filename = build_filename(
+        track,
+        cfg["filename_format"],
+        first_artist_only=cfg["first_artist_only"],
+    )
+    return str(Path(*parts) / filename) if parts else filename
 
 
 def partition_tracks(

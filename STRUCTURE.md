@@ -51,10 +51,18 @@ reports exactly one failed row per genuinely failed track and can never crash
 the whole job. `_rename_after_download(track, cfg, logger, started)`
 is freshness-gated: `started = time.time()` is captured before each
 `download_track()`, and the SpotiFLAC path is only renamed/unlinked when its
-`st_mtime >= started` — a pre-existing file at that path (SpotiFLAC 1.5.9
-uses `first_artist/…`, we compute `album_artist/…`, plus metadata re-fetch)
-is logged and never touched. The whole body is try/except-wrapped and never
-raises.
+`st_mtime >= started` — a pre-existing file at that path (naming drift) is
+logged and never touched. The duplicate-unlink branch (fresh download landed
+where a canonical file already exists) is additionally gated on
+`get_spotify_id_from_file(spoti_path) == track.id` — a file whose embedded
+Spotify ID doesn't match (or has none) is never deleted, keeping both.
+The whole body is try/except-wrapped and never raises.
+Cross-job overlap: a module-level `_in_flight` set (track-id keyed, guarded by
+`asyncio.Lock`) makes a second job skip a track that another job is already
+downloading — counted as `skipped`, never double-written, never blocks.
+Post-batch reconcile: a track whose download "succeeded" but left **no file
+on disk** (either naming scheme) is reported as failed
+(`failure_cb(title, "no_file_after_download")`) instead of silently ok.
 Cover/rename helpers use `flac_utils.resolve_cover_data()` + `flac_utils.embed_cover()`. The
 SpotiFLAC monkey-patches live in `spotiflac_patch.py` (imported here for its
 import-time side-effect). Downloads enrich with `["apple","deezer","soundcloud"]`
@@ -123,15 +131,21 @@ iter_flacs(root)                              # yield every .flac under root (so
 
 ### `track_utils.py` — shared path utilities
 ```
-sanitize(text, spotiflac_mode=False)  # preserve special chars; only `/` → `∕`
-spotiflac_sanitize / spotiflac_track_relative_path   # SpotiFLAC's `_`-sanitized variant
-track_relative_path(track, cfg)       # {AlbumArtist}/{Album}/{Artist} - {Title}.flac
+sanitize(text)                            # canonical: preserve special chars; only `/` → `∕`
+track_relative_path(track, cfg)           # {AlbumArtist}/{Album}/{Artist} - {Title}.flac
+spotiflac_track_relative_path(track, cfg) # EXACT parity with what SpotiFLAC writes:
+                                          # first_artist/album folders with `[<>:"/\\|?*]` → `_`
+                                          # (no whitespace normalization), filename via
+                                          # SpotiFLAC's own build_filename() (chars REMOVED).
+                                          # Mirrors installed SpotiFLAC by construction —
+                                          # pre-check now sees real files; the download
+                                          # rename fires and consolidates to canonical.
 partition_tracks(tracks, cfg, skip_titles=None) → (existing, given_up, missing)
                                       # dedup by track.id, split by on-disk path check +
                                       # title in skip_titles (shared by downloader + m3u8);
                                       # a track counts as existing if the file is under
                                       # EITHER naming scheme (original-symbols OR
-                                      # spotiflac `_`-sanitized path)
+                                      # spotiflac path)
 get_jpeg_dimensions(data) → (w, h)    # JPEG SOF0/1/2 scan (0,0 if not JPEG)
 prune_empty_parents(path, root)       # rmdir empty ancestor dirs up to root (shared
                                       # by downloader rename + fix_original_filenames)
@@ -304,6 +318,7 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 - `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`; after tagging, `flac_utils.embed_cover()` is called to *replace* pictures — SpotiFLAC's FLAC tagger `audio.delete()` clears tags but not pictures, so without this old/wrong covers survive (and multiple identical PICTURE blocks pile up). CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
 - `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
 - `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths (regression-tested, incl. dry-run + empty-dir pruning). Renames are skipped (warn) when the target already exists — `os.rename` would silently overwrite it.
+- `scripts/consolidate_library.py` — consolidate scattered files (compilation/special-char albums that SpotiFLAC wrote under `first_artist/` with char-removed names) into the canonical `album_artist/album/` layout, driven by each file's own tags. When the canonical target already exists, the duplicate is removed **only** when both files provably carry the same embedded Spotify track ID (never an unproven file). `.lrc` sidecars move with their FLAC; empty source dirs pruned. `--dry-run` preview. Run in docker: `docker compose exec spoty-loop python scripts/consolidate_library.py [--dry-run]`.
 - `scripts/migrate_library.py` — one-time move of root-level `~/Music/{Album}/...` entries into the owner's `{username}_Music/` folder (excludes `*_Music`, `shared_Music`, dotfiles; `.m3u8` files move with their tracks so relative paths stay valid). CLI: `python scripts/migrate_library.py --username espo [--dry-run]`.
 - `scripts/archive/` — superseded one-off scripts kept for reference: `fix_mb_tags.py` (strip MUSICBRAINZ_* — superseded by `/fixmetadata`), `retag_missing.py` (hardcoded tagless files — predecessor of fix_metadata), `backfill_urls.py` (write Spotify URL tags). Not wired into the bot or tests.
 
