@@ -66,3 +66,34 @@ def test_provider_import_copy_is_patched():
 
     assert qobuz.mb_result_to_tags(_SAMPLE_MB_RES) == {}
     assert qobuz.mb_result_to_tags is mb_result_to_tags
+
+
+def test_community_session_fails_fast_when_expired():
+    from SpotiFLAC.core import signed_session_desktop as ssd
+
+    import SpotiFLAC.providers.qobuz as qobuz
+
+    assert qobuz.ensure_community_session is ssd.ensure_community_session
+
+    expired = ssd.CommunitySessionRecord(
+        install_id="x",
+        session_id="s",
+        session_secret="k",
+        expires_at="2020-01-01T00:00:00Z",
+    )
+    ssd.load_community_session = lambda: expired
+    with pytest.raises(RuntimeError, match="community session"):
+        ssd.ensure_community_session()
+
+
+def test_community_session_uses_valid_record_without_verification():
+    from SpotiFLAC.core import signed_session_desktop as ssd
+
+    valid = ssd.CommunitySessionRecord(
+        install_id="x",
+        session_id="s",
+        session_secret="k",
+        expires_at="2099-01-01T00:00:00Z",
+    )
+    ssd.load_community_session = lambda: valid
+    assert ssd.ensure_community_session() is valid

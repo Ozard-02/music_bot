@@ -53,13 +53,17 @@ is freshness-gated: `started = time.time()` is captured before each
 `download_track()`, and the SpotiFLAC path is only renamed/unlinked when its
 `st_mtime >= started` — a pre-existing file at that path (naming drift) is
 logged and never touched. The duplicate-unlink branch (fresh download landed
-where a canonical file already exists) is additionally gated on
-`get_spotify_id_from_file(spoti_path) == track.id` — a file whose embedded
-Spotify ID doesn't match (or has none) is never deleted, keeping both.
+where a canonical file already exists) is additionally gated on BOTH
+`get_spotify_id_from_file(spoti_path) == track.id` AND
+`get_spotify_id_from_file(orig_path) == track.id` — a file whose embedded
+Spotify ID doesn't match (or has none) on either side is never deleted,
+keeping both.
 The whole body is try/except-wrapped and never raises.
 Cross-job overlap: a module-level `_in_flight` set (track-id keyed, guarded by
-`asyncio.Lock`) makes a second job skip a track that another job is already
-downloading — counted as `skipped`, never double-written, never blocks.
+`_AsyncLockAdapter` from spotiflac_patch — threading-based, cross-loop-safe
+since each job runs on its own event loop) makes a second job skip a track
+that another job is already downloading — counted as `skipped`, never
+double-written, never blocks.
 Post-batch reconcile: a track whose download "succeeded" but left **no file
 on disk** (either naming scheme) is reported as failed
 (`failure_cb(title, "no_file_after_download")`) instead of silently ok.
@@ -101,6 +105,15 @@ _patch_qobuz_lock()           — runs once at import; wraps QobuzProvider.__ini
   _creds_lock becomes a loop-agnostic _AsyncLockAdapter (threading.Lock behind
   async-with). SpotiFLAC awaits the provider's asyncio.Lock from fresh loops
   (to_thread + asyncio.run) → "bound to a different event loop" → 100s timeouts.
+_patch_community_session()    — runs once at import; wraps ensure_community_session
+  (SpotiFLAC core/signed_session_desktop) so an expired/missing qobuz community
+  session raises IMMEDIATELY instead of running interactive verification
+  (browser grant / solver / terminal input — none can complete headless; the
+  verification thread held community_session_mu up to COMMUNITY_VERIFY_TIMEOUT=300s
+  → per-track wait_for aborted at 100s + leaked thread stalled executor teardown
+  300s, the mass-timeout + RuntimeWarning signature seen in production). A valid
+  session is still used as-is. Qobuz returns a normal provider error → SpotiFLAC
+  falls through to deezer/amazon within the 100s budget.
 _patch_musicbrainz()          — runs once at import; no-ops SpotiFLAC's per-track
   MusicBrainz lookup (every provider writes MUSICBRAINZ_* ids + extras via
   extra_tags=mb_tags → Navidrome splits albums into multiple releases).
@@ -291,6 +304,12 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
     live) into _run_url_sync, runs it via a shielded asyncio.wait_for loop with
     timeout=min(cfg.max_download_timeout, cfg.stall_timeout) per slice — no progress for
     a full slice → "stalled"; total time over cfg.max_download_timeout → "timed out"
+  _run_url_sync(url, cfg, logger, skip_titles, progress_cb, failure_cb): runs run_url
+    on its OWN event loop (not asyncio.run) — cancels pending tasks, flushes asyncgens,
+    then shuts the default executor down WITHOUT waiting (shutdown(wait=False)), so a
+    leaked download thread (dead community session) can never pin a worker slot for the
+    full 300s shutdown_default_executor wait — it finishes on its own and pre-check
+    picks up whatever it writes on a future run
   _handle_timeout(item, display, chat, reason): mark_failed + give-up msg (no requeue —
     the leaked thread keeps downloading in the background, its files get picked up by
     later pre-checks, but the queue slot + next item move on immediately)
@@ -315,7 +334,7 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 `from scripts.fix_metadata import fix_library`). Each script bootstraps
 `sys.path` so it also runs standalone: `python scripts/<name>.py`.
 
-- `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`; after tagging, `flac_utils.embed_cover()` is called to *replace* pictures — SpotiFLAC's FLAC tagger `audio.delete()` clears tags but not pictures, so without this old/wrong covers survive (and multiple identical PICTURE blocks pile up). CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
+- `scripts/fix_metadata.py` — re-tag FLAC metadata via SpotiFLAC pipeline (Apple-first enrichment), strip bogus `MUSICBRAINZ_*`, move files to their real album folder. `fix_album_folder()` for one folder, `fix_library()` to walk a whole root. `_move_file()` dedups with an `(n)` suffix and uses `os.rename` (NOT `os.replace`) so a target that appears after the dedup loop is never silently overwritten. When a track has a Spotify `cover_url`, the 640×640 cover is fetched (`upgrade_cover_url` 1e02→b273, httpx timeout=10) and passed as `cover_data` to `embed_metadata_async`; after tagging, `flac_utils.embed_cover()` is called to *replace* pictures — SpotiFLAC's FLAC tagger `audio.delete()` clears tags but not pictures, so without this old/wrong covers survive (and multiple identical PICTURE blocks pile up). CLI: `python scripts/fix_metadata.py <folder> [--apply]`. Also used by the bot's `/fixmetadata`.
 - `scripts/fix_covers.py` — thin CLI over `maintenance.rescan_library()` (re-embed Spotify cover art); `--dry-run` supported.
 - `scripts/fix_original_filenames.py` — one-time rename: SpotiFLAC `_`-paths → original-symbols paths (regression-tested, incl. dry-run + empty-dir pruning). Renames are skipped (warn) when the target already exists — `os.rename` would silently overwrite it.
 - `scripts/consolidate_library.py` — consolidate scattered files (compilation/special-char albums that SpotiFLAC wrote under `first_artist/` with char-removed names) into the canonical `album_artist/album/` layout, driven by each file's own tags. When the canonical target already exists, the duplicate is removed **only** when both files provably carry the same embedded Spotify track ID (never an unproven file). `.lrc` sidecars move with their FLAC; empty source dirs pruned. `--dry-run` preview. Run in docker: `docker compose exec spoty-loop python scripts/consolidate_library.py [--dry-run]`.
@@ -339,7 +358,8 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 ### `Dockerfile`
 ```
 FROM python:3.14-slim
-├─ apt: chromium (for nodriver CDP)
+├─ apt: chromium + ffmpeg + flac (so SpotiFLAC's validate_flac_file can run and
+│  providers' _file_exists never marks a valid FLAC corrupt and deletes it)
 ├─ pip: spotiflac (1.6.0) + python-telegram-bot
 ├─ COPY . /app
 ├─ ENV CHROME_PATH=/usr/bin/chromium

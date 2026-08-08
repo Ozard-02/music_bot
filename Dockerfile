@@ -2,6 +2,8 @@ FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
+    ffmpeg \
+    flac \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

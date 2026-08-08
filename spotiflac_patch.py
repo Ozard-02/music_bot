@@ -97,6 +97,54 @@ def _patch_qobuz_lock() -> None:
     qobuz.QobuzProvider.__init__ = _patched_init
 
 
+def _patch_community_session() -> None:
+    """Fail fast on an expired/invalid qobuz community session.
+
+    ensure_community_session() (SpotiFLAC core/signed_session_desktop.py)
+    triggers interactive verification (browser grant / solver / terminal
+    input) whenever the stored session is dead or expired.  In this headless
+    bot none of those can complete, so the verification thread holds
+    community_session_mu and runs until COMMUNITY_VERIFY_TIMEOUT (300s) —
+    per-track wait_for aborts at PER_TRACK_TIMEOUT (100s) but the leaked
+    thread keeps running, stalling the asyncio.run teardown (the recurring
+    'executor did not finish joining its threads within 300 seconds').  Each
+    track burns 100s before failing.
+
+    A valid session is still used as-is (returns fast, no verification); an
+    invalid one raises immediately so the track fails in seconds and the
+    other qobuz APIs (gdstudio/wjhe/squid/...) can win the parallel race.
+    The only way to get a valid session headless is the desktop-export bridge
+    (config.bridge_community_session), which is the supported flow.
+    """
+    try:
+        from SpotiFLAC.core import signed_session_desktop as ssd
+    except ImportError:
+        return
+    if getattr(ssd, "_spoty_loop_community_patched", False):
+        return
+    ssd._spoty_loop_community_patched = True
+    _orig_ensure = ssd.ensure_community_session
+
+    def _patched_ensure():
+        record = ssd.load_community_session()
+        if not ssd.community_session_valid(record):
+            raise RuntimeError(
+                "qobuz community session missing/expired — export one from the "
+                "desktop SpotiFLAC and bridge it (community_sessions.json)",
+            )
+        return _orig_ensure()
+
+    ssd.ensure_community_session = _patched_ensure
+
+    # Import-copy gotcha: providers do `from ...signed_session_desktop import
+    # ensure_community_session`, so overwrite the already-copied name too.
+    for _mod_name, _mod in list(sys.modules.items()):
+        if not _mod_name.startswith("SpotiFLAC"):
+            continue
+        if hasattr(_mod, "ensure_community_session"):
+            setattr(_mod, "ensure_community_session", _patched_ensure)
+
+
 def _patch_musicbrainz() -> None:
     """No-op SpotiFLAC's MusicBrainz lookup at download time.
 
@@ -207,5 +255,6 @@ def silence_spotiflac_loggers() -> None:
 
 install_console_silencing()
 _patch_qobuz_lock()
+_patch_community_session()
 _patch_musicbrainz()
 disable_progress_manager()
