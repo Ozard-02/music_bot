@@ -37,7 +37,37 @@ def _run_url_sync(
     progress_cb=None,
     failure_cb=None,
 ) -> DownloadResult:
-    return asyncio.run(run_url(url, cfg, logger, skip_titles, progress_cb, failure_cb))
+    """Run the download on its own loop without blocking teardown on leaked
+    threads.
+
+    asyncio.run() tears down via shutdown_default_executor(300s) — a leaked
+    download thread (e.g. a dead qobuz community session stuck in its
+    verification) stalls teardown the full 300s, blocking the worker slot and
+    spamming 'executor did not finish joining its threads'.  We own the loop
+    instead: cancel pending tasks, flush asyncgens, then shutdown the default
+    executor without waiting — the leaked thread finishes on its own and
+    pre-check picks up whatever it writes on a future run."""
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(
+            run_url(url, cfg, logger, skip_titles, progress_cb, failure_cb),
+        )
+    finally:
+        try:
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True),
+                )
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            executor = getattr(loop, "_default_executor", None)
+            loop.close()
+            if executor is not None:
+                executor.shutdown(wait=False)
+    return result
 
 
 def _trim_rss() -> None:

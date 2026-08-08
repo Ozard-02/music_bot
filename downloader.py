@@ -13,6 +13,7 @@ from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
 from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
+from spotiflac_patch import _AsyncLockAdapter
 from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
 
 
@@ -67,7 +68,7 @@ async def run_url(
             except Exception:
                 logger.exception("Track metadata failed for %s", url)
                 if failure_cb:
-                    failure_cb("", url, "metadata_error")
+                    failure_cb(url, "metadata_error")
                 return DownloadResult(failed=1, failed_tracks=[("", url, "metadata_error")], total=1)
         else:
             _, tracks = await client.get_playlist(url)
@@ -114,8 +115,11 @@ def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
 # Cross-job in-flight guard: overlapping jobs (same track/album/playlist in the
 # queue in parallel) download each track exactly once; the second job counts
 # the track as skipped instead of writing a competing .part file.
+# asyncio.Lock would bind to the first event loop that touches it, but each job
+# runs on its own loop (asyncio.run per worker thread) — a threading-based
+# adapter is cross-loop-safe (same fix as the qobuz lock, spotiflac_patch.py).
 _in_flight: set[str] = set()
-_in_flight_lock = asyncio.Lock()
+_in_flight_lock = _AsyncLockAdapter()
 
 
 def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: float | None = None):
@@ -144,9 +148,13 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: fl
             return
         if orig_path.exists():
             # The fresh download duplicated an existing canonical file.
-            # Delete the duplicate ONLY when it provably is the same track
-            # (embedded Spotify ID matches); never delete what we can't prove.
-            if get_spotify_id_from_file(spoti_path) == track.id:
+            # Delete the duplicate ONLY when BOTH files provably are the same
+            # track (embedded Spotify ID matches the expected one); never
+            # delete what we can't prove.
+            if (
+                get_spotify_id_from_file(spoti_path) == track.id
+                and get_spotify_id_from_file(orig_path) == track.id
+            ):
                 logger.warning("Target exists, removing duplicate: %s", spoti_path)
                 spoti_path.unlink()
                 return

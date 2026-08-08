@@ -115,7 +115,9 @@ def _move_file(src: Path, dest_dir: Path) -> Path:
     while dest.exists():
         dest = dest_dir / f"{src.stem} ({n}){src.suffix}"
         n += 1
-    os.replace(src, dest)
+    # os.rename fails if a target appeared after the dedup loop (instead of
+    # os.replace silently overwriting it) — data-loss guard, see deletion audit.
+    os.rename(src, dest)
     return dest
 
 

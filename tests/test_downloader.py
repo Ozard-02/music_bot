@@ -202,6 +202,33 @@ class TestRunUrl:
         assert len(result.failed_tracks) == 1
 
     @pytest.mark.asyncio
+    async def test_metadata_error_calls_failure_cb_with_two_args(self, config, logger):
+        """Regression: downloader.py called failure_cb with 3 positional args
+        ('', url, 'metadata_error') but the callback takes (title, err) — a
+        transient Spotify 500/503 crashed the whole job with a TypeError
+        instead of returning a retryable failure."""
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "track", "id": "abc123"}
+            client = AsyncMock()
+            client.get_track_metadata = AsyncMock(
+                side_effect=RuntimeError("boom"),
+            )
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            calls = []
+            result = await run_url(
+                self.TRACK_URL, config, logger,
+                failure_cb=lambda title, err: calls.append((title, err)),
+            )
+
+        assert result.failed == 1
+        assert calls == [(self.TRACK_URL, "metadata_error")]
+
+    @pytest.mark.asyncio
     async def test_album_all_exist(self, tmp_path):
         logger = logging.getLogger("test")
         cfg = {
@@ -822,7 +849,7 @@ class TestRenameAfterDownload:
         t = self._track()
         spoti, orig = self._paths(tmp_path, t)
         _write_flac(spoti, t.id)  # provably the same track (embedded Spotify ID)
-        _touch(orig)
+        _write_flac(orig, t.id)   # canonical target proves the same track
         _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
         assert orig.exists()
         assert not spoti.exists()
@@ -843,6 +870,18 @@ class TestRenameAfterDownload:
         spoti, orig = self._paths(tmp_path, t)
         _touch(spoti)  # empty file: no tags, no proof
         _touch(orig)
+        _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
+        assert spoti.exists()
+        assert orig.exists()
+
+    def test_duplicate_target_with_mismatched_id_never_deleted(self, tmp_path, logger):
+        """The unlink needs BOTH files to prove the same track: a freshly
+        written spoti file matching the ID must not delete a canonical file
+        that embeds a different track ID."""
+        t = self._track()
+        spoti, orig = self._paths(tmp_path, t)
+        _write_flac(spoti, t.id)
+        _write_flac(orig, "other_track_id")
         _rename_after_download(t, self._cfg(tmp_path), logger, started=time.time() - 1)
         assert spoti.exists()
         assert orig.exists()
