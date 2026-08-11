@@ -2,22 +2,6 @@
 
 ## Core download engine
 
-### `spotiflac_loader.py` — lazy SpotiFLAC stack + idle re-exec
-```
-use()/release()/wrap      — refcounted lazy loader. Every SpotiFLAC-touching
-  async entry point is @wrap-ped (run_url, worker._resolve,
-  worker._auto_build_m3u8, m3u8.build_m3u8, fix_metadata.fix_library,
-  maintenance.rescan_library); first use imports spotiflac_patch + install_all().
-should_reexec()           — True when the heavy stack has loaded AND the
-  process has been fully idle (no op in flight) for SPOTIFLAC_REEXEC_AFTER=600s;
-  the worker re-execs at its 300s idle cap so RSS returns to the lean baseline
-  (CPython can't unload a loaded module stack — modules aren't gc-tracked, so
-  module↔module cycles are never collected).
-SPOTIFLAC_EAGER_IMPORT=1  — revert switch: old eager startup behavior, no re-exec
-```
-Keeps the ~180MB heavy stack (SpotiFLAC + pydoll + nodriver + mutagen + PIL)
-out of startup; idle RSS drops to ~110MB.
-
 ### `config.py` — shared constants + setup utilities
 
 ```
@@ -30,8 +14,6 @@ load_config(logger) → dict               # read ~/.spotiflac/config.json (incl
                                          # and stallTimeoutSeconds overrides)
 setup_logger(log_path) → logger          # RotatingFileHandler (5MB×3) + stream
 bridge_community_session(logger)         # copy desktop Tidal session
-silence_spotiflac_loggers()              # quiet SpotiFLAC/nodriver loggers by name
-                                         # (no SpotiFLAC import — keeps startup light)
 ```
 
 ### `downloader.py` — download engine only
@@ -105,10 +87,6 @@ command — cover refresh now lives inside `/fixmetadata` (see `scripts/fix_meta
 
 ### `spotiflac_patch.py` — all SpotiFLAC monkey-patching in one place
 ```
-install_all()               — idempotent: install_console_silencing +
-  _patch_qobuz_lock + _patch_community_session + _patch_musicbrainz +
-  disable_progress_manager. Runs at import (below) AND is re-called by
-  spotiflac_loader._load() so a lazily-imported stack is patched before use.
 disable_progress_manager()   — runs once at import; neutralizes ProgressManager's
   class-level asyncio state (_event_queue/_worker_task), makes
   enqueue_progress/start_worker/initialize_master_bar no-ops (kills the
@@ -136,15 +114,6 @@ _patch_community_session()    — runs once at import; wraps ensure_community_se
   300s, the mass-timeout + RuntimeWarning signature seen in production). A valid
   session is still used as-is. Qobuz returns a normal provider error → SpotiFLAC
   falls through to deezer/amazon within the 100s budget.
-
-  Design decision (final): qobuz community sessions are short-lived (~2h TTL) and
-  require an interactive Turnstile challenge + browser, so the bot treats them
-  as *optional*. qobuz is gated off until a session is explicitly bridged in via
-  `config.bridge_community_session()` (desktop SpotiFLAC export) — the bot never
-  blocks per-track on verification. deezer/amazon provide lossless in the
-  meantime. To re-enable qobuz: export a fresh session on a desktop SpotiFLAC
-  and bridge it; do not expect headless auto-refresh, SpotiFLAC itself skips the
-  solver path in docker (`if not is_docker()`).
 _patch_musicbrainz()          — runs once at import; no-ops SpotiFLAC's per-track
   MusicBrainz lookup (every provider writes MUSICBRAINZ_* ids + extras via
   extra_tags=mb_tags → Navidrome splits albums into multiple releases).
@@ -357,7 +326,7 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
 
 ## SpotiFLAC patches
 - `SpotiFLAC/core/tagger.py`: `_embed_flac` strips `MUSICBRAINZ_*` before writing Vorbis comments.
-- `spotiflac_patch.py`: runtime monkey-patches (ProgressManager, console interception, logger noise) — see section above. `install_all()` is idempotent and is re-called by `spotiflac_loader._load()` so a lazily-imported SpotiFLAC stack is patched before first use.
+- `spotiflac_patch.py`: runtime monkey-patches (ProgressManager, console interception, logger noise) — see section above.
 
 ## Helper scripts — `scripts/`
 
@@ -412,12 +381,6 @@ services:
       - ~/.spotiflac:/root/.spotiflac            # config + session + queue.db
       - .:/app                                     # code (mount for testing)
     restart: unless-stopped
-```
-Navidrome note: point Navidrome's music root at the **library root**
-(`~/Music`) — *not* at a per-user `{user}_Music` folder. Mounting/pointing two
-roots at the same files (the root *and* a subfolder) makes Navidrome index
-every track twice; after consolidation renames, the stale path shows up as
-"missing files". One root + full rescan clears it (no bot change).
 ```
 
 ### `.dockerignore`
