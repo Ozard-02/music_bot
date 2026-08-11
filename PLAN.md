@@ -143,27 +143,11 @@ docker compose up -d
 - **Cross-folder album merging** — `/fixmetadata` moves single-track folders (e.g. `OK`, `ROSSO COME IL FANGO`) into their real album folder only when run on the library root or on that folder; folders are never auto-deleted when emptied.
 - **Shared-track dedup (`shared_Music`)** — deferred from the multi-user pass. A track present in ≥2 user folders could be promoted to `~/Music/shared_Music/` at best quality with duplicates removed; requires shared-aware pre-check/`partition_tracks` + a quality comparison (`get_flac_quality` via mutagen). On-the-fly promotion only consolidates tracks a second request re-touches; a `/dedup` full-scan is the complete solution.
 - **Whole-job-timeout leaked threads hold RSS** (`worker.py`) — `_run_download` wraps the job in `asyncio.wait_for(..., timeout=8h)`; when the timeout fires, `wait_for` gives up waiting but **the `asyncio.to_thread` download thread can't be cancelled** — it keeps running in the background until the actual download ends (deliberate: the item is requeued and the retry pre-check skips whatever the leaked thread already wrote). That straggler thread keeps its `AsyncSpotiFLAC` client + allocated arenas resident, so RSS stays elevated until it finishes. `_trim_rss()` recovers memory from threads that have *exited*, not from a still-running leaked one. Real fix requires restructuring the timeout so the thread is actually stopped (e.g. run the download in a cancellable subprocess, or have SpotiFLAC poll a cancel flag between tracks) — bigger refactor, deferred.
-- **`/fixmetadata` lyrics toggle** — `--lyrics` opts *in* to lyrics fetch; default re-tags without fetching lyrics and never destroys existing `LYRICS` tags (restored after re-tag). Document the toggle in the command help.
-- **Navidrome "missing files" + duplicate roots** — resolved operationally (not a code bug). Two Navidrome libraries pointed at the same physical files (one root at `~/Music`, one at the `~/Music/{user}_Music` folder), so identical tracks appeared twice and the same file showed up under both an `Espo02/…` and an `Espo02_Music/…` path with identical size+mtime. After consolidation renamed files, the stale index flagged the old path as missing. Fix: keep exactly one Navidrome music root (the library root, e.g. `~/Music`) and force a full rescan; the `_Music` subfolder is then reached inside it. The files were never lost — "missing" cleared on rescan. No bot change required.
 
 ### Deferred from 2026-08-03 log
 
-1. **Whole-job transient errors permanently fail an item** (`worker.py`) — `_process()`'s
-   broad `except Exception` (`worker.py:307`) still calls `mark_failed()` on *any*
-   whole-job exception raised in `_resolve`/`_item_cfg` (e.g. a DNS blip
-   `httpx.ConnectError` on `api-partner.spotify.com`), bypassing the retry budget.
-   Timeouts and stalls are already handled (`_handle_timeout`, #83) and the qobuz
-   fail-fast (#86) removed today's leak source, but a transient resolve error still
-   hard-fails the item instead of `is_expired()` → `requeue`. Fix (next time it
-   bites): dedicated `_handle_whole_job_exception` reusing `is_expired()` +
-   `backoff_delay`; low priority — Spotify metadata is cached per-track.
-2. **SpotiFLAC executor write-race** — RESOLVED. The on-disk reconcile in
-   `downloader._download_tracks` (check the file exists under EITHER naming
-   scheme after the batch, #85) + bounded executor shutdown in
-   `worker._run_url_sync` (#86 Code B) closed the loop: `wait_for` no longer pins
-   a slot for 300s and "success but no file" is reported `no_file_after_download`.
-   Still relies on the leaked download thread finishing in the background to write
-   files a future pre-check will see — acceptable.
+1. **Whole-job transient errors permanently fail an item** (`worker.py`) — `_process()`'s `except Exception` calls `mark_failed()` unconditionally on *any* whole-job exception (e.g. a DNS blip `httpx.ConnectError` on `clienttoken.spotify.com`), bypassing the track-level retry budget. Fix: a dedicated `_handle_whole_job_exception(item, err, chat)` reusing `is_expired()` (guard → real fail), `backoff_delay` + `queue.requeue`, treating all whole-job exceptions as retryable and capped by `is_expired`. Write here when started.
+2. **SpotiFLAC executor write-race** (`worker.py`) — `run_url()` can report `PASS N/N ok` while SpotiFLAC's executor threads are still flushing files; the retry pre-check then sees fewer tracks on disk → wasted re-downloads + ~300s `executor did not finish joining threads` stall. Fix (preferred): truthful accounting — reconcile against disk after the wrapper returns and use real numbers for `mark_done`/notification; never trust SpotiFLAC's `ok` count. (No data loss — files were all eventually written.) Variant B fallback: only fix the message, accept re-download-on-heal.
 3. **`/fixmetadata` lyrics toggle** — `--lyrics` opts *in* to lyrics fetch; default re-tags without fetching lyrics and never destroys existing `LYRICS` tags (restored after re-tag). Document the toggle in the command help.
 61. **Kill 3× duplicate log lines (root logger pollution)** — SpotiFLAC 1.5.9's `core/progress.py:install_console_interception()` runs once per track download (`client.download_track` → `SpotiflacDownloader.run_async` → `DownloadWorker.run_async`). It strips every `StreamHandler` off the root logger (including our asctime stdout handler AND the `RotatingFileHandler`, which is a StreamHandler subclass — the file log froze after the first track) and adds a `TqdmLoggingHandler` (`[%(levelname)s] %(name)s: %(message)s`) that `uninstall_console_interception()` never removes. Root handlers piled up one per track → every record (incl. ours, name `spoty_loop`) printed N× foreign-format with µs-identical timestamps. This was never parallelism/containers (the single-instance lock #60 was still needed, but was not the cause). `_disable_progress_manager()` now also no-ops `install_/uninstall_console_interception` in both `SpotiFLAC.core.progress` and `SpotiFLAC.downloader` (the module-level name actually called at downloader.py:436), plus `initialize_master_bar`. `Dockerfile` pins `SpotiFLAC==1.5.9` so the image can't drift from what we test. Reproduced locally before fixing (3 installs → 3 root handlers → 3× output). 160 tests.
 62. **Refactor: complexity reduction (no behavior change)** —
@@ -266,62 +250,4 @@ docker compose up -d
     - **Log confirms the qobuz dead-session theory** (the ~100 s per-track `PASS — 0 ok` failures + RuntimeWarning exactly at PASS + 300 s, all day) and that the retry/leaked-thread design works (albums completed across retries: #162 0/12→12/12, #167 9/16→16/16, #172 1/15→15/16; files written by leaked threads get picked up by pre-check).
     - **Executed:** Code A (`spotiflac_patch._patch_community_session` — fail fast on expired session, bypasses the 300 s `run_community_verification`), Code B (`worker._run_url_sync` — manual loop, no 300 s `shutdown_default_executor` wait), Code C(1) (`_rename_after_download` duplicate unlink now requires **both** spoti-path and orig-path IDs to match `track.id`), C(2) (`_in_flight_lock` → `_AsyncLockAdapter`, cross-loop-safe), C(3) (`fix_metadata._move_file` `os.replace` → `os.rename`, data-loss guard), C(4) (Dockerfile: `ffmpeg flac`).
     - **Tests:** 269 → 273 passing (session fail-fast ×2, rename ID-gate ×1, failure_cb arity ×1).
-    - **Remaining operational:** the qobuz community session is now gated off
-      by design — `~/spotiflac/signed_sessions/community_sessions.json` expired
-      2026-07-30 and the session TTL is short (~2 h, observed), so even a
-      one-off regeneration is non-durable in a headless bot. Downloads keep
-      working losslessly via deezer/amazon, so qobuz is a bonus, not a blocker.
-      Two options are left on the table (not implemented):
-        (A) run a desktop SpotiFLAC with a display/browser to refresh+export
-            `community_session.json` and bridge it in (`config.bridge_community_session`);
-            repeat every session TTL; or
-        (B) enable the in-container Turnstile solver (the Dockerfile already
-            ships chromium + nodriver for this) by un-gating MODO 2 — i.e.
-            `spotiflac_patch` would need to *attempt* `ensure_community_session`
-            + flip `ssd.is_docker` False + make the MODO-3 terminal fallback
-            raise-fast (currently `builtins.input` is no-op'd). Deferred:
-            headless Turnstile solving is unreliable, which is exactly why
-            SpotiFLAC skips it in docker, and the bot must not stall per-track
-            on it again.
-
-  89. **Production verification — 2026-08-08 10:32 → ~12:39** (`spoty_loop.log`):
-      the fail-fast patch + bounded executor are live. No ~100 s per-track
-      `PASS — 0 ok` loops; no `RuntimeWarning: executor did not finish joining
-      its threads within 300 seconds`. Album #174 `PASS — 20 ok, 10 skipped,
-      0 failed` in ~7 min; playlist #175 progresses 1124 → 1168 → 1200 → 1211/1220
-      across ~4-min cycles; all renames are the expected parity moves
-      (`first_artist -` → `album_artist -`, `Morning Glory_` → `?`,
-      `Fright Night_` → `:` etc.). The only per-cycle stragglers are the 4
-      private/local-only tracks (`Levandowski_IX`, `ELEMENT_Wander`,
-      `AUD-20250601-WA0047`, `Daydream`) that SpotiFLAC reports "success" on but
-      writes nothing — these self-resolve via `MAX_TRACK_RETRIES=10` give-up,
-      exactly the "no_file_after_download" → failed path #85 Fix C intended.
-       Qobuz is cleanly skipped; deezer/amazon carry all successful tracks.
-
-  90. **Lazy SpotiFLAC load + idle re-exec (idle RSS: ~180MB → ~110MB)** —
-      the heavy SpotiFLAC stack (SpotiFLAC + pydoll + nodriver + mutagen +
-      PIL) used to load at bot startup and stay resident forever. New
-      `spotiflac_loader.py` keeps it out of the startup import graph:
-      `config.py` no longer imports `spotiflac_patch` at module level
-      (its `silence_spotiflac_loggers()` now lives in config, working by
-      logger name — no import needed). Every SpotiFLAC-touching entry point
-      carries `@spotiflac_loader.wrap` (refcounted `use()/release()`):
-      `run_url`, `worker._resolve`, `worker._auto_build_m3u8`,
-      `m3u8.build_m3u8`, `fix_metadata.fix_library`,
-      `maintenance.rescan_library`; first use imports `spotiflac_patch` +
-      `install_all()` (patches are now idempotent so a fresh stack is patched
-      before use). Heavy-only imports pushed behind call sites (`flac_utils`
-      in downloader, `parse_spotify_url` in worker/m3u8). Since CPython can't
-      unload a loaded module stack (modules aren't gc-tracked → module↔module
-      cycles are never collected), the worker's idle poll calls
-      `should_reexec()` at its 300s idle cap and `os.execv`s the process once
-      the stack has loaded AND been fully idle for `SPOTIFLAC_REEXEC_AFTER`
-      (default 600s) — RSS returns to the ~110MB lean baseline. Safe: flock
-      lock is CLOEXEC (fresh process re-acquires cleanly), Telegram keeps
-      undelivered updates 24h (nothing lost in the gap), refcount guard never
-      re-execs mid-download. Revert switch `SPOTIFLAC_EAGER_IMPORT=1` restores
-      the old eager behavior. Tests updated: patch targets are now the
-      real import sites (`flac_utils.*`, `SpotiFLAC.client.*`), conftest
-      imports `spotiflac_patch` first so patches install before SpotiFLAC is
-      ever imported. 277 tests, lifecycle verified (lean idle 48.4MB, load →
-      use → release → re-exec works).
+    - **Remaining operational:** regenerate `~/.spotiflac/signed_sessions/community_sessions.json` (expired 2026-07-30) to restore qobuz-quality downloads; rebuild + redeploy the image so the patches ship.
