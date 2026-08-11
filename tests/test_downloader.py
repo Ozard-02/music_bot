@@ -673,8 +673,8 @@ class TestRunUrl:
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
             patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
-            patch("flac_utils.resolve_cover_data", new=AsyncMock(return_value=None)),
-            patch("flac_utils.read_lrc", new=lambda p: "[01:23.45]hello\n[02:30.00]bye"),
+            patch("downloader.resolve_cover_data", new=AsyncMock(return_value=None)),
+            patch("downloader.read_lrc", new=lambda p: "[01:23.45]hello\n[02:30.00]bye"),
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track)

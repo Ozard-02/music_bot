@@ -9,8 +9,6 @@ Usage:
     python m3u8.py <playlist_url> [playlist_name]
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import logging
@@ -18,8 +16,10 @@ import sys
 from pathlib import Path
 
 import httpx
+from SpotiFLAC import TrackMetadata
+from SpotiFLAC.client import SpotifyMetadataClient
+from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
-import spotiflac_loader
 from config import load_config
 from track_utils import partition_tracks, sanitize, track_relative_path
 
@@ -64,11 +64,7 @@ async def _download_cover(url: str, path: Path) -> None:
         path.write_bytes(resp.content)
 
 
-@spotiflac_loader.wrap
 async def build_m3u8(url: str, name: str | None = None, cfg: dict | None = None):
-    from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
-    from SpotiFLAC.client import SpotifyMetadataClient
-
     parsed = parse_spotify_url(url)
     if parsed["type"] != "playlist":
         raise ValueError(f"Not a playlist URL: {url}")

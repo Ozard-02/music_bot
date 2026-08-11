@@ -12,10 +12,8 @@ from pathlib import Path
 from config import SCRIPT_MAX_CONCURRENT
 from flac_utils import embed_cover, fetch_cover, get_spotify_id_from_file
 from spotiflac_patch import reset_progress_manager
-import spotiflac_loader
 
 
-@spotiflac_loader.wrap
 async def rescan_library(
     cfg: dict,
     logger: logging.Logger,

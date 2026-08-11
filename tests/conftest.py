@@ -6,9 +6,6 @@ from pathlib import Path
 
 import pytest
 
-import spotiflac_patch  # noqa: F401  (installs the monkey-patches before any
-                         # SpotiFLAC module is imported by a test module)
-
 from queue_manager import QueueManager
 
 

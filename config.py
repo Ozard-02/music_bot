@@ -7,11 +7,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-# SpotiFLAC is imported lazily (spotiflac_loader) so the bot idles lean.
-# Revert switch: SPOTIFLAC_EAGER_IMPORT=1 restores the old eager behavior
-# (SpotiFLAC + patches load at startup, never unloaded).
-if os.environ.get("SPOTIFLAC_EAGER_IMPORT"):
-    import spotiflac_patch  # noqa: F401
+from spotiflac_patch import silence_spotiflac_loggers
 
 os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress bars
 
@@ -66,15 +62,6 @@ def load_config(logger: logging.Logger) -> dict:
         "max_download_timeout": int(cfg.get("maxDownloadTimeout", MAX_DOWNLOAD_TIMEOUT)),
         "stall_timeout": int(cfg.get("stallTimeoutSeconds", STALL_TIMEOUT)),
     }
-
-
-def silence_spotiflac_loggers() -> None:
-    """Quiet SpotiFLAC/nodriver loggers by name (no SpotiFLAC import needed)."""
-    for name in list(logging.root.manager.loggerDict):
-        if name.startswith("SpotiFLAC"):
-            logging.getLogger(name).setLevel(logging.CRITICAL)
-    for noisy in ("httpx", "httpcore", "nodriver"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def setup_logger(log_path: str | Path | None = None) -> logging.Logger:
