@@ -1,8 +1,8 @@
 """Parse user input and resolve name-based queries to Spotify URLs."""
 
-from __future__ import annotations
-
 import re
+
+from SpotiFLAC import AsyncSpotiFLAC
 
 SPOTIFY_URL_RE = re.compile(
     r"^https?://open\.spotify\.com/(track|album|playlist|artist)/[A-Za-z0-9_-]{22}(\?.*)?$"

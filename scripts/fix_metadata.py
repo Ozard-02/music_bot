@@ -34,7 +34,6 @@ from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_
 from resolver import best_track_match
 from spotiflac_patch import reset_progress_manager, silence_spotiflac_loggers
 from track_utils import sanitize
-import spotiflac_loader
 
 log = logging.getLogger("fix_metadata")
 
@@ -263,7 +262,6 @@ async def fix_album_folder(
     return res
 
 
-@spotiflac_loader.wrap
 async def fix_library(
     root: Path,
     *,
