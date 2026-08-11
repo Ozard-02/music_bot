@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from SpotiFLAC import TrackMetadata
-
 # SpotiFLAC folder sanitizer: `re.sub(r'[<>:"/\\|?*]', "_", ...)` with no
 # whitespace normalization (SpotiFLAC/downloader.py `_track_output_dir_async`).
 _SPOTIFLAC_FOLDER_RE = re.compile(r'[<>:"/\\|?*]')

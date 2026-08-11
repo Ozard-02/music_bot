@@ -333,7 +333,7 @@ class TestLoadConfig:
 class TestBuildM3u8Async:
     @pytest.mark.asyncio
     async def test_not_a_playlist(self):
-        with patch("m3u8.parse_spotify_url", return_value={"type": "track", "id": "abc"}):
+        with patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url", return_value={"type": "track", "id": "abc"}):
             with pytest.raises(ValueError, match="Not a playlist URL"):
                 from m3u8 import build_m3u8
                 await build_m3u8("https://open.spotify.com/track/abc")
@@ -350,8 +350,8 @@ class TestBuildM3u8Async:
         cfg = {"output_dir": str(music), "first_artist_only": True, "filename_format": "{artist} - {title}"}
 
         with (
-            patch("m3u8.parse_spotify_url", return_value={"type": "playlist", "id": "pl"}),
-            patch("m3u8.SpotifyMetadataClient") as mock_client_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url", return_value={"type": "playlist", "id": "pl"}),
+            patch("SpotiFLAC.client.SpotifyMetadataClient") as mock_client_cls,
         ):
             mc = AsyncMock()
             mc.get_url_async.return_value = ("Test Playlist", [track], None, {"name": "Test Playlist"})
@@ -378,8 +378,8 @@ class TestBuildM3u8Async:
         cfg = {"output_dir": str(music), "first_artist_only": True, "filename_format": "{artist} - {title}"}
 
         with (
-            patch("m3u8.parse_spotify_url", return_value={"type": "playlist", "id": "pl"}),
-            patch("m3u8.SpotifyMetadataClient") as mock_client_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url", return_value={"type": "playlist", "id": "pl"}),
+            patch("SpotiFLAC.client.SpotifyMetadataClient") as mock_client_cls,
         ):
             mc = AsyncMock()
             mc.get_url_async.return_value = ("Spotify Name", [], None, {"name": "Spotify Name"})

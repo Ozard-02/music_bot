@@ -12,9 +12,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
-from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
-from spotiflac_patch import _AsyncLockAdapter
 from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
+import spotiflac_loader
 
 
 @dataclass(frozen=True)
@@ -32,6 +31,7 @@ class DownloadResult:
         return asdict(self)
 
 
+@spotiflac_loader.wrap
 async def run_url(
     url: str,
     cfg: dict,
@@ -40,6 +40,10 @@ async def run_url(
     progress_cb=None,
     failure_cb=None,
 ) -> DownloadResult:
+    global _in_flight_lock
+    if _in_flight_lock is None:
+        import spotiflac_patch
+        _in_flight_lock = spotiflac_patch._AsyncLockAdapter()
     from SpotiFLAC import AsyncSpotiFLAC
     from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
@@ -76,6 +80,8 @@ async def run_url(
 
 
 async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
+    from flac_utils import resolve_cover_data, embed_cover
+
     rel = track_relative_path(track, cfg)
     fpath = Path(cfg["output_dir"]) / rel
     if not fpath.exists():
@@ -104,6 +110,7 @@ def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
     if not fpath.exists():
         return
     try:
+        from flac_utils import read_lrc, write_lrc_sidecar
         lrc = read_lrc(fpath)
         if lrc:
             write_lrc_sidecar(fpath, lrc)
@@ -119,7 +126,7 @@ def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
 # runs on its own loop (asyncio.run per worker thread) — a threading-based
 # adapter is cross-loop-safe (same fix as the qobuz lock, spotiflac_patch.py).
 _in_flight: set[str] = set()
-_in_flight_lock = _AsyncLockAdapter()
+_in_flight_lock = None  # lazily created in run_url() (spotiflac_patch is heavy)
 
 
 def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: float | None = None):
@@ -131,6 +138,8 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: fl
     deleted or moved, since naming drift can make `spoti_path` point at an
     older, unrelated file (data-loss hazard).  Never raises.
     """
+    from flac_utils import get_spotify_id_from_file
+
     spoti_rel = spotiflac_track_relative_path(track, cfg)
     orig_rel = track_relative_path(track, cfg)
     if spoti_rel == orig_rel:

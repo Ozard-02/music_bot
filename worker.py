@@ -26,7 +26,7 @@ from queue_manager import QueueManager
 from library import user_cfg
 from resolver import resolve_search
 from downloader import DownloadResult, run_url
-from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+import spotiflac_loader
 
 
 def _run_url_sync(
@@ -207,6 +207,7 @@ class Worker:
                         self._poll = min(300, self._poll * 2)
                         if self._poll == 300:
                             await asyncio.to_thread(_trim_rss)
+                            await self._maybe_reexec()
             except Exception as e:
                 self._logger.error("Worker error: %s", e)
                 self._poll = min(300, self._poll * 2)
@@ -239,6 +240,18 @@ class Worker:
             self._sem.release()
             self._wake_event.set()
             await asyncio.to_thread(_trim_rss)
+
+    async def _maybe_reexec(self) -> None:
+        """When the process has been fully idle long enough, re-exec it so RSS
+        returns to the lean baseline (CPython can't unload a loaded module
+        stack — see spotiflac_loader).  flock lock is CLOEXEC by default, so
+        the fresh process re-acquires it cleanly; Telegram getUpdates keeps
+        undelivered updates for 24h, so no message is lost during the gap."""
+        if await asyncio.to_thread(spotiflac_loader.should_reexec):
+            self._logger.info("Idle for long enough — re-execing to return RSS to baseline")
+            import os
+            import sys
+            os.execv(sys.executable, [sys.executable] + sys.argv)
 
     async def shutdown(self):
         if self._shutdown:
@@ -389,6 +402,7 @@ class Worker:
         await self._notify(_done_message(display, result, given_up), chat)
         await self._auto_build_m3u8(item, await self._item_cfg(item), chat)
 
+    @spotiflac_loader.wrap
     async def _resolve(self, item: dict, cfg: dict) -> tuple[str, str]:
         if item["input_type"] == "search":
             from SpotiFLAC import AsyncSpotiFLAC
@@ -398,9 +412,12 @@ class Worker:
             return url, display
         return item["query"], item["query"]
 
+    @spotiflac_loader.wrap
     async def _auto_build_m3u8(self, item: dict, cfg: dict, chat: int | None):
         if item["input_type"] != "link":
             return
+        from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+
         parsed = parse_spotify_url(item["query"])
         if parsed.get("type") != "playlist":
             return

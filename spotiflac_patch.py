@@ -253,8 +253,17 @@ def silence_spotiflac_loggers() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-install_console_silencing()
-_patch_qobuz_lock()
-_patch_community_session()
-_patch_musicbrainz()
-disable_progress_manager()
+def install_all() -> None:
+    """Apply every patch (idempotent).
+
+    Runs at import time (below).  spotiflac_loader re-calls it after an idle
+    unload so a re-imported SpotiFLAC stack is patched before use.
+    """
+    install_console_silencing()
+    _patch_qobuz_lock()
+    _patch_community_session()
+    _patch_musicbrainz()
+    disable_progress_manager()
+
+
+install_all()
