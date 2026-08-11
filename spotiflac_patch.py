@@ -13,6 +13,7 @@ import builtins
 import logging
 import sys
 import threading
+import time
 
 _CONSOLE_PRINTS = (
     "print_source_banner",
@@ -22,6 +23,10 @@ _CONSOLE_PRINTS = (
     "print_summary",
     "print_official_source",
 )
+
+_COMMUNITY_SOLVE_COOLDOWN = 600  # seconds to wait before re-attempting a failed solve
+_community_solver_lock = threading.Lock()
+_community_solve_attempt_at = 0.0
 
 
 def install_console_silencing() -> None:
@@ -98,23 +103,31 @@ def _patch_qobuz_lock() -> None:
 
 
 def _patch_community_session() -> None:
-    """Fail fast on an expired/invalid qobuz community session.
+    """Auto-refresh the qobuz/amazon community session via the in-container solver.
 
-    ensure_community_session() (SpotiFLAC core/signed_session_desktop.py)
-    triggers interactive verification (browser grant / solver / terminal
-    input) whenever the stored session is dead or expired.  In this headless
-    bot none of those can complete, so the verification thread holds
-    community_session_mu and runs until COMMUNITY_VERIFY_TIMEOUT (300s) —
-    per-track wait_for aborts at PER_TRACK_TIMEOUT (100s) but the leaked
-    thread keeps running, stalling the asyncio.run teardown (the recurring
-    'executor did not finish joining its threads within 300 seconds').  Each
-    track burns 100s before failing.
+    ensure_community_session() (SpotiFLAC core/signed_session_desktop.py) runs
+    interactive verification (browser grant / solver / terminal input) whenever
+    the stored session is dead or expired.  Upstream SpotiFLAC 1.6.0 removed the
+    `is_docker()` gate on MODO 2, so the pydoll Turnstile solver now runs headless
+    in this container (chromium + xvfb are installed for exactly that).  The old
+    hard fail-fast (#166) is replaced by:
 
-    A valid session is still used as-is (returns fast, no verification); an
-    invalid one raises immediately so the track fails in seconds and the
-    other qobuz APIs (gdstudio/wjhe/squid/...) can win the parallel race.
-    The only way to get a valid session headless is the desktop-export bridge
-    (config.bridge_community_session), which is the supported flow.
+    * valid session        → `_orig_ensure()` (fast, no verification)
+    * invalid + cooldown   → raise immediately, no verification attempt
+    * invalid + cooldown   → let `_orig_ensure()` run MODO 2; on success the
+      elapsed               session is saved to the mounted volume and reused
+                            for its ~2h TTL; on failure re-raise fast
+
+    Only ONE solve attempt is ever in flight: `_community_solver_lock` is held
+    across the attempt, and the waiting threads re-check validity after
+    acquiring it (a concurrent solve that succeeded short-circuits them).  A
+    failing solver therefore costs at most one bounded attempt per cooldown
+    window, never a 300s per-track stall.  COMMUNITY_VERIFY_TIMEOUT is lowered
+    (300 → 120) so a single failed solve burns at most 2 minutes, not 5.
+
+    The desktop-export bridge (config.bridge_community_session) stays as an
+    explicit manual fallback: drop a fresh session on the host and the bot picks
+    it up on the next validity check.
     """
     try:
         from SpotiFLAC.core import signed_session_desktop as ssd
@@ -124,15 +137,28 @@ def _patch_community_session() -> None:
         return
     ssd._spoty_loop_community_patched = True
     _orig_ensure = ssd.ensure_community_session
+    ssd.COMMUNITY_VERIFY_TIMEOUT = 120
 
     def _patched_ensure():
+        global _community_solve_attempt_at
         record = ssd.load_community_session()
-        if not ssd.community_session_valid(record):
-            raise RuntimeError(
-                "qobuz community session missing/expired — export one from the "
-                "desktop SpotiFLAC and bridge it (community_sessions.json)",
-            )
-        return _orig_ensure()
+        if ssd.community_session_valid(record):
+            return _orig_ensure()
+
+        now = time.monotonic()
+        with _community_solver_lock:
+            # A concurrent solve may have succeeded while we waited for the lock.
+            record = ssd.load_community_session()
+            if ssd.community_session_valid(record):
+                return _orig_ensure()
+
+            if now - _community_solve_attempt_at < _COMMUNITY_SOLVE_COOLDOWN:
+                raise RuntimeError(
+                    "community session solve attempt failed — retrying in "
+                    f"{max(0, int(_COMMUNITY_SOLVE_COOLDOWN - (now - _community_solve_attempt_at)))}s",
+                )
+            _community_solve_attempt_at = now
+            return _orig_ensure()
 
     ssd.ensure_community_session = _patched_ensure
 

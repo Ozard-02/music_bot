@@ -105,15 +105,15 @@ _patch_qobuz_lock()           — runs once at import; wraps QobuzProvider.__ini
   _creds_lock becomes a loop-agnostic _AsyncLockAdapter (threading.Lock behind
   async-with). SpotiFLAC awaits the provider's asyncio.Lock from fresh loops
   (to_thread + asyncio.run) → "bound to a different event loop" → 100s timeouts.
-_patch_community_session()    — runs once at import; wraps ensure_community_session
-  (SpotiFLAC core/signed_session_desktop) so an expired/missing qobuz community
-  session raises IMMEDIATELY instead of running interactive verification
-  (browser grant / solver / terminal input — none can complete headless; the
-  verification thread held community_session_mu up to COMMUNITY_VERIFY_TIMEOUT=300s
-  → per-track wait_for aborted at 100s + leaked thread stalled executor teardown
-  300s, the mass-timeout + RuntimeWarning signature seen in production). A valid
-  session is still used as-is. Qobuz returns a normal provider error → SpotiFLAC
-  falls through to deezer/amazon within the 100s budget.
+_patch_community_session()    — runs once at import; rewrites ensure_community_session
+  so an expired/missing qobuz/amazon community session is solved IN-CONTAINER
+  instead of blocking: valid session → fast path; invalid + cooldown elapsed →
+  run MODO 2 (the pydoll Turnstile solver, which upstream 1.6.0 no longer gates
+  off in docker) and save the grant to the volume-mounted session file; invalid +
+  within a 600s cooldown → fail fast. `_community_solver_lock` serializes so only
+  one solve is in flight (waiters re-check validity). COMMUNITY_VERIFY_TIMEOUT is
+  lowered 300→120 so a failed solve costs ≤2 min, never a per-track stall. The
+  desktop-export bridge (config.bridge_community_session) stays as manual fallback.
 _patch_musicbrainz()          — runs once at import; no-ops SpotiFLAC's per-track
   MusicBrainz lookup (every provider writes MUSICBRAINZ_* ids + extras via
   extra_tags=mb_tags → Navidrome splits albums into multiple releases).

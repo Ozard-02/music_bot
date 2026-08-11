@@ -251,3 +251,30 @@ docker compose up -d
     - **Executed:** Code A (`spotiflac_patch._patch_community_session` — fail fast on expired session, bypasses the 300 s `run_community_verification`), Code B (`worker._run_url_sync` — manual loop, no 300 s `shutdown_default_executor` wait), Code C(1) (`_rename_after_download` duplicate unlink now requires **both** spoti-path and orig-path IDs to match `track.id`), C(2) (`_in_flight_lock` → `_AsyncLockAdapter`, cross-loop-safe), C(3) (`fix_metadata._move_file` `os.replace` → `os.rename`, data-loss guard), C(4) (Dockerfile: `ffmpeg flac`).
     - **Tests:** 269 → 273 passing (session fail-fast ×2, rename ID-gate ×1, failure_cb arity ×1).
     - **Remaining operational:** regenerate `~/.spotiflac/signed_sessions/community_sessions.json` (expired 2026-07-30) to restore qobuz-quality downloads; rebuild + redeploy the image so the patches ship.
+
+  91. **In-container community-session solver (auto-refresh) — qobuz + amazon unblocked.**
+      The 2026-08-11 log showed amazon failing too (`[amazon] Community failed: 428
+      {'detail': 'Verification session required.'}`) — amazon routes through the
+      community API (`amazon.py:296` calls `ensure_community_session`), so the
+      expired session (2026-07-30) killed BOTH qobuz and amazon, leaving deezer as
+      the only working provider. Two facts made the in-container solver viable:
+      (a) upstream SpotiFLAC **1.6.0 removed the `is_docker()` gate** on MODO 2 —
+      the active `signed_session_desktop.py` (Aug 6) runs the pydoll Turnstile solver
+      in docker; only the old `-2.py` backup still gates on `not is_docker()`
+      (PLAN #88's "SpotiFLAC skips it in docker" was stale); (b) the Dockerfile
+      already shipped chromium + pydoll + nodriver + `CHROME_PATH`/`CHROME_FLAGS`.
+      Rewrote `_patch_community_session` (was #88 Code A hard fail-fast):
+      - **valid session** → `_orig_ensure()` fast path (unchanged).
+      - **invalid + cooldown elapsed** → call `_orig_ensure()` → MODO 2 solver runs
+        headless (chromium + Xvfb), Turnstile grant exchanged, session saved to the
+        volume-mounted `signed_sessions/community_sessions.json` (~2h TTL).
+      - **invalid + within cooldown** → raise fast, no verification attempt.
+      Serialization: `_community_solver_lock` held across the solve attempt so only
+      ONE solve is ever in flight; waiters re-check validity after acquiring the
+      lock (a concurrent success short-circuits them). `COMMUNITY_VERIFY_TIMEOUT`
+      patched 300 → 120 so a failed solve costs ≤2 min once per 600s cooldown
+      window, never a per-track 300s stall. `config.bridge_community_session()`
+      remains as an explicit manual fallback.
+      Dockerfile: added `xvfb` + `fonts-liberation` (Xvfb virtual display for the
+      non-headless chromium; fonts so the Turnstile challenge renders).
+      Tests: 273 → 274 (solver-attempt-then-cooldown, solver-success-saves-record).
