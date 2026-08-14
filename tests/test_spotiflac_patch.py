@@ -170,3 +170,57 @@ def test_community_session_uses_valid_record_without_verification():
     )
     ssd.load_community_session = lambda: valid
     assert ssd.ensure_community_session() is valid
+
+
+def test_track_provider_records_success_and_pops():
+    from SpotiFLAC.core.models import DownloadResult
+    import SpotiFLAC.downloader as sf_downloader
+    from SpotiFLAC.core.models import TrackMetadata
+
+    calls = {"n": 0}
+
+    async def _fake_orig(metadata, *a, **kw):
+        calls["n"] += 1
+        return DownloadResult.ok("deezer", f"/tmp/{metadata.id}.flac")
+
+    sf_downloader._spoty_loop_provider_patched = False
+    sf_downloader.download_one_async = _fake_orig
+    spotiflac_patch._patch_track_provider()
+
+    import asyncio
+
+    track = TrackMetadata(
+        id="tricky", title="T", artists="A", album="Al", album_artist="A",
+    )
+    result = asyncio.run(sf_downloader.download_one_async(track, "/tmp", []))
+
+    assert result.provider == "deezer"
+    assert spotiflac_patch.pop_track_provider("tricky") == "deezer"
+    assert spotiflac_patch.pop_track_provider("tricky") is None
+
+
+def test_track_provider_ignores_failed_and_skipped():
+    from SpotiFLAC.core.models import DownloadResult
+    import SpotiFLAC.downloader as sf_downloader
+    from SpotiFLAC.core.models import TrackMetadata
+
+    async def _fake_orig(metadata, *a, **kw):
+        if metadata.title == "fail":
+            return DownloadResult.fail("none", "boom")
+        return DownloadResult(
+            success=True, provider="qobuz", file_path="/tmp/x.flac", skipped=True,
+        )
+
+    sf_downloader._spoty_loop_provider_patched = False
+    sf_downloader.download_one_async = _fake_orig
+    spotiflac_patch._patch_track_provider()
+
+    import asyncio
+
+    failed = TrackMetadata(id="f1", title="fail", artists="A", album="Al", album_artist="A")
+    asyncio.run(sf_downloader.download_one_async(failed, "/tmp", []))
+    skipped = TrackMetadata(id="s1", title="skip", artists="A", album="Al", album_artist="A")
+    asyncio.run(sf_downloader.download_one_async(skipped, "/tmp", []))
+
+    assert spotiflac_patch.pop_track_provider("f1") is None
+    assert spotiflac_patch.pop_track_provider("s1") is None

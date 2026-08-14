@@ -171,6 +171,42 @@ def _patch_community_session() -> None:
             setattr(_mod, "ensure_community_session", _patched_ensure)
 
 
+_track_providers: dict[str, str] = {}
+
+
+def _patch_track_provider() -> None:
+    """Record which provider actually delivered each track download.
+
+    SpotiFLAC's download_one_async() (module-level in SpotiFLAC.downloader,
+    called bare from the same module at downloader.py:499) returns a
+    DownloadResult carrying `provider`. The public download_track() discards
+    it, so we wrap download_one_async and stash track.id -> provider in
+    `_track_providers`; downloader.py pops entries via pop_track_provider()
+    after each successful track. Single-threaded asyncio writes, no lock.
+    """
+    try:
+        import SpotiFLAC.downloader as sf_downloader
+    except ImportError:
+        return
+    if getattr(sf_downloader, "_spoty_loop_provider_patched", False):
+        return
+    sf_downloader._spoty_loop_provider_patched = True
+    _orig = sf_downloader.download_one_async
+
+    async def _patched(metadata, *args, **kwargs):
+        result = await _orig(metadata, *args, **kwargs)
+        if result.success and not result.skipped:
+            _track_providers[metadata.id] = result.provider
+        return result
+
+    sf_downloader.download_one_async = _patched
+
+
+def pop_track_provider(track_id: str) -> str | None:
+    """Pop the recorded provider for a track (None when not downloaded here)."""
+    return _track_providers.pop(track_id, None)
+
+
 def _patch_musicbrainz() -> None:
     """No-op SpotiFLAC's MusicBrainz lookup at download time.
 
@@ -283,4 +319,5 @@ install_console_silencing()
 _patch_qobuz_lock()
 _patch_community_session()
 _patch_musicbrainz()
+_patch_track_provider()
 disable_progress_manager()

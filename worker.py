@@ -148,6 +148,9 @@ def _result_summary(result: DownloadResult) -> str:
         parts.append(f"⏭ {result.skipped} skipped")
     if result.failed:
         parts.append(f"❌ {result.failed} failed")
+    if result.providers:
+        prov = " · ".join(f"{k} {v}" for k, v in sorted(result.providers.items()))
+        parts.append(f"🧪 {prov}")
     return " | ".join(parts)
 
 
@@ -329,9 +332,12 @@ class Worker:
 
         stall = {"last": time.monotonic()}
 
-        def progress_cb(done, total, title):
+        def progress_cb(done, total, title, provider=None):
             stall["last"] = time.monotonic()
-            self._queue.set_progress(item["id"], f"{done}/{total} · Now: {title}")
+            status = f"{done}/{total} · Now: {title}"
+            if provider:
+                status += f" · via {provider}"
+            self._queue.set_progress(item["id"], status)
 
         def failure_cb(title, err):
             self._queue.log_failed_track(item["id"], title, err)
