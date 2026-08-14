@@ -327,3 +327,21 @@ docker compose up -d
    Deferred from this pass: also logging failed-provider attempts
    (download_one_async's per-provider `errors` dict is not returned by
    `download_track()`), and per-track provider in `/status` vs aggregate only.
+
+### 93. **Production-log evidence: the browser solver never succeeds (2026-08-11→14).**
+   **Evidence.** Container log, every solve attempt for 3 days ends in either
+   `Browser failed to start within timeout` (~10s burn) or browser-start followed
+   by `Command timeout ... GET_DOCUMENT, timeout=60s` → `Error in cloudflare
+   bypass: The command execution timed out` (only full attempt: 08-13 12:52:18,
+   navigated to `verify.spotbye.qzz.io/challenge`, still failed). The signed
+   community session remains the stale 2026-07-30 record — no refresh ever landed.
+   **Yet downloads succeed without it** (#202/#208/#209/#210/#211 PASS lines the
+   same minutes the browser "failed to start"); #203/#206 retried ~35 min then
+   `All 1 tracks already on disk`. Browser spawns are pure overhead — one chromium
+   per track attempt, two at once under max_parallel=2 (ports 9304+9226, 9235+9286).
+   **Conclusion:** qobuz's community API (the only browser-gated path) has never
+   delivered in this window; the fallback chain does. Strongly supports dropping
+   qobuz + the whole chromium/xvfb/pydoll/`_patch_community_session` stack even
+   while keeping amazon (amazon has non-community fallbacks, antra → 200).
+   **Decision deferred:** confirm the real deezer/amazon split via #92's
+   observability first, then decide the removal.
