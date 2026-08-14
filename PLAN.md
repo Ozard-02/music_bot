@@ -338,12 +338,18 @@ docker compose up -d
    same minutes the browser "failed to start"); #203/#206 retried ~35 min then
    `All 1 tracks already on disk`. Browser spawns are pure overhead — one chromium
    per track attempt, two at once under max_parallel=2 (ports 9304+9226, 9235+9286).
-   **Conclusion:** qobuz's community API (the only browser-gated path) has never
-   delivered in this window; the fallback chain does. Strongly supports dropping
-   qobuz + the whole chromium/xvfb/pydoll/`_patch_community_session` stack even
-   while keeping amazon (amazon has non-community fallbacks, antra → 200).
-   **Decision deferred:** confirm the real deezer/amazon split via #92's
-   observability first, then decide the removal.
+   **Conclusion:** the community API (the only browser-gated path) has never
+   delivered in this window; the fallback mirrors do. qobuz itself is fine — it
+   downloads via the non-community `anandserver.cfd` stream mirror (no session,
+   baked-in X-API-Key); the browser only gates qobuz's `qbz-oss.spotbye.qzz.io`
+   candidate, amazon's `amz-oss.spotbye.qzz.io` first attempt, and tidal's
+   `tdl-oss` — all wrapped in try/except falling back to non-community mirrors.
+   **Removal done 2026-08-14:** `_patch_community_session` (browser solver) →
+   `_patch_community_dead()` (ensure_community_session raises fast,
+   get_community_url → "", qobuz._COMMUNITY_APIS emptied); `bridge_community_session`
+   deleted; Dockerfile chromium/xvfb/fonts/pydoll/nodriver/CHROME_* removed.
+   Qobuz/deezer/amazon all keep downloading. 277-test suite green.
+   **Remaining:** re-measure idle RSS in the rebuilt container (PLAN #94).
 
 ### 94. **Idle RAM must drop significantly (user requirement, hard target).**
    **Baseline.** Docker container idles at ~252MiB; Navidrome (same host) uses
@@ -352,11 +358,9 @@ docker compose up -d
    **Known levers (all tied to earlier items):**
    - Drop the browser stack (chromium/xvfb/pydoll/nodriver + the spawns per track
      attempt, two at once) — see #93. The solver is proven never to succeed, so
-     this RAM is pure waste.
-   - Drop qobuz (community API + signed-session machinery) — see #93; non-community
-     fallbacks keep deezer/amazon delivering.
+     this RAM is pure waste. **DONE 2026-08-14** — see #93.
    - The leftover whole-job-timeout straggler thread holds RSS — see "Remaining".
    - Re-measure idle RSS after each change to confirm the drop; `_trim_rss()`
      already exists but can't recover a still-running leaked thread.
-   **Order:** #92 observability first to confirm the deezer/amazon split — DONE
-   2026-08-14; the removal(s) come next, then re-measure. Not started.
+   **Order:** #92 observability — DONE 2026-08-14; browser-stack removal — DONE
+   2026-08-14 (#93). **Next: rebuild the image, re-measure idle RSS.**

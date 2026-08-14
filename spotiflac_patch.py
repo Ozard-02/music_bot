@@ -2,8 +2,9 @@
 
 Kept in one module so the hacks are easy to find and review.  Importing this
 module runs `install_console_silencing()`, `_patch_qobuz_lock()`,
-`_patch_musicbrainz()` and `disable_progress_manager()` once — downloader.py
-relies on that side-effect (regression-tested in tests/test_downloader.py).
+`_patch_community_dead()`, `_patch_musicbrainz()`, `_patch_track_provider()`
+and `disable_progress_manager()` once — downloader.py relies on that
+side-effect (regression-tested in tests/test_downloader.py).
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ import builtins
 import logging
 import sys
 import threading
-import time
 
 _CONSOLE_PRINTS = (
     "print_source_banner",
@@ -23,10 +23,6 @@ _CONSOLE_PRINTS = (
     "print_summary",
     "print_official_source",
 )
-
-_COMMUNITY_SOLVE_COOLDOWN = 600  # seconds to wait before re-attempting a failed solve
-_community_solver_lock = threading.Lock()
-_community_solve_attempt_at = 0.0
 
 
 def install_console_silencing() -> None:
@@ -102,73 +98,55 @@ def _patch_qobuz_lock() -> None:
     qobuz.QobuzProvider.__init__ = _patched_init
 
 
-def _patch_community_session() -> None:
-    """Auto-refresh the qobuz/amazon community session via the in-container solver.
+def _patch_community_dead() -> None:
+    """Kill the community-session machinery so the browser never launches.
 
-    ensure_community_session() (SpotiFLAC core/signed_session_desktop.py) runs
-    interactive verification (browser grant / solver / terminal input) whenever
-    the stored session is dead or expired.  Upstream SpotiFLAC 1.6.0 removed the
-    `is_docker()` gate on MODO 2, so the pydoll Turnstile solver now runs headless
-    in this container (chromium + xvfb are installed for exactly that).  The old
-    hard fail-fast (#166) is replaced by:
+    ensure_community_session() (SpotiFLAC core/signed_session_desktop.py) only
+    ever runs on the community branches of the providers:
+      * qobuz  — `_COMMUNITY_APIS` (module-level list, already built when
+        `_patch_qobuz_lock()` imports the provider) feeds `qbz-oss.spotbye.qzz.io`
+        into the parallel stream-fetch pool (qobuz.py:1275).
+      * amazon — `get_community_url("amazon")` gates both `_do_request_with_retry`
+        (`is_community`, amazon.py:275) and the first download attempt
+        (`_community_ep`, amazon.py:1392/1405).
+      * tidal  — `_TIDAL_COMMUNITY_URL` built at import (tidal.py:78).
+    All three call sites wrap `ensure_community_session()` in try/except and fall
+    back to non-community mirrors (qobuz: anandserver.cfd stream; amazon: antra/
+    mono/s_stream; tidal: legacy). Production evidence (PLAN #93, 2026-08-11→14):
+    the solver never succeeds — browser fails to start or the Cloudflare bypass
+    times out — while downloads keep succeeding via the fallback mirrors. So the
+    community path is dead weight: each attempt spawns a chromium, burns ~10-60s,
+    and holds RSS (PLAN #94).
 
-    * valid session        → `_orig_ensure()` (fast, no verification)
-    * invalid + cooldown   → raise immediately, no verification attempt
-    * invalid + cooldown   → let `_orig_ensure()` run MODO 2; on success the
-      elapsed               session is saved to the mounted volume and reused
-                            for its ~2h TTL; on failure re-raise fast
-
-    Only ONE solve attempt is ever in flight: `_community_solver_lock` is held
-    across the attempt, and the waiting threads re-check validity after
-    acquiring it (a concurrent solve that succeeded short-circuits them).  A
-    failing solver therefore costs at most one bounded attempt per cooldown
-    window, never a 300s per-track stall.  COMMUNITY_VERIFY_TIMEOUT is lowered
-    (300 → 120) so a single failed solve burns at most 2 minutes, not 5.
-
-    The desktop-export bridge (config.bridge_community_session) stays as an
-    explicit manual fallback: drop a fresh session on the host and the bot picks
-    it up on the next validity check.
+    This patch makes `ensure_community_session()` raise immediately (fast-fail,
+    no browser, no cooldown window) and empties the community endpoint lists so
+    the branches are never even reached. No behaviour change for the non-community
+    mirrors.
     """
+    import SpotiFLAC.core.endpoints as endpoints
+    import SpotiFLAC.core.signed_session_desktop as ssd
+
+    def _dead_session(*a, **kw):
+        raise RuntimeError("community session disabled (spoty_loop) — using non-community mirrors")
+
+    ssd.ensure_community_session = _dead_session
+    endpoints.get_community_url = lambda _provider: ""
     try:
-        from SpotiFLAC.core import signed_session_desktop as ssd
+        from SpotiFLAC.providers import qobuz
     except ImportError:
-        return
-    if getattr(ssd, "_spoty_loop_community_patched", False):
-        return
-    ssd._spoty_loop_community_patched = True
-    _orig_ensure = ssd.ensure_community_session
-    ssd.COMMUNITY_VERIFY_TIMEOUT = 120
+        qobuz = None
+    if qobuz is not None:
+        qobuz._COMMUNITY_APIS = []
 
-    def _patched_ensure():
-        global _community_solve_attempt_at
-        record = ssd.load_community_session()
-        if ssd.community_session_valid(record):
-            return _orig_ensure()
-
-        now = time.monotonic()
-        with _community_solver_lock:
-            # A concurrent solve may have succeeded while we waited for the lock.
-            record = ssd.load_community_session()
-            if ssd.community_session_valid(record):
-                return _orig_ensure()
-
-            if now - _community_solve_attempt_at < _COMMUNITY_SOLVE_COOLDOWN:
-                raise RuntimeError(
-                    "community session solve attempt failed — retrying in "
-                    f"{max(0, int(_COMMUNITY_SOLVE_COOLDOWN - (now - _community_solve_attempt_at)))}s",
-                )
-            _community_solve_attempt_at = now
-            return _orig_ensure()
-
-    ssd.ensure_community_session = _patched_ensure
-
-    # Import-copy gotcha: providers do `from ...signed_session_desktop import
-    # ensure_community_session`, so overwrite the already-copied name too.
+    # Import-copy gotcha: providers do `from ...endpoints import get_community_url`
+    # and `from ...signed_session_desktop import ensure_community_session`, so
+    # overwrite the already-copied names too (same sweep as console silencing).
     for _mod_name, _mod in list(sys.modules.items()):
         if not _mod_name.startswith("SpotiFLAC"):
             continue
-        if hasattr(_mod, "ensure_community_session"):
-            setattr(_mod, "ensure_community_session", _patched_ensure)
+        for _name in ("ensure_community_session", "get_community_url"):
+            if hasattr(_mod, _name):
+                setattr(_mod, _name, _dead_session if _name == "ensure_community_session" else endpoints.get_community_url)
 
 
 _track_providers: dict[str, str] = {}
@@ -317,7 +295,7 @@ def silence_spotiflac_loggers() -> None:
 
 install_console_silencing()
 _patch_qobuz_lock()
-_patch_community_session()
+_patch_community_dead()
 _patch_musicbrainz()
 _patch_track_provider()
 disable_progress_manager()

@@ -82,18 +82,3 @@ def setup_logger(log_path: str | Path | None = None) -> logging.Logger:
     silence_spotiflac_loggers()
 
     return logger
-
-
-def bridge_community_session(logger: logging.Logger):
-    desktop = os.path.expanduser("~/.spotiflac/community_session.json")
-    module_path = os.path.expanduser("~/.spotiflac/signed_sessions/community_sessions.json")
-    try:
-        with open(desktop) as f:
-            data = json.load(f)
-        if data.get("session_id"):
-            os.makedirs(os.path.dirname(module_path), exist_ok=True)
-            with open(module_path, "w") as f:
-                json.dump(data, f, indent=2)
-            logger.info("Community session bridged")
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.warning("No desktop session to bridge: %s", e)
