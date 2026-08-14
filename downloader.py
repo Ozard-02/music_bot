@@ -13,7 +13,7 @@ from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
 from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
-from spotiflac_patch import _AsyncLockAdapter
+from spotiflac_patch import _AsyncLockAdapter, pop_track_provider
 from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
 
 
@@ -27,6 +27,7 @@ class DownloadResult:
     failed_tracks: list[tuple] = field(default_factory=list)
     gave_up_tracks: list[tuple] = field(default_factory=list)
     total: int = 0
+    providers: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -201,6 +202,7 @@ async def _download_tracks(
     failed_list = []
     skipped_inflight = []
     done_count = 0
+    providers: dict[str, int] = {}
 
     async def _dl(track):
         nonlocal done_count
@@ -238,8 +240,11 @@ async def _download_tracks(
                 async with _in_flight_lock:
                     _in_flight.discard(track.id)
             done_count += 1
+            provider = pop_track_provider(track.id)
+            if provider:
+                providers[provider] = providers.get(provider, 0) + 1
             if progress_cb:
-                await asyncio.to_thread(progress_cb, done_count, len(missing), track.title)
+                await asyncio.to_thread(progress_cb, done_count, len(missing), track.title, provider)
 
     await asyncio.gather(*[_dl(t) for t in missing], return_exceptions=True)
 
@@ -274,4 +279,5 @@ async def _download_tracks(
         failed_tracks=[(t.id, t.title, "download_failed") for t in failed_list],
         gave_up_tracks=[(t.id, t.title, "gave_up") for t in given_up],
         total=total,
+        providers=providers,
     )

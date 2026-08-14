@@ -279,7 +279,7 @@ docker compose up -d
       non-headless chromium; fonts so the Turnstile challenge renders).
       Tests: 273 → 274 (solver-attempt-then-cooldown, solver-success-saves-record).
 
-## Planned — NOT implemented yet
+## Implemented — 2026-08-14
 
 ### 92. **Surface the real provider per track (observability, no deletion).**
    **Why.** The user wants to know which provider (qobuz/deezer/amazon) actually
@@ -298,26 +298,23 @@ docker compose up -d
    `download_track()` return discards it — it only returns the failed-tracks list
    (downloader.py:904, `[t for t in updated_tracks if t.id in failed_ids]`).
 
-   **Plan of record:**
-   1. `spotiflac_patch.py` — new `_patch_track_provider()` (runs at import like the
-      others): wrap `SpotiFLAC.downloader.download_one_async` (a module-level fn,
-      called bare from the same module → patching the module attr works, no
-      import-copy gotcha). On `result.success and not result.skipped`, store
-      `_track_providers[track.id] = result.provider`. Expose
-      `pop_track_provider(track_id) -> str | None` (pops, so the map never grows
-      stale across jobs). Single-threaded asyncio writes → no lock.
-   2. `downloader.py` — `DownloadResult` gains `providers: dict[str,int] =
-      field(default_factory=dict)` (ok count per provider; default keeps existing
-      tests green). In `_dl`, on success: pop the provider and bump the count,
-      pass it to `progress_cb(done, total, title, provider)`; `_download_tracks`/
-      `run_url` return `providers` so the summary has it.
-   3. `worker.py` — wire provider into the live `/status` line
-      (`3/10 · Now: Song X · via qobuz`) and the final message
-      (`✅ N ok — qobuz 14 · amazon 2`). No provider → output unchanged
+   **Done.**
+   1. `spotiflac_patch.py` — `_patch_track_provider()` wraps
+      `SpotiFLAC.downloader.download_one_async` (module-level fn, called bare from
+      the same module → patching the module attr works, no import-copy gotcha). On
+      `result.success and not result.skipped`, stores `_track_providers[track.id] =
+      result.provider`; `pop_track_provider(track_id)` pops (map never grows stale
+      across jobs). Single-threaded asyncio writes → no lock.
+   2. `downloader.py` — `DownloadResult.providers: dict[str,int]` (ok count per
+      provider; default keeps existing tests green). `_dl` pops the provider on
+      success and bumps the count, passes it as `progress_cb(done, total, title,
+      provider)`; `_download_tracks` returns `providers`.
+   3. `worker.py` — live `/status` shows `… · via qobuz`; final message appends
+      `🧪 qobuz 14 · amazon 2` to the summary. No provider → output unchanged
       (graceful for skipped/given-up).
-   4. Tests + docs — 2 new tests (patch records provider on success;
-      DownloadResult passes `providers` through). Update STRUCTURE.md. Run the
-      274-test suite.
+   4. Tests + docs — 4 new/updated tests (patch records provider on success;
+      ignores failed/skipped; `providers` passed through; empty when none
+      delivered). STRUCTURE.md updated. 278-test suite green.
 
    **Explicitly NOT in scope:** no qobuz removal, no browser/community-session
    deletion, no changes to Dockerfile. This is pure observability so the removal
@@ -327,6 +324,8 @@ docker compose up -d
    Deferred from this pass: also logging failed-provider attempts
    (download_one_async's per-provider `errors` dict is not returned by
    `download_track()`), and per-track provider in `/status` vs aggregate only.
+
+## Planned — NOT implemented yet
 
 ### 93. **Production-log evidence: the browser solver never succeeds (2026-08-11→14).**
    **Evidence.** Container log, every solve attempt for 3 days ends in either
@@ -359,5 +358,5 @@ docker compose up -d
    - The leftover whole-job-timeout straggler thread holds RSS — see "Remaining".
    - Re-measure idle RSS after each change to confirm the drop; `_trim_rss()`
      already exists but can't recover a still-running leaked thread.
-   **Order:** #92 observability first to confirm the deezer/amazon split, then the
-   removal(s), then re-measure. Not started.
+   **Order:** #92 observability first to confirm the deezer/amazon split — DONE
+   2026-08-14; the removal(s) come next, then re-measure. Not started.

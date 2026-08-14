@@ -18,10 +18,11 @@ bridge_community_session(logger)         # copy desktop Tidal session
 
 ### `downloader.py` — download engine only
 ```
-DownloadResult(ok, skipped, failed, failed_tracks, gave_up_tracks, total)  # frozen dataclass, to_dict()
+DownloadResult(ok, skipped, failed, failed_tracks, gave_up_tracks, total, providers)  # frozen dataclass, to_dict()
 run_url(url, cfg, logger, skip_titles=None, progress_cb=None, failure_cb=None) → DownloadResult  ← entry point
-  progress_cb(done, total, title) — called per completed track (via asyncio.to_thread) for live /status
+  progress_cb(done, total, title, provider=None) — called per completed track (via asyncio.to_thread) for live /status
   failure_cb(title, err)          — called per failed track (live, so give-up advances even if the job times out)
+  providers: dict[str,int] — ok-count per provider, gathered via spotiflac_patch.pop_track_provider()
 ├─ parse_spotify_url(url)
 ├─ if "track":
 │  ├─ get_track_metadata(url)
@@ -326,7 +327,7 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
 
 ## SpotiFLAC patches
 - `SpotiFLAC/core/tagger.py`: `_embed_flac` strips `MUSICBRAINZ_*` before writing Vorbis comments.
-- `spotiflac_patch.py`: runtime monkey-patches (ProgressManager, console interception, logger noise) — see section above.
+- `spotiflac_patch.py`: runtime monkey-patches (ProgressManager, console interception, logger noise, track-provider capture) — see section above.
 
 ## Helper scripts — `scripts/`
 

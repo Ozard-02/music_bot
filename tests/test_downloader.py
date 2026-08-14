@@ -143,7 +143,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result.to_dict() == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
+        assert result.to_dict() == {"ok": 1, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "providers": {}, "total": 1}
         client.download_track.assert_awaited_once_with(self.TRACK_URL)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["enrich_providers"] == [
@@ -179,7 +179,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, cfg, logger)
 
-        assert result.to_dict() == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 1}
+        assert result.to_dict() == {"ok": 0, "skipped": 1, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "providers": {}, "total": 1}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -261,7 +261,7 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result.to_dict() == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
+        assert result.to_dict() == {"ok": 0, "skipped": 2, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "providers": {}, "total": 2}
         client.download_track.assert_not_called()
 
     @pytest.mark.asyncio
@@ -293,7 +293,7 @@ class TestRunUrl:
 
             result = await run_url(self.ALBUM_URL, cfg, logger)
 
-        assert result.to_dict() == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "total": 2}
+        assert result.to_dict() == {"ok": 2, "skipped": 0, "failed": 0, "failed_tracks": [], "gave_up_tracks": [], "providers": {}, "total": 2}
         assert client.download_track.await_count == 2
         client.download_track.assert_any_call(t1.external_url)
         client.download_track.assert_any_call(t2.external_url)
@@ -429,7 +429,7 @@ class TestRunUrl:
 
             result = await run_url(self.TRACK_URL, config, logger)
 
-        assert result.to_dict() == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "gave_up_tracks": [], "total": 1}
+        assert result.to_dict() == {"ok": 0, "skipped": 0, "failed": 1, "failed_tracks": [("abc123", "Test Track", "download_failed")], "gave_up_tracks": [], "providers": {}, "total": 1}
 
     @pytest.mark.asyncio
     async def test_failure_cb_called_for_failed_track(self, config, logger):
@@ -633,16 +633,76 @@ class TestRunUrl:
 
             calls = []
 
-            def progress_cb(done, total, title):
-                calls.append((done, total, title))
+            def progress_cb(done, total, title, provider=None):
+                calls.append((done, total, title, provider))
 
             result = await run_url(self.ALBUM_URL, config, logger, progress_cb=progress_cb)
 
         assert result.ok == 2
-        assert sorted(t for _, _, t in calls) == ["Song A", "Song B"]
-        assert all(total == 2 for _, total, _ in calls)
+        assert sorted(t for _, _, t, _ in calls) == ["Song A", "Song B"]
+        assert all(total == 2 for _, total, _, _ in calls)
         # done-counts are 1 and 2; order is nondeterministic under concurrency
-        assert sorted(d for d, _, _ in calls) == [1, 2]
+        assert sorted(d for d, _, _, _ in calls) == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_providers_reported_per_track(self, config, logger):
+        """The provider that actually delivered each track is aggregated into
+        the result and forwarded to progress_cb."""
+        t1 = _mock_track("t1", "Song A")
+        t2 = _mock_track("t2", "Song B")
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("downloader.pop_track_provider") as mock_pop,
+        ):
+            mock_parse.return_value = {"type": "album", "id": "alb123"}
+            client = _make_client(
+                playlist_return=({"name": "Test", "type": "album"}, [t1, t2]),
+                download_return=[],
+                cfg=config,
+            )
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            mock_pop.side_effect = lambda track_id: {"t1": "deezer", "t2": "amazon"}.get(track_id)
+
+            calls = []
+
+            def progress_cb(done, total, title, provider=None):
+                calls.append((title, provider))
+
+            result = await run_url(self.ALBUM_URL, config, logger, progress_cb=progress_cb)
+
+        assert result.ok == 2
+        assert result.providers == {"deezer": 1, "amazon": 1}
+        assert sorted(calls) == [("Song A", "deezer"), ("Song B", "amazon")]
+
+    @pytest.mark.asyncio
+    async def test_providers_empty_when_none_delivered(self, config, logger):
+        """No provider recorded (e.g. everything already on disk) → empty dict,
+        so the summary message stays unchanged."""
+        t1 = _mock_track("t1", "Song A")
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "album", "id": "alb123"}
+            client = _make_client(
+                playlist_return=({"name": "Test", "type": "album"}, [t1]),
+                download_return=[],
+                cfg=config,
+            )
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            # track already exists on disk → pre-check, no download
+            rel = spotiflac_track_relative_path(t1, config)
+            _touch(Path(config["output_dir"]) / rel)
+
+            result = await run_url(self.ALBUM_URL, config, logger)
+
+        assert result.skipped == 1
+        assert result.providers == {}
 
     @pytest.mark.asyncio
     async def test_writes_lrc_sidecar_when_lyrics_embedded(self, tmp_path):
