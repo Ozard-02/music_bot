@@ -278,3 +278,52 @@ docker compose up -d
       Dockerfile: added `xvfb` + `fonts-liberation` (Xvfb virtual display for the
       non-headless chromium; fonts so the Turnstile challenge renders).
       Tests: 273 → 274 (solver-attempt-then-cooldown, solver-success-saves-record).
+
+## Planned — NOT implemented yet
+
+### 92. **Surface the real provider per track (observability, no deletion).**
+   **Why.** The user wants to know which provider (qobuz/deezer/amazon) actually
+   delivered each download, so they can later decide what to remove. The premise
+   "browser fails → I never use qobuz" is NOT provable from the code: the browser
+   only gates qobuz's community API (`qbz-oss.spotbye.qzz.io/api/dl`); qobuz also
+   has plain stream endpoints (`qobuz.anandserver.cfd` → 200, no session needed),
+   and the same community session is used by amazon too (amazon.py:296). The
+   container logs can't say which source wrote a file (console output is silenced;
+   the real library lives on TrueNAS). Today's logs: "DONE — 16/16 ok via
+   ['qobuz','deezer','amazon']" — the services LIST, not the actual source.
+
+   **Where the data already lives.** SpotiFLAC 1.6.0's `DownloadResult`
+   (core/models.py:153) has a `provider: str` field, set on success
+   (download_one_async, downloader.py:323-350, `result.provider`). But the public
+   `download_track()` return discards it — it only returns the failed-tracks list
+   (downloader.py:904, `[t for t in updated_tracks if t.id in failed_ids]`).
+
+   **Plan of record:**
+   1. `spotiflac_patch.py` — new `_patch_track_provider()` (runs at import like the
+      others): wrap `SpotiFLAC.downloader.download_one_async` (a module-level fn,
+      called bare from the same module → patching the module attr works, no
+      import-copy gotcha). On `result.success and not result.skipped`, store
+      `_track_providers[track.id] = result.provider`. Expose
+      `pop_track_provider(track_id) -> str | None` (pops, so the map never grows
+      stale across jobs). Single-threaded asyncio writes → no lock.
+   2. `downloader.py` — `DownloadResult` gains `providers: dict[str,int] =
+      field(default_factory=dict)` (ok count per provider; default keeps existing
+      tests green). In `_dl`, on success: pop the provider and bump the count,
+      pass it to `progress_cb(done, total, title, provider)`; `_download_tracks`/
+      `run_url` return `providers` so the summary has it.
+   3. `worker.py` — wire provider into the live `/status` line
+      (`3/10 · Now: Song X · via qobuz`) and the final message
+      (`✅ N ok — qobuz 14 · amazon 2`). No provider → output unchanged
+      (graceful for skipped/given-up).
+   4. Tests + docs — 2 new tests (patch records provider on success;
+      DownloadResult passes `providers` through). Update STRUCTURE.md. Run the
+      274-test suite.
+
+   **Explicitly NOT in scope:** no qobuz removal, no browser/community-session
+   deletion, no changes to Dockerfile. This is pure observability so the removal
+   decision can be data-driven later. The simplification fork (deezer-only vs
+   keep-amazon vs qobuz-out) stays open until real download splits are seen.
+
+   Deferred from this pass: also logging failed-provider attempts
+   (download_one_async's per-provider `errors` dict is not returned by
+   `download_track()`), and per-track provider in `/status` vs aggregate only.
