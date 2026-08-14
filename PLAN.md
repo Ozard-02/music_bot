@@ -345,3 +345,19 @@ docker compose up -d
    while keeping amazon (amazon has non-community fallbacks, antra → 200).
    **Decision deferred:** confirm the real deezer/amazon split via #92's
    observability first, then decide the removal.
+
+### 94. **Idle RAM must drop significantly (user requirement, hard target).**
+   **Baseline.** Docker container idles at ~252MiB; Navidrome (same host) uses
+   ~90MiB. The user wants the bot well under its current idle footprint — every
+   resource change must push down, never add RSS. Documented in AGENTS.md too.
+   **Known levers (all tied to earlier items):**
+   - Drop the browser stack (chromium/xvfb/pydoll/nodriver + the spawns per track
+     attempt, two at once) — see #93. The solver is proven never to succeed, so
+     this RAM is pure waste.
+   - Drop qobuz (community API + signed-session machinery) — see #93; non-community
+     fallbacks keep deezer/amazon delivering.
+   - The leftover whole-job-timeout straggler thread holds RSS — see "Remaining".
+   - Re-measure idle RSS after each change to confirm the drop; `_trim_rss()`
+     already exists but can't recover a still-running leaked thread.
+   **Order:** #92 observability first to confirm the deezer/amazon split, then the
+   removal(s), then re-measure. Not started.
