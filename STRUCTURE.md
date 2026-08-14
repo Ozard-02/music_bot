@@ -13,7 +13,6 @@ Constants: SERVICES=["qobuz","deezer","amazon"], MAX_CONCURRENT=2,
 load_config(logger) → dict               # read ~/.spotiflac/config.json (incl. maxDownloadTimeout
                                          # and stallTimeoutSeconds overrides)
 setup_logger(log_path) → logger          # RotatingFileHandler (5MB×3) + stream
-bridge_community_session(logger)         # copy desktop Tidal session
 ```
 
 ### `downloader.py` — download engine only
@@ -106,15 +105,14 @@ _patch_qobuz_lock()           — runs once at import; wraps QobuzProvider.__ini
   _creds_lock becomes a loop-agnostic _AsyncLockAdapter (threading.Lock behind
   async-with). SpotiFLAC awaits the provider's asyncio.Lock from fresh loops
   (to_thread + asyncio.run) → "bound to a different event loop" → 100s timeouts.
-_patch_community_session()    — runs once at import; rewrites ensure_community_session
-  so an expired/missing qobuz/amazon community session is solved IN-CONTAINER
-  instead of blocking: valid session → fast path; invalid + cooldown elapsed →
-  run MODO 2 (the pydoll Turnstile solver, which upstream 1.6.0 no longer gates
-  off in docker) and save the grant to the volume-mounted session file; invalid +
-  within a 600s cooldown → fail fast. `_community_solver_lock` serializes so only
-  one solve is in flight (waiters re-check validity). COMMUNITY_VERIFY_TIMEOUT is
-  lowered 300→120 so a failed solve costs ≤2 min, never a per-track stall. The
-  desktop-export bridge (config.bridge_community_session) stays as manual fallback.
+_patch_community_dead()         — runs once at import; KILLS the community-session
+  machinery so the browser never launches. ensure_community_session() raises
+  immediately, get_community_url() returns "", and qobuz._COMMUNITY_APIS is
+  emptied — qobuz/amazon/tidal never reach their community branches and fall
+  straight to non-community mirrors (qobuz: anandserver.cfd stream; amazon:
+  antra/mono/s_stream). Production logs (PLAN #93) proved the in-container
+  browser solver never succeeds while downloads keep succeeding via the mirrors,
+  so the chromium spawn was pure overhead (RAM, PLAN #94).
 _patch_musicbrainz()          — runs once at import; no-ops SpotiFLAC's per-track
   MusicBrainz lookup (every provider writes MUSICBRAINZ_* ids + extras via
   extra_tags=mb_tags → Navidrome splits albums into multiple releases).
@@ -183,7 +181,7 @@ m3u8 files and `/fixmetadata` all stay inside the user's folder.
 main()
 ├─ TOKEN + ALLOWED_USER_IDS (comma-separated TELEGRAM_ALLOWED_USER_IDS, legacy
 │  TELEGRAM_ALLOWED_USER_ID fallback) from env
-├─ setup_logger(), bridge_community_session(), load_config()  (from config.py)
+├─ setup_logger(), load_config()  (from config.py)
 ├─ SingleInstanceLock(queue.db.lock).acquire() — flock-based, blocks in standby
 │  until sole instance, then proceeds (prevents two bots / Telegram conflicts)
 ├─ require_auth decorator — all handlers guarded by _is_allowed (id ∈ ALLOWED_USER_IDS)
@@ -308,7 +306,7 @@ Worker(queue, bot, chat_id, cfg, logger, wake_event)
   _run_url_sync(url, cfg, logger, skip_titles, progress_cb, failure_cb): runs run_url
     on its OWN event loop (not asyncio.run) — cancels pending tasks, flushes asyncgens,
     then shuts the default executor down WITHOUT waiting (shutdown(wait=False)), so a
-    leaked download thread (dead community session) can never pin a worker slot for the
+    leaked download thread (dead provider connection) can never pin a worker slot for the
     full 300s shutdown_default_executor wait — it finishes on its own and pre-check
     picks up whatever it writes on a future run
   _handle_timeout(item, display, chat, reason): mark_failed + give-up msg (no requeue —
@@ -359,12 +357,10 @@ Maintenance/one-off CLIs live in `scripts/` (a package, so `bot.py` can do
 ### `Dockerfile`
 ```
 FROM python:3.14-slim
-├─ apt: chromium + ffmpeg + flac (so SpotiFLAC's validate_flac_file can run and
-│  providers' _file_exists never marks a valid FLAC corrupt and deletes it)
+├─ apt: ffmpeg + flac (so SpotiFLAC's validate_flac_file can run and providers'
+│  _file_exists never marks a valid FLAC corrupt and deletes it)
 ├─ pip: spotiflac (1.6.0) + python-telegram-bot
 ├─ COPY . /app
-├─ ENV CHROME_PATH=/usr/bin/chromium
-├─ ENV CHROME_FLAGS="--no-sandbox --disable-dev-shm-usage"
 └─ CMD ["python", "bot.py"]
 ```
 

@@ -51,7 +51,6 @@ See [STRUCTURE.md](STRUCTURE.md) (Docker/TrueNAS) and [PLAN.md](PLAN.md) (setup)
 | `TELEGRAM_ALLOWED_USER_IDS` | Yes* | — | Comma-separated Telegram user IDs (allowlist) |
 | `TELEGRAM_ALLOWED_USER_ID` | Yes* | — | Legacy single-user fallback |
 | `QUEUE_DB_PATH` | No | `./queue.db` | Queue database path |
-| `CHROME_PATH` | No | system default | Chromium location |
 
 *One of `TELEGRAM_ALLOWED_USER_IDS` or `TELEGRAM_ALLOWED_USER_ID` must be set.
 

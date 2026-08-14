@@ -41,12 +41,12 @@ def _run_url_sync(
     threads.
 
     asyncio.run() tears down via shutdown_default_executor(300s) — a leaked
-    download thread (e.g. a dead qobuz community session stuck in its
-    verification) stalls teardown the full 300s, blocking the worker slot and
-    spamming 'executor did not finish joining its threads'.  We own the loop
-    instead: cancel pending tasks, flush asyncgens, then shutdown the default
-    executor without waiting — the leaked thread finishes on its own and
-    pre-check picks up whatever it writes on a future run."""
+    download thread (e.g. a provider stuck on a dead connection) stalls teardown
+    the full 300s, blocking the worker slot and spamming 'executor did not finish
+    joining its threads'.  We own the loop instead: cancel pending tasks, flush
+    asyncgens, then shutdown the default executor without waiting — the leaked
+    thread finishes on its own and pre-check picks up whatever it writes on a
+    future run."""
     loop = asyncio.new_event_loop()
     try:
         result = loop.run_until_complete(

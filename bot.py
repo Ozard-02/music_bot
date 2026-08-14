@@ -29,7 +29,7 @@ _load_env(Path(__file__).parent / ".env")
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from config import setup_logger, load_config, bridge_community_session, esc
+from config import setup_logger, load_config, esc
 from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from m3u8 import build_m3u8
 from queue_manager import QueueManager
@@ -472,7 +472,6 @@ def main() -> None:
         sys.exit(1)
 
     logger = setup_logger()
-    bridge_community_session(logger)
     cfg = load_config(logger)
 
     lock = SingleInstanceLock(QUEUE_DB.with_name(QUEUE_DB.name + ".lock"), logger)
