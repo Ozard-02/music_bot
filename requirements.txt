@@ -1,2 +1,5 @@
-python-telegram-bot>=20.0
+# Parent process is stdlib-only (no third-party deps needed to run bot.py).
+# These are the SUBPROCESS deps: the download_job.py process (SpotiFLAC + tags).
+# SpotiFLAC pulls httpx/mutagen transitively; pydoll is an import-time dep of
+# SpotiFLAC (amazon -> signed_session_mono) but never invoked (no chromium).
 pillow>=10.0

@@ -1,24 +1,28 @@
-# MusicBot
+# MusicBot (rewrite)
 
-**⚠️ Educational purpose only.** Downloads copyrighted music. Know your local laws. See [Disclaimer](#disclaimer).
+**⚠️ Educational purpose only.** Downloads copyrighted music. Know your local laws.
 
-![CI/CD](https://github.com/Ozard-02/music_bot/actions/workflows/docker.yml/badge.svg)
-
-Telegram bot that turns Spotify links into FLAC files via SpotiFLAC (Qobuz/Deezer/Amazon lossless providers).
+Telegram bot that turns Spotify links into FLAC files via SpotiFLAC
+(Qobuz/Deezer/Amazon lossless providers).
 
 ```
-Telegram msg → SQLite queue → Worker → SpotiFLAC → FLAC on disk
+Telegram msg → SQLite queue → worker → subprocess(download_job) → SpotiFLAC → FLAC on disk
 ```
+
+## Why this rewrite
+
+The previous single-process bot (python-telegram-bot + SpotiFLAC) idled at
+~252MiB, ~89MiB after removing the browser stack. This version splits into a
+**stdlib-only parent** (~15-20MiB idle) and a **short-lived subprocess per
+download job** whose RSS is reclaimed on exit. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Features
 
-- Send a Spotify link (track, album, playlist) → queued and downloaded automatically
-- Search by name: `artist - song`
+- Send a Spotify link (track, album, playlist) or search `artist - song` → queued and downloaded
 - Queue commands: `/status`, `/quality`, `/purge`
-- Playlist builder: `/mkplaylist <url>` — generates m3u8 + cover art
+- Playlist builder: `/mkplaylist <url>` (m3u8 + cover)
 - Configurable provider order and quality
-- Exponential backoff retries
-- Docker + CI/CD — auto-pushes to `ghcr.io`
+- Stall watchdog kills hung subprocesses (no leaked threads)
 
 ## Commands
 
@@ -26,22 +30,17 @@ Telegram msg → SQLite queue → Worker → SpotiFLAC → FLAC on disk
 |---------|-------------|
 | `/start` | Welcome + help |
 | `/status` | Queue stats + recent items |
-| `/quality [value]` | Set your download quality (no arg lists `DOLBY_ATMOS, HI_RES_LOSSLESS, LOSSLESS, HIGH, LOW`) |
+| `/quality [value]` | Set download quality |
 | `/purge` | Clear all queued items |
 | `/mkplaylist <url>` | Generate m3u8 playlist file |
-| `/fixmetadata [folder]` | Re-tag all FLACs in a folder (your library if omitted; fixes "same album split into several" in Navidrome) |
+| `/fixmetadata [folder]` | Re-tag all FLACs in a folder (fixes split albums in Navidrome) |
 
-Metadata issues (bogus MusicBrainz tags, split albums, tagless files) are
-explained in [METADATA.md](METADATA.md).
-
-## Quick Start
+## Quick start (local Docker)
 
 ```bash
-cp .env.example .env   # fill in your token and user ID
-python bot.py          # or: docker compose up -d
+cp .env.example .env   # fill in token + user IDs
+docker compose up -d --build
 ```
-
-See [STRUCTURE.md](STRUCTURE.md) (Docker/TrueNAS) and [PLAN.md](PLAN.md) (setup) for full details.
 
 ## Configuration
 
@@ -52,34 +51,21 @@ See [STRUCTURE.md](STRUCTURE.md) (Docker/TrueNAS) and [PLAN.md](PLAN.md) (setup)
 | `TELEGRAM_ALLOWED_USER_ID` | Yes* | — | Legacy single-user fallback |
 | `QUEUE_DB_PATH` | No | `./queue.db` | Queue database path |
 
-*One of `TELEGRAM_ALLOWED_USER_IDS` or `TELEGRAM_ALLOWED_USER_ID` must be set.
-
-Each allowed user gets their own library folder `~/Music/{username}_Music/`
-(fallback: first name), and their own `/quality` preference (applies to new
-downloads only). Migrate an existing root-level library into the owner's
-folder with `python scripts/migrate_library.py --username espo [--dry-run]`.
+*One of the two must be set.
 
 Provider order, quality, and download options go in `~/.spotiflac/config.json`.
 
-## Troubleshooting
+## Docs
 
-| Symptom | Likely cause |
-|---------|-------------|
-| `ConnectTimeout` on replies | Container can't reach `api.telegram.org` — check DNS/firewall |
-| Downloads time out at 100s | Slow network — increase `PER_TRACK_TIMEOUT` in `config.py` |
-| `Node.js not found` | Extensions need Node.js ≥ 16 installed in the container |
-| `Not a valid FLAC file` | Corrupt partial download — the retry will pick it up |
-| Bot goes silent under load | Event loop blocked — ensure `run_url` runs in a thread executor |
+- [ARCHITECTURE.md](ARCHITECTURE.md) — process split, IPC protocol, RSS budget
+- [STRUCTURE.md](STRUCTURE.md) — module map, import rules, data flow
+- [PLAN.md](PLAN.md) — phased roadmap
+- [METADATA.md](METADATA.md) — the "split album" problem and /fixmetadata
+- [DEPLOYMENT.md](DEPLOYMENT.md) — local Docker, TrueNAS, CI/CD
 
 ## Disclaimer
 
-**This project is for educational purposes only.** It demonstrates Telegram bot development, async task queues, SQLite persistence, Docker containerization, and third-party audio API integration.
-
-Downloading copyrighted music may violate terms of service or applicable laws in your jurisdiction. The authors assume no liability for how you use this software.
-
-## Contributors
-
-- **Ozard-02** — original author
-- **DeepSeek V4 Flash** (via opencode) — AI coding assistant
-
-MIT License — see [LICENSE](LICENSE).
+This project is for educational purposes only. Downloading copyrighted music
+may violate terms of service or laws in your jurisdiction. The authors assume
+no liability for how you use this software.
+</content>

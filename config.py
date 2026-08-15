@@ -1,4 +1,4 @@
-"""Shared configuration, logging, and setup utilities."""
+"""Shared configuration, logging, and setup utilities (parent, stdlib-only)."""
 
 import html
 import json
@@ -7,9 +7,11 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from spotiflac_patch import silence_spotiflac_loggers
-
 os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress bars
+
+# Subprocess entry point (download jobs + one-shot maintenance commands).
+# Lives in the same dir as the parent, so paths are stable inside Docker.
+JOB_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download_job.py")
 
 
 def esc(value) -> str:
@@ -62,6 +64,20 @@ def load_config(logger: logging.Logger) -> dict:
         "max_download_timeout": int(cfg.get("maxDownloadTimeout", MAX_DOWNLOAD_TIMEOUT)),
         "stall_timeout": int(cfg.get("stallTimeoutSeconds", STALL_TIMEOUT)),
     }
+
+
+def silence_spotiflac_loggers() -> None:
+    """No-op SpotiFLAC's own loggers (inlined so the parent never imports SpotiFLAC).
+
+    Runs in the parent too, where it's a harmless no-op (no SpotiFLAC loggers
+    exist yet); the subprocess calls setup_logger after importing SpotiFLAC
+    and this silences them there.
+    """
+    for name in list(logging.root.manager.loggerDict):
+        if name.startswith("SpotiFLAC"):
+            logging.getLogger(name).setLevel(logging.CRITICAL)
+    for noisy in ("httpx", "httpcore", "nodriver"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def setup_logger(log_path: str | Path | None = None) -> logging.Logger:

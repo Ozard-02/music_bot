@@ -1,8 +1,10 @@
-"""Parse user input and resolve name-based queries to Spotify URLs."""
+"""Parse user input into (type, value) and resolve name searches.
+
+The parent imports this module and only ever calls `parse_input`/`format_help`
+— so SpotiFLAC is imported lazily inside `resolve_search`, which only runs in
+the download subprocess."""
 
 import re
-
-from SpotiFLAC import AsyncSpotiFLAC
 
 SPOTIFY_URL_RE = re.compile(
     r"^https?://open\.spotify\.com/(track|album|playlist|artist)/[A-Za-z0-9_-]{22}(\?.*)?$"
@@ -44,13 +46,13 @@ def format_help() -> str:
 
 
 async def resolve_search(
-    client: AsyncSpotiFLAC, query: str
+    client, query: str
 ) -> tuple[str, str, str]:
     """Resolve 'X - Y' search to a Spotify URL.
 
     Returns (url, display_name, type) where type is 'track' or 'album'.
-    Raises ValueError if nothing matches.
-    """
+    Raises ValueError if nothing matches. `client` is an AsyncSpotiFLAC
+    instance owned by the caller (the download subprocess)."""
     parts = query.split(" - ", 1)
     a, b = parts[0].strip(), parts[1].strip()
 
@@ -85,14 +87,7 @@ def _pick_between_track_and_album(track, album, second_part: str, first_part: st
 
 
 def best_track_match(tracks: list, artist_hint: str = "", title_hint: str = ""):
-    """Return the search result that best matches the hints, else the first.
-
-    `artist_hint` matches against the track's artists (substring, case-
-    insensitive); `title_hint` matches exactly against the title.      Falls back
-    to `tracks[0]`, or None if there are no results.  Shared by the resolver
-    and the maintenance scripts (fix_metadata and the archived
-    backfill_urls/retag_missing).
-    """
+    """Return the search result that best matches the hints, else the first."""
     artist = (artist_hint or "").strip().lower()
     title = (title_hint or "").strip().lower()
     for t in tracks:

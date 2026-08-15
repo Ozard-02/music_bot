@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from SpotiFLAC import TrackMetadata
+if TYPE_CHECKING:
+    from SpotiFLAC import TrackMetadata
 
 # SpotiFLAC folder sanitizer: `re.sub(r'[<>:"/\\|?*]', "_", ...)` with no
 # whitespace normalization (SpotiFLAC/downloader.py `_track_output_dir_async`).
@@ -39,6 +41,9 @@ def spotiflac_track_relative_path(track: TrackMetadata, cfg: dict) -> str:
     whitespace normalization).  Filename: SpotiFLAC's `build_filename()`
     (chars *removed*, whitespace collapsed).  Reusing the installed package's
     own functions keeps parity by construction.
+
+    Import is lazy: this is only ever called from the subprocess (downloader),
+    so the parent never touches SpotiFLAC.
     """
     from SpotiFLAC.core.models import build_filename
 
@@ -121,4 +126,3 @@ def prune_empty_parents(path: Path, root: Path) -> None:
         except OSError:
             break
         parent = parent.parent
-

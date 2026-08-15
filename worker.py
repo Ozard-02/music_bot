@@ -1,16 +1,21 @@
-"""Background queue processor."""
+"""Background queue processor: spawns download_job.py subprocesses.
+
+The parent never imports SpotiFLAC — each job runs in its own short-lived
+subprocess whose RSS is reclaimed on exit. The worker streams the job's
+JSON-lines (progress/failure/result), applies the stall watchdog via
+`proc.kill()`, and updates the queue + notifies the user.
+"""
 
 import asyncio
-import ctypes
-import gc
+import json
 import logging
+import sys
 import time
-import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from telegram import Bot
 
 from config import (
+    JOB_SCRIPT,
     MAX_PARALLEL_JOBS,
     MAX_QUEUE_RETRIES,
     MAX_TRACK_RETRIES,
@@ -21,78 +26,8 @@ from config import (
     MAX_RETRY_BACKOFF,
     esc,
 )
-from m3u8 import build_m3u8
 from queue_manager import QueueManager
 from library import user_cfg
-from resolver import resolve_search
-from downloader import DownloadResult, run_url
-from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
-
-
-def _run_url_sync(
-    url: str,
-    cfg: dict,
-    logger: logging.Logger,
-    skip_titles: set[str] | None = None,
-    progress_cb=None,
-    failure_cb=None,
-) -> DownloadResult:
-    """Run the download on its own loop without blocking teardown on leaked
-    threads.
-
-    asyncio.run() tears down via shutdown_default_executor(300s) — a leaked
-    download thread (e.g. a provider stuck on a dead connection) stalls teardown
-    the full 300s, blocking the worker slot and spamming 'executor did not finish
-    joining its threads'.  We own the loop instead: cancel pending tasks, flush
-    asyncgens, then shutdown the default executor without waiting — the leaked
-    thread finishes on its own and pre-check picks up whatever it writes on a
-    future run."""
-    loop = asyncio.new_event_loop()
-    try:
-        result = loop.run_until_complete(
-            run_url(url, cfg, logger, skip_titles, progress_cb, failure_cb),
-        )
-    finally:
-        try:
-            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True),
-                )
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        finally:
-            executor = getattr(loop, "_default_executor", None)
-            loop.close()
-            if executor is not None:
-                executor.shutdown(wait=False)
-    return result
-
-
-def _trim_rss() -> None:
-    """Return freed heap pages to the OS so idle RSS settles instead of staying
-    at the last download peak.
-
-    Each job runs in a throwaway thread (`asyncio.to_thread` → `asyncio.run`).
-    When the thread exits, glibc/Python allocator arenas keep the pages
-    resident, so RSS = peak RSS forever.  gc.collect() releases Python cycles,
-    then malloc_trim(0) hands free glibc heap pages back.  No-op on platforms
-    without glibc's malloc_trim.
-    """
-    gc.collect()
-    try:
-        ctypes.CDLL("libc.so.6", use_errno=True).malloc_trim(0)
-    except Exception:
-        pass  # ponytail: non-glibc — nothing to trim, keep going
-
-
-@dataclass(frozen=True)
-class FailureDecision:
-    """Outcome for a failed item: action + detail (error, count, or delay)."""
-
-    action: str  # "fail" | "done" | "requeue"
-    detail: object = None
 
 
 def item_age(item: dict, now: datetime | None = None) -> float:
@@ -116,12 +51,21 @@ def backoff_delay(retries: int, floor: int = 0) -> int:
     return max(floor, min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries)))
 
 
-def decide_failure(item: dict, result: DownloadResult, gave_up_titles: set[str], *, now: datetime | None = None) -> FailureDecision:
-    """Pure decision logic for failed downloads. Checks, in order:
-    1. age > MAX_QUEUE_AGE            → fail ("Timed out in queue")
-    2. retries >= MAX_QUEUE_RETRIES    → fail ("Max retries exceeded")
-    3. no still-trying failures        → done with partial result (gave-up count)
-    4. otherwise                       → requeue with exponential backoff delay
+@dataclass(frozen=True)
+class FailureDecision:
+    """Outcome for a failed item: action + detail (error, count, or delay)."""
+
+    action: str  # "fail" | "done" | "requeue"
+    detail: object = None
+
+
+def decide_failure(item: dict, result: dict, gave_up_titles: set[str], *, now: datetime | None = None) -> FailureDecision:
+    """Pure decision logic for failed downloads (works on a DownloadResult dict
+    from the subprocess's `result` event). Checks, in order:
+    1. age > MAX_QUEUE_AGE            -> fail ("Timed out in queue")
+    2. retries >= MAX_QUEUE_RETRIES    -> fail ("Max retries exceeded")
+    3. no still-trying failures        -> done with partial result (gave-up count)
+    4. otherwise                       -> requeue with exponential backoff delay
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -131,7 +75,7 @@ def decide_failure(item: dict, result: DownloadResult, gave_up_titles: set[str],
         return FailureDecision("fail", reason)
 
     still_trying = [
-        title for _track_id, title, _err in result.failed_tracks
+        title for _tid, title, _err in result.get("failed_tracks", [])
         if title not in gave_up_titles
     ]
     if not still_trying:
@@ -140,22 +84,22 @@ def decide_failure(item: dict, result: DownloadResult, gave_up_titles: set[str],
     return FailureDecision("requeue", backoff_delay(item.get("retries", 0)))
 
 
-def _result_summary(result: DownloadResult) -> str:
+def _result_summary(result: dict) -> str:
     parts = []
-    if result.ok:
-        parts.append(f"✅ {result.ok} ok")
-    if result.skipped:
-        parts.append(f"⏭ {result.skipped} skipped")
-    if result.failed:
-        parts.append(f"❌ {result.failed} failed")
-    if result.providers:
-        prov = " · ".join(f"{k} {v}" for k, v in sorted(result.providers.items()))
+    if result.get("ok"):
+        parts.append(f"✅ {result['ok']} ok")
+    if result.get("skipped"):
+        parts.append(f"⏭ {result['skipped']} skipped")
+    if result.get("failed"):
+        parts.append(f"❌ {result['failed']} failed")
+    providers = result.get("providers") or {}
+    if providers:
+        prov = " · ".join(f"{k} {v}" for k, v in sorted(providers.items()))
         parts.append(f"🧪 {prov}")
     return " | ".join(parts)
 
 
-def _done_message(display: str, result: DownloadResult, given_up: int) -> str:
-    """Completion message shared by the clean-success and all-gave-up paths."""
+def _done_message(display: str, result: dict, given_up: int) -> str:
     parts = [_result_summary(result)]
     if given_up:
         parts.append(f"❌ {given_up} given up")
@@ -169,7 +113,7 @@ class Worker:
     def __init__(
         self,
         queue: QueueManager,
-        bot: Bot,
+        notify,
         chat_id: int,
         cfg: dict,
         logger: logging.Logger,
@@ -177,7 +121,7 @@ class Worker:
         max_parallel: int = MAX_PARALLEL_JOBS,
     ):
         self._queue = queue
-        self._bot = bot
+        self._notify = notify
         self._chat_id = chat_id
         self._cfg = cfg
         self._logger = logger
@@ -208,8 +152,6 @@ class Worker:
                         self._poll = max(5, min(300, remaining))
                     else:
                         self._poll = min(300, self._poll * 2)
-                        if self._poll == 300:
-                            await asyncio.to_thread(_trim_rss)
             except Exception as e:
                 self._logger.error("Worker error: %s", e)
                 self._poll = min(300, self._poll * 2)
@@ -241,7 +183,6 @@ class Worker:
             self._tasks.discard(task)
             self._sem.release()
             self._wake_event.set()
-            await asyncio.to_thread(_trim_rss)
 
     async def shutdown(self):
         if self._shutdown:
@@ -252,15 +193,6 @@ class Worker:
             t.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
-
-    async def _notify(self, text: str, chat_id: int | None = None) -> None:
-        """Send a message to the item's owner (or the default chat). A failed
-        send must never affect the item's DB status or crash the worker —
-        log and move on."""
-        try:
-            await self._bot.send_message(chat_id=chat_id or self._chat_id, text=text, parse_mode="HTML")
-        except Exception as e:
-            self._logger.warning("Failed to send notification: %s", e)
 
     async def _item_cfg(self, item: dict) -> dict:
         """Per-item cfg: output_dir resolved to the user's folder and quality
@@ -279,16 +211,21 @@ class Worker:
 
     @staticmethod
     def _item_chat(item: dict) -> int | None:
-        """Where to notify about this item: the user who queued it, or the
-        default chat for legacy items."""
         return item.get("user") or None
+
+    async def _safe_notify(self, text: str, chat: int | None) -> None:
+        """Notify the item's owner (or default chat). A failed send must never
+        affect the item's DB status or crash the worker — log and move on."""
+        try:
+            await self._notify(text, chat or self._chat_id)
+        except Exception as e:
+            self._logger.warning("Failed to send notification: %s", e)
 
     async def _process(self, item: dict):
         self._logger.info("Processing #%d: %s", item["id"], item["query"])
         chat = self._item_chat(item)
         try:
             cfg = await self._item_cfg(item)
-            url, display = await self._resolve(item, cfg)
             skip_titles = await asyncio.to_thread(
                 self._queue.get_give_up_titles, item["id"], MAX_TRACK_RETRIES,
             )
@@ -298,128 +235,132 @@ class Worker:
                     item["id"], len(skip_titles),
                 )
 
-            result = await self._run_download(item, url, display, skip_titles, cfg, chat)
-            if result is None:
-                return  # timed out — requeued by _handle_timeout
-
-            if result.failed == 0:
+            outcome = await self._run_job(item, skip_titles, cfg, chat)
+            if outcome is None:
+                return  # timed out / stalled — handled by _run_job
+            result, display = outcome
+            if result.get("failed") == 0:
                 await self._handle_no_failures(item, display, result, chat)
             else:
                 await self._handle_failure(item, display, result, chat)
 
         except Exception as e:
-            self._logger.error("Failed #%d: %s\n%s", item["id"], e, traceback.format_exc())
+            self._logger.exception("Failed #%d: %s", item["id"], e)
             await asyncio.to_thread(self._queue.mark_failed, item["id"], str(e))
-            await self._notify(
+            await self._safe_notify(
                 f"❌ <b>Failed #{item['id']}</b>\n  <code>{esc(item['query'])}</code>\n  Internal error — check logs",
                 chat,
             )
 
-    async def _run_download(
-        self,
-        item: dict,
-        url: str,
-        display: str,
-        skip_titles: set[str],
-        cfg: dict,
-        chat: int | None,
-    ) -> DownloadResult | None:
-        """Run the download with callbacks wired to the queue and a whole-job
-        timeout plus a no-progress stall watchdog. Returns the result, or None
-        when the job timed out / stalled (already marked failed — the leaked
-        download thread keeps running in the background and pre-check picks up
-        whatever it writes on a future run)."""
+    async def _run_job(self, item: dict, skip_titles: set[str], cfg: dict, chat: int | None):
+        """Spawn download_job.py, stream its JSON-lines, kill on stall/timeout.
 
-        stall = {"last": time.monotonic()}
+        Returns (result_dict, display) or None when killed. Killing the child
+        reclaims its RSS — the leaked-straggler-thread problem is gone by
+        construction (no thread survives a dead process)."""
+        spec = {
+            "id": item["id"],
+            "type": item["input_type"],
+            "cfg": cfg,
+            "skip_titles": sorted(skip_titles),
+            "want_m3u8": item["input_type"] == "link",
+            "log_path": self._logger.handlers[0].baseFilename if self._logger.handlers else None,
+        }
+        if item["input_type"] == "search":
+            spec["query"] = item["query"]
+        else:
+            spec["url"] = item["query"]
 
-        def progress_cb(done, total, title, provider=None):
-            stall["last"] = time.monotonic()
-            status = f"{done}/{total} · Now: {title}"
-            if provider:
-                status += f" · via {provider}"
-            self._queue.set_progress(item["id"], status)
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, JOB_SCRIPT,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
 
-        def failure_cb(title, err):
-            self._queue.log_failed_track(item["id"], title, err)
+        proc.stdin.write((json.dumps(spec) + "\n").encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
 
         timeout = cfg.get("max_download_timeout", MAX_DOWNLOAD_TIMEOUT)
         stall_timeout = cfg.get("stall_timeout", STALL_TIMEOUT)
-        task = asyncio.create_task(asyncio.to_thread(
-            _run_url_sync, url, cfg, self._logger, skip_titles, progress_cb, failure_cb,
-        ))
+        deadline = time.monotonic() + timeout
+        last_event = time.monotonic()
+        result = None
+        display = item["query"]
+
         try:
             while True:
-                wait = min(timeout, stall_timeout)
+                wait = min(stall_timeout, max(0.0, deadline - time.monotonic()))
+                if wait <= 0:
+                    return await self._kill_timeout(item, display, chat, "timeout")
                 try:
-                    return await asyncio.wait_for(asyncio.shield(task), timeout=wait)
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=wait)
                 except asyncio.TimeoutError:
-                    if time.monotonic() - stall["last"] >= stall_timeout:
-                        await self._handle_timeout(item, display, chat, reason="stall")
-                        return None
-                    timeout -= wait
-                    if timeout <= 0:
-                        await self._handle_timeout(item, display, chat, reason="timeout")
-                        return None
+                    if time.monotonic() - last_event >= stall_timeout:
+                        return await self._kill_timeout(item, display, chat, "stall")
+                    return await self._kill_timeout(item, display, chat, "timeout")
+                if not line:
+                    break  # EOF
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    self._logger.warning("#%d: bad line from subprocess: %r", item["id"], line)
+                    continue
+                last_event = time.monotonic()
+                kind = event.get("event")
+                if kind == "progress":
+                    p = event
+                    status = f"{p.get('done', 0)}/{p.get('total', 0)} · Now: {p.get('title', '')}"
+                    if p.get("provider"):
+                        status += f" · via {p['provider']}"
+                    await asyncio.to_thread(self._queue.set_progress, item["id"], status)
+                elif kind == "failure":
+                    await asyncio.to_thread(
+                        self._queue.log_failed_track, item["id"], event.get("title", ""), event.get("error"),
+                    )
+                elif kind == "resolved":
+                    display = event.get("display") or display
+                elif kind == "result":
+                    result = event.get("result") or {}
+            await proc.wait()
         except asyncio.CancelledError:
+            proc.kill()
             raise
 
-    async def _handle_no_failures(self, item: dict, display: str, result: DownloadResult, chat: int | None):
-        await self._mark_done_and_notify(
-            item, display, result, len(result.gave_up_tracks), chat,
-        )
+        if result is None:
+            await asyncio.to_thread(self._queue.mark_failed, item["id"], "subprocess crashed")
+            await self._safe_notify(
+                f"❌ <b>{esc(display)}</b>\n  💥 Download subprocess crashed — will retry",
+                chat,
+            )
+            return None
+        return result, display
 
-    async def _handle_timeout(self, item: dict, display: str, chat: int | None, reason: str = "timeout"):
-        """A whole-job timeout or stall means the download thread is still
-        running in the background (wait_for can't cancel a thread).  Mark the
-        item failed so the queue advances to the next item; the leaked thread
-        keeps downloading and pre-check will pick up whatever it writes on a
-        future run.  Never requeues — a stuck item must not hog the queue."""
-        if reason == "stall":
-            detail = "stalled (no progress for a long time)"
-        else:
-            detail = "download timed out"
+    async def _kill_timeout(self, item: dict, display: str, chat: int | None, reason: str):
+        self._logger.warning("#%d: %s — killing subprocess", item["id"], reason)
+        detail = "stalled (no progress for a long time)" if reason == "stall" else "download timed out"
         await asyncio.to_thread(self._queue.mark_failed, item["id"], detail)
-        await self._notify(
+        await self._safe_notify(
             f"❌ <b>{esc(display)}</b>\n  ⏰ {detail} — failed, next item in queue",
             chat,
         )
+        return None
 
-    async def _mark_done_and_notify(self, item: dict, display: str, result: DownloadResult, given_up: int, chat: int | None):
+    async def _handle_no_failures(self, item: dict, display: str, result: dict, chat: int | None):
+        await self._mark_done_and_notify(item, display, result, len(result.get("gave_up_tracks", [])), chat)
+
+    async def _mark_done_and_notify(self, item: dict, display: str, result: dict, given_up: int, chat: int | None):
         await asyncio.to_thread(
             self._queue.mark_done,
             item["id"],
-            result.ok,
-            result.skipped,
+            result.get("ok", 0),
+            result.get("skipped", 0),
             given_up,
         )
-        await self._notify(_done_message(display, result, given_up), chat)
-        await self._auto_build_m3u8(item, await self._item_cfg(item), chat)
+        await self._safe_notify(_done_message(display, result, given_up), chat)
 
-    async def _resolve(self, item: dict, cfg: dict) -> tuple[str, str]:
-        if item["input_type"] == "search":
-            from SpotiFLAC import AsyncSpotiFLAC
-            async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
-                url, display, _kind = await resolve_search(client, item["query"])
-            self._logger.info("Resolved #%d: %s → %s", item["id"], item["query"], display)
-            return url, display
-        return item["query"], item["query"]
-
-    async def _auto_build_m3u8(self, item: dict, cfg: dict, chat: int | None):
-        if item["input_type"] != "link":
-            return
-        parsed = parse_spotify_url(item["query"])
-        if parsed.get("type") != "playlist":
-            return
-        try:
-            result = await build_m3u8(item["query"], cfg=cfg)
-            msg = f"📋 <b>Playlist: {esc(result['playlist_name'])}</b>\n  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk"
-            if result.get("cover_path"):
-                msg += "\n  🖼️ Cover"
-            await self._notify(msg, chat)
-        except Exception as e:
-            self._logger.warning("Auto m3u8 failed for %s: %s", item["query"], e)
-
-    async def _handle_failure(self, item: dict, display: str, result: DownloadResult, chat: int | None):
+    async def _handle_failure(self, item: dict, display: str, result: dict, chat: int | None):
         gave_up = await asyncio.to_thread(
             self._queue.get_give_up_titles, item["id"], MAX_TRACK_RETRIES,
         )
@@ -428,12 +369,11 @@ class Worker:
 
         if decision.action == "fail":
             await asyncio.to_thread(self._queue.mark_failed, item["id"], decision.detail)
-            await self._auto_build_m3u8(item, await self._item_cfg(item), chat)
             if decision.detail.startswith("Timed out"):
                 msg = f"❌ <b>{esc(display)}</b>\n  ⏰ In queue over 24h — gave up"
             else:
                 msg = f"❌ <b>{esc(display)}</b>\n  ❌ Failed after {MAX_QUEUE_RETRIES} retries"
-            await self._notify(msg, chat)
+            await self._safe_notify(msg, chat)
             return
 
         if decision.action == "done":
@@ -447,5 +387,4 @@ class Worker:
             f"🔄 <b>{esc(display)}</b>\n  {_result_summary(result)}\n"
             f"  🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES}, {when})"
         )
-        await self._notify(msg, chat)
-
+        await self._safe_notify(msg, chat)
