@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""Telegram bot for queueing Spotify downloads."""
+"""Telegram bot for queueing Spotify downloads (stdlib-only parent)."""
 
 import asyncio
 import functools
+import json
 import logging
 import os
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from config import JOB_SCRIPT, STALL_TIMEOUT, setup_logger, load_config, esc
+from library import QUALITY_CHOICES, user_cfg, user_folder_name
+from queue_manager import QueueManager
+from resolver import parse_input, format_help
+from telegram_client import TelegramClient
+from worker import Worker
 
 
 def _load_env(path: str | Path):
@@ -26,18 +34,7 @@ def _load_env(path: str | Path):
 
 _load_env(Path(__file__).parent / ".env")
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-
-from config import setup_logger, load_config, esc
-from library import QUALITY_CHOICES, user_cfg, user_folder_name
-from m3u8 import build_m3u8
-from queue_manager import QueueManager
-from resolver import parse_input, format_help
-from worker import Worker
-
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-ALLOWED_USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
 
 
 def _parse_allowed_user_ids() -> set[int]:
@@ -64,15 +61,7 @@ QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", str(Path(__file__).parent / "que
 
 
 class SingleInstanceLock:
-    """flock-based single-instance lock with standby + takeover.
-
-    The lock file sits next to the queue DB on the shared volume, so every
-    instance (container or bare-metal) contends on the same file.  flock is
-    advisory and released automatically when the holder's process exits, so
-    there is never a stale lock.  A standby instance polls until the holder
-    dies, then takes over.  Only the lock holder polls Telegram getUpdates,
-    so two instances can never run the bot at the same time.
-    """
+    """flock-based single-instance lock with standby + takeover."""
 
     def __init__(self, lock_path: Path, logger: logging.Logger, poll: float = 30.0):
         self._lock_path = lock_path
@@ -111,52 +100,21 @@ class SingleInstanceLock:
             self._fd = None
 
 
-def _is_allowed(update: Update) -> bool:
-    user = update.effective_user
-    return bool(user) and user.id in ALLOWED_USER_IDS
+def _user_folder(user: dict) -> str:
+    return user_folder_name(user.get("username"), fallback=user.get("first_name") or "user")
 
 
-def _user_folder(user) -> str:
-    """Folder name for a Telegram user, from username or first name."""
-    return user_folder_name(user.username, fallback=user.first_name or "user")
-
-
-def _get_or_create_user(qm: QueueManager, user, default_quality: str) -> dict:
-    """Return the user's row, creating it (with a sticky folder) on first
-    interaction. New users default to the config's download quality."""
-    row = qm.get_user(user.id)
+def _get_or_create_user(qm: QueueManager, user: dict, default_quality: str) -> dict:
+    row = qm.get_user(user["id"])
     if row:
         return row
-    qm.upsert_user(user.id, user.username, _user_folder(user), default_quality)
-    return qm.get_user(user.id)
+    qm.upsert_user(user["id"], user.get("username"), _user_folder(user), default_quality)
+    return qm.get_user(user["id"])
 
 
-def _user_cfg(qm: QueueManager, cfg: dict, user) -> dict:
-    """The calling user's cfg: output_dir resolved to their subfolder."""
+def _user_cfg(qm: QueueManager, cfg: dict, user: dict) -> dict:
     row = _get_or_create_user(qm, user, cfg["quality"])
     return user_cfg(cfg, row["folder"])
-
-
-def require_auth(func):
-    @functools.wraps(func)
-    async def wrapper(update: Update, context):
-        if not _is_allowed(update):
-            return
-        return await func(update, context)
-    return wrapper
-
-
-@require_auth
-async def start(update: Update, _context) -> None:
-    await update.message.reply_html(
-        "🎵 <b>SpotiLoop Bot</b>\n"
-        "  Turns Spotify links into FLAC files.\n\n" + format_help()
-    )
-
-
-@require_auth
-async def help_cmd(update: Update, _context) -> None:
-    await update.message.reply_html(format_help())
 
 
 def _format_duration(seconds: float) -> str:
@@ -170,297 +128,335 @@ def _format_duration(seconds: float) -> str:
     return f"{secs}s"
 
 
-@require_auth
-async def status_cmd(update: Update, context) -> None:
-    qm: QueueManager = context.application.bot_data["queue_manager"]
-    s = await asyncio.to_thread(qm.get_status)
-    history = await asyncio.to_thread(qm.get_history, 5)
-    running = await asyncio.to_thread(qm.get_running)
-    user_names = {
-        r["telegram_user_id"]: (r.get("username") or r["folder"])
-        for r in await asyncio.to_thread(qm.get_users)
-    }
+class Bot:
+    def __init__(self, token: str, qm: QueueManager, cfg: dict, logger: logging.Logger):
+        self._client = TelegramClient(token, logger)
+        self._qm = qm
+        self._cfg = cfg
+        self._logger = logger
+        self._wake_event = asyncio.Event()
+        self._worker: Worker | None = None
+        self._offset: int | None = None
+        # Default notification chat: the first allowed user (single-owner use).
+        self._chat_id = next(iter(sorted(ALLOWED_USER_IDS)), None)
 
-    def _who(item) -> str:
-        uid = item.get("user")
-        name = user_names.get(uid) if uid else None
-        return f" · {esc(name)}" if name else ""
+    def _is_allowed(self, user: dict) -> bool:
+        return bool(user) and user.get("id") in ALLOWED_USER_IDS
 
-    lines = [
-        f"📊 <b>Queue Status</b>",
-        f"  ⏳ Queued: {s['queued']}",
-        f"  🔄 Running: {s['running']}",
-        f"  ✅ Done: {s['done']}",
-        f"  ❌ Failed: {s['failed']}",
-    ]
-
-    if running:
-        now = datetime.now(timezone.utc)
-        lines.append("")
-        lines.append("<b>Running:</b>")
-        for r in running:
-            started = r.get("started_at")
-            elapsed = ""
-            if started:
-                try:
-                    elapsed = " · " + _format_duration(
-                        (now - datetime.fromisoformat(started)).total_seconds()
-                    )
-                except (ValueError, TypeError):
-                    pass
-            detail = r.get("progress") or "downloading\u2026"
-            lines.append(
-                f"  #{r['id']} 🔄 <b>{esc(r['query'][:60])}</b>{_who(r)}\n"
-                f"    {esc(detail)}{elapsed}"
+    async def _handle_command(self, chat_id: int, user: dict, command: str, args: str) -> None:
+        if command == "start":
+            await self._client.send_message(
+                chat_id,
+                "🎵 <b>SpotiLoop Bot</b>\n  Turns Spotify links into FLAC files.\n\n" + format_help(),
             )
-
-    done_ids = {r["id"] for r in running}
-    if history:
-        lines.append("")
-        lines.append("<b>Recent:</b>")
-        for h in history:
-            if h["id"] in done_ids:
-                continue
-            icon = {"done": "✅", "failed": "❌", "running": "🔄", "queued": "⏳"}.get(
-                h["status"], "❓"
+        elif command == "help":
+            await self._client.send_message(chat_id, format_help())
+        elif command == "status":
+            await self._status(chat_id)
+        elif command == "quality":
+            await self._quality(chat_id, user, args)
+        elif command == "purge":
+            count = await asyncio.to_thread(self._qm.purge_all)
+            await self._client.send_message(
+                chat_id, f"🗑️ <b>Purged {count} item{'s' if count != 1 else ''}</b>"
             )
-            label = esc(h["query"][:60]) + _who(h)
-            lines.append(f"  #{h['id']} {icon} <b>{label}</b>")
-    await update.message.reply_html("\n".join(lines))
+        elif command == "mkplaylist":
+            await self._mkplaylist(chat_id, user, args)
+        elif command == "fixmetadata":
+            await self._fixmetadata(chat_id, user, args)
 
+    async def _status(self, chat_id: int) -> None:
+        s = await asyncio.to_thread(self._qm.get_status)
+        history = await asyncio.to_thread(self._qm.get_history, 5)
+        running = await asyncio.to_thread(self._qm.get_running)
+        user_names = {
+            r["telegram_user_id"]: (r.get("username") or r["folder"])
+            for r in await asyncio.to_thread(self._qm.get_users)
+        }
 
-@require_auth
-async def mkplaylist_cmd(update: Update, context) -> None:
-    if not context.args:
-        await update.message.reply_html(
-            "📋 <b>Usage:</b> /mkplaylist &lt;playlist_url&gt; [playlist_name]\n"
-            "  Builds a .m3u8 from tracks already on disk (no downloads)."
-        )
-        return
-    url = context.args[0]
-    name = " ".join(context.args[1:]) if len(context.args) > 1 else None
+        def _who(item) -> str:
+            uid = item.get("user")
+            name = user_names.get(uid) if uid else None
+            return f" · {esc(name)}" if name else ""
 
-    qm: QueueManager = context.application.bot_data["queue_manager"]
-    cfg = context.application.bot_data.get("cfg", {})
-    ucfg = _user_cfg(qm, cfg, update.effective_user)
+        lines = [
+            "📊 <b>Queue Status</b>",
+            f"  ⏳ Queued: {s['queued']}",
+            f"  🔄 Running: {s['running']}",
+            f"  ✅ Done: {s['done']}",
+            f"  ❌ Failed: {s['failed']}",
+        ]
 
-    msg = await update.message.reply_html("⏳ <b>Building playlist\u2026</b>")
-    try:
-        result = await build_m3u8(url, name, cfg=ucfg)
-        missing = result.get("missing_count", 0)
-        parts = [f"✅ <b>Playlist: {esc(result['playlist_name'])}</b>",
-                 f"  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk"]
-        if missing:
-            parts.append(f"  ❌ {missing} missing \u2014 see <code>{esc(result['missing_log_path'])}</code>")
-        if result.get("cover_path"):
-            parts.append("  🖼️ Cover saved")
-        parts.append(f"  📄 <code>{esc(result['path'])}</code>")
-        await msg.edit_text("\n".join(parts), parse_mode="HTML")
-    except Exception as e:
-        await msg.edit_text(f"❌ <b>Error:</b> <code>{esc(e)}</code>", parse_mode="HTML")
+        if running:
+            now = datetime.now(timezone.utc)
+            lines.append("")
+            lines.append("<b>Running:</b>")
+            for r in running:
+                started = r.get("started_at")
+                elapsed = ""
+                if started:
+                    try:
+                        elapsed = " · " + _format_duration(
+                            (now - datetime.fromisoformat(started)).total_seconds()
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                detail = r.get("progress") or "downloading…"
+                lines.append(
+                    f"  #{r['id']} 🔄 <b>{esc(r['query'][:60])}</b>{_who(r)}\n"
+                    f"    {esc(detail)}{elapsed}"
+                )
 
+        done_ids = {r["id"] for r in running}
+        if history:
+            lines.append("")
+            lines.append("<b>Recent:</b>")
+            for h in history:
+                if h["id"] in done_ids:
+                    continue
+                icon = {"done": "✅", "failed": "❌", "running": "🔄", "queued": "⏳"}.get(
+                    h["status"], "❓"
+                )
+                label = esc(h["query"][:60]) + _who(h)
+                lines.append(f"  #{h['id']} {icon} <b>{label}</b>")
+        await self._client.send_message(chat_id, "\n".join(lines))
 
-@require_auth
-async def purge_cmd(update: Update, context) -> None:
-    qm: QueueManager = context.application.bot_data["queue_manager"]
-    count = await asyncio.to_thread(qm.purge_all)
-    await update.message.reply_html(f"🗑️ <b>Purged {count} item{'s' if count != 1 else ''}</b>")
-
-
-@require_auth
-async def fixmetadata_cmd(update: Update, context) -> None:
-    qm: QueueManager = context.application.bot_data["queue_manager"]
-    cfg = context.application.bot_data["cfg"]
-    ucfg = _user_cfg(qm, cfg, update.effective_user)
-    root = Path(ucfg["output_dir"])
-
-    lyrics = False
-    if context.args and context.args[0].lower() == "--lyrics":
-        lyrics = True
-        context.args = context.args[1:]
-
-    if not context.args:
-        folder = root
-    else:
-        folder = Path(" ".join(context.args)).expanduser()
-        if not folder.is_absolute():
-            folder = root / folder
-
-        if not folder.is_dir():
-            await update.message.reply_html(f"❌ Not a folder: <code>{esc(folder)}</code>")
+    async def _quality(self, chat_id: int, user: dict, args: str) -> None:
+        row = _get_or_create_user(self._qm, user, self._cfg.get("quality", "LOSSLESS"))
+        if not args:
+            current = row.get("quality", "LOSSLESS")
+            lines = [
+                f"🎚️ <b>Quality</b> — current: <code>{esc(current)}</code>",
+                "  Available:",
+            ]
+            lines += [f"  {'✅' if q == current else '•'} <code>{esc(q)}</code>" for q in QUALITY_CHOICES]
+            lines.append("  Send /quality <value> to change.")
+            await self._client.send_message(chat_id, "\n".join(lines))
             return
 
-    from scripts.fix_metadata import fix_library
+        value = args.strip().upper()
+        if value not in QUALITY_CHOICES:
+            await self._client.send_message(
+                chat_id,
+                f"❌ <b>Unknown quality</b> <code>{esc(value)}</code>\n\n"
+                f"  Available: {', '.join(f'<code>{esc(q)}</code>' for q in QUALITY_CHOICES)}",
+            )
+            return
 
-    mode = "fetch lyrics" if lyrics else "keep lyrics as-is"
-    msg = await update.message.reply_html(
-        f"⏳ <b>Fix metadata</b>\n  Scanning <code>{esc(folder)}</code>\u2026\n"
-        f"  🎤 {mode}"
-    )
-
-    async def progress(current, total, text):
-        pct = f" \u00b7 {current * 100 // total}%" if total else ""
-        await msg.edit_text(
-            f"⏳ <b>Fix metadata</b> {current}/{total}{pct}\n"
-            f"  <code>{esc(text[:200])}</code>",
-            parse_mode="HTML",
+        await asyncio.to_thread(self._qm.set_user_quality, user["id"], value)
+        await self._client.send_message(
+            chat_id,
+            f"✅ <b>Quality set to <code>{esc(value)}</code></b>\n  Applies to new downloads only.",
         )
 
-    try:
-        result = await fix_library(folder, apply=True, progress=progress, lyrics=lyrics)
+    async def _run_command_job(self, chat_id: int, spec: dict) -> tuple[dict | None, int | None]:
+        """Spawn download_job.py for a one-shot command (m3u8 / fix_metadata),
+        stream its JSON-lines into a single progress-then-final Telegram message.
+
+        Returns (result_dict, message_id) so the caller can edit the final
+        message; (None, message_id) on timeout/crash/error — the message is
+        already edited to show the failure."""
+        header = spec.get("header", "⏳ Running…")
+        msg = await self._client.send_message(chat_id, header)
+        message_id = msg.get("message_id") if msg else None
+
+        def _edit(text: str) -> None:
+            if message_id:
+                self._client.edit_message(chat_id, message_id, text)
+
+        spec = {**spec, "log_path": self._logger.handlers[0].baseFilename if self._logger.handlers else None}
+        result = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, JOB_SCRIPT,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            proc.stdin.write((json.dumps(spec) + "\n").encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            while True:
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=STALL_TIMEOUT)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    _edit("❌ <b>Command stalled — killed after no progress for a long time</b>")
+                    return None, message_id
+                if not line:
+                    break
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                kind = event.get("event")
+                if kind == "progress":
+                    p = event
+                    pct = f" \u00b7 {p.get('done', 0) * 100 // max(1, p.get('total', 1))}%" if p.get("total") else ""
+                    _edit(f"⏳ {header}\n  {p.get('done', 0)}/{p.get('total', 0)}{pct}\n  <code>{esc((p.get('title') or '')[:200])}</code>")
+                elif kind == "result":
+                    result = event.get("result") or {}
+            await proc.wait()
+        except Exception as e:
+            self._logger.exception("Command job error: %s", e)
+            _edit(f"❌ <b>Command error:</b> <code>{esc(e)}</code>")
+            return None, message_id
+
+        if result is None:
+            _edit("❌ <b>Command failed — check logs</b>")
+        return result, message_id
+
+    async def _mkplaylist(self, chat_id: int, user: dict, args: str) -> None:
+        parts = args.split()
+        if not parts:
+            await self._client.send_message(
+                chat_id,
+                "📋 <b>Usage:</b> /mkplaylist &lt;playlist_url&gt; [playlist_name]\n"
+                "  Builds a .m3u8 from tracks already on disk (no downloads).",
+            )
+            return
+        url = parts[0]
+        name = " ".join(parts[1:]) if len(parts) > 1 else None
+
+        ucfg = _user_cfg(self._qm, self._cfg, user)
+        result, message_id = await self._run_command_job(chat_id, {
+            "type": "m3u8", "url": url, "name": name, "cfg": ucfg,
+            "header": "📋 <b>Building playlist\u2026</b>",
+        })
+        if result is None:
+            return
+        missing = result.get("missing_count", 0)
         lines = [
-            f"✅ <b>Fix metadata done</b>",
+            f"✅ <b>Playlist: {esc(result['playlist_name'])}</b>",
+            f"  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk",
+        ]
+        if missing:
+            lines.append(f"  ❌ {missing} missing \u2014 see <code>{esc(result['missing_log_path'])}</code>")
+        if result.get("cover_path"):
+            lines.append("  🖼️ Cover saved")
+        lines.append(f"  📄 <code>{esc(result['path'])}</code>")
+        if message_id:
+            await self._client.edit_message(chat_id, message_id, "\n".join(lines))
+
+    async def _fixmetadata(self, chat_id: int, user: dict, args: str) -> None:
+        ucfg = _user_cfg(self._qm, self._cfg, user)
+        root = Path(ucfg["output_dir"])
+
+        lyrics = False
+        parts = args.split()
+        if parts and parts[0].lower() == "--lyrics":
+            lyrics = True
+            parts = parts[1:]
+
+        if not parts:
+            folder = root
+        else:
+            folder = Path(" ".join(parts)).expanduser()
+            if not folder.is_absolute():
+                folder = root / folder
+            if not folder.is_dir():
+                await self._client.send_message(
+                    chat_id, f"❌ Not a folder: <code>{esc(folder)}</code>"
+                )
+                return
+
+        mode = "fetch lyrics" if lyrics else "keep lyrics as-is"
+        result, message_id = await self._run_command_job(chat_id, {
+            "type": "fix_metadata", "folder": str(folder), "lyrics": lyrics, "cfg": ucfg,
+            "header": f"🔧 <b>Fix metadata</b>\n  Scanning <code>{esc(folder)}</code>\u2026\n  🎤 {mode}",
+        })
+        if result is None:
+            return
+        lines = [
+            "✅ <b>Fix metadata done</b>",
             f"  Folders: {result['folders']}",
             f"  Re-tagged: {result['fixed']}",
             f"  Moved: {result['moved']}",
             f"  Failed: {result['failed']}",
             f"  🎤 Lyrics: {'fetched' if lyrics else 'kept as-is'}",
         ]
-        if result["failed_files"]:
+        if result.get("failed_files"):
             lines.append("  ❌ <code>" + ", ".join(esc(f) for f in result["failed_files"]) + "</code>")
-        if result["moved_files"]:
+        if result.get("moved_files"):
             lines.append("  📦 Moved to their album folder:")
             for f in result["moved_files"]:
-                lines.append(f"  <code>{esc(Path(f).name)} → {esc(Path(f).parent.name)}/</code>")
-        await msg.edit_text("\n".join(lines), parse_mode="HTML")
-    except Exception as e:
-        await msg.edit_text(f"❌ <b>Fix metadata error:</b> <code>{esc(e)}</code>", parse_mode="HTML")
+                lines.append(f"  <code>{esc(Path(f).name)} \u2192 {esc(Path(f).parent.name)}/</code>")
+        if message_id:
+            await self._client.edit_message(chat_id, message_id, "\n".join(lines))
 
+    async def _handle_text(self, chat_id: int, user: dict, text: str) -> None:
+        input_type, value = parse_input(text)
+        if input_type == "invalid":
+            await self._client.send_message(chat_id, "❓ Didn't understand that.\n\n" + format_help())
+            return
 
-@require_auth
-async def quality_cmd(update: Update, context) -> None:
-    qm: QueueManager = context.application.bot_data["queue_manager"]
-    user = update.effective_user
-    row = _get_or_create_user(qm, user, context.application.bot_data.get("cfg", {}).get("quality", "LOSSLESS"))
-
-    if not context.args:
-        current = row.get("quality", "LOSSLESS")
-        lines = [
-            f"🎚️ <b>Quality</b> \u2014 current: <code>{esc(current)}</code>",
-            "  Available:",
-        ]
-        lines += [f"  {'✅' if q == current else '\u2022'} <code>{esc(q)}</code>" for q in QUALITY_CHOICES]
-        lines.append("  Send /quality &lt;value&gt; to change.")
-        await update.message.reply_html("\n".join(lines))
-        return
-
-    value = " ".join(context.args).strip().upper()
-    if value not in QUALITY_CHOICES:
-        await update.message.reply_html(
-            f"❌ <b>Unknown quality</b> <code>{esc(value)}</code>\n\n"
-            f"  Available: {', '.join(f'<code>{esc(q)}</code>' for q in QUALITY_CHOICES)}"
+        _get_or_create_user(self._qm, user, self._cfg.get("quality", "LOSSLESS"))
+        item_id, is_new = await asyncio.to_thread(
+            self._qm.enqueue_unique, input_type, value, user["id"],
         )
-        return
+        if not is_new:
+            await self._client.send_message(
+                chat_id,
+                f"⚠️ <b>Already queued as #{item_id}</b>\n  <code>{esc(value[:80])}</code>",
+            )
+            return
 
-    await asyncio.to_thread(qm.set_user_quality, user.id, value)
-    await update.message.reply_html(
-        f"✅ <b>Quality set to <code>{esc(value)}</code></b>\n"
-        f"  Applies to new downloads only."
-    )
+        self._wake_event.set()
+        self._logger.info("Enqueued #%d: %s (%s)", item_id, value, input_type)
 
-
-@require_auth
-async def handle_message(update: Update, context) -> None:
-    text = update.message.text.strip()
-    qm: QueueManager = context.application.bot_data["queue_manager"]
-    logger: logging.Logger = context.application.bot_data["logger"]
-
-    input_type, value = parse_input(text)
-
-    if input_type == "invalid":
-        await update.message.reply_html(
-            "❓ Didn't understand that.\n\n" + format_help()
+        s = await asyncio.to_thread(self._qm.get_status)
+        pos = s["queued"] + s["running"]
+        await self._client.send_message(
+            chat_id,
+            f"📥 <b>Queued #{item_id}</b>\n  Position: {pos}\n  <code>{esc(value[:80])}</code>",
         )
-        return
 
-    user = update.effective_user
-    cfg = context.application.bot_data.get("cfg", {})
-    _get_or_create_user(qm, user, cfg.get("quality", "LOSSLESS"))
+    async def _handle_update(self, update: dict) -> None:
+        message = update.get("message")
+        if not message:
+            return
+        chat_id = message["chat"]["id"]
+        user = message.get("from") or {}
+        if not self._is_allowed(user):
+            return
+        text = (message.get("text") or "").strip()
+        if not text:
+            return
+        if text.startswith("/"):
+            parts = text[1:].split(maxsplit=1)
+            command = parts[0].split("@")[0].lower()
+            args = parts[1] if len(parts) > 1 else ""
+            await self._handle_command(chat_id, user, command, args)
+        else:
+            await self._handle_text(chat_id, user, text)
 
-    item_id, is_new = await asyncio.to_thread(
-        qm.enqueue_unique, input_type, value, user.id,
-    )
-    if not is_new:
-        await update.message.reply_html(
-            f"⚠️ <b>Already queued as #{item_id}</b>\n"
-            f"  <code>{esc(value[:80])}</code>"
-        )
-        return
+    async def _notify(self, text: str, chat_id: int | None = None) -> None:
+        await self._client.send_message(chat_id or self._chat_id, text)
 
-    context.application.bot_data["wake_event"].set()
-    logger.info("Enqueued #%d: %s (%s)", item_id, value, input_type)
-
-    s = await asyncio.to_thread(qm.get_status)
-    pos = s["queued"] + s["running"]
-    await update.message.reply_html(
-        f"📥 <b>Queued #{item_id}</b>\n"
-        f"  Position: {pos}\n"
-        f"  <code>{esc(value[:80])}</code>"
-    )
-
-
-def _cleanup_part_files(output: Path, logger: logging.Logger) -> None:
-    """Remove leftover .part files from interrupted downloads."""
-    if not output.exists():
-        return
-    cleaned = 0
-    for p in output.rglob("*enc.part"):
+    async def run(self):
+        logger = self._logger
+        worker = Worker(self._qm, self._notify, self._chat_id, self._cfg, logger, self._wake_event)
+        self._worker = worker
+        worker_task = asyncio.create_task(worker.run())
+        logger.info("Bot starting...")
         try:
-            p.unlink()
-            cleaned += 1
-        except OSError:
-            pass
-    if cleaned:
-        logger.info("Cleaned up %d leftover .part file(s)", cleaned)
-
-
-def _migrate_playlist_covers(output: Path, logger: logging.Logger) -> None:
-    """Migrate .playlist_covers/ to sidecar (Navidrome-compatible) location."""
-    covers_dir = output / ".playlist_covers"
-    if not covers_dir.is_dir():
-        return
-    moved = 0
-    for f in list(covers_dir.iterdir()):
-        if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
-            dest = output / f.name
-            if not dest.exists():
-                f.rename(dest)
-                moved += 1
-    if moved:
-        logger.info("Migrated %d playlist cover(s) from .playlist_covers/", moved)
-    try:
-        covers_dir.rmdir()
-    except OSError:
-        pass
-
-
-async def post_init(application: Application) -> None:
-    qm: QueueManager = application.bot_data["queue_manager"]
-    cfg = application.bot_data["cfg"]
-    logger: logging.Logger = application.bot_data["logger"]
-    wake_event: asyncio.Event = application.bot_data["wake_event"]
-
-    output = Path(cfg["output_dir"])
-    _cleanup_part_files(output, logger)
-    _migrate_playlist_covers(output, logger)
-
-    worker = Worker(qm, application.bot, ALLOWED_USER_ID, cfg, logger, wake_event)
-    application.bot_data["worker"] = worker
-    task = asyncio.create_task(worker.run())
-    application.bot_data["worker_task"] = task
-
-
-async def post_stop(application: Application) -> None:
-    worker: Worker = application.bot_data.get("worker")
-    if worker:
-        await worker.shutdown()
-    task = application.bot_data.get("worker_task")
-    if task:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            while True:
+                updates = await self._client.get_updates(self._offset)
+                for upd in updates:
+                    self._offset = upd["update_id"] + 1
+                    try:
+                        await self._handle_update(upd)
+                    except Exception as e:
+                        logger.exception("Update handling error: %s", e)
+        finally:
+            await worker.shutdown()
+            worker_task.cancel()
+            try:
+                await worker_task
+            except asyncio.CancelledError:
+                pass
 
 
 def main() -> None:
@@ -478,37 +474,8 @@ def main() -> None:
     lock.acquire()
 
     qm = QueueManager(str(QUEUE_DB))
-
-    wake_event = asyncio.Event()
-
-    application = (
-        Application.builder()
-        .token(TOKEN)
-        .connect_timeout(15)
-        .read_timeout(30)
-        .write_timeout(15)
-        .pool_timeout(15)
-        .post_init(post_init)
-        .post_stop(post_stop)
-        .build()
-    )
-    application.bot_data["queue_manager"] = qm
-    application.bot_data["cfg"] = cfg
-    application.bot_data["logger"] = logger
-    application.bot_data["wake_event"] = wake_event
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("status", status_cmd))
-    application.add_handler(CommandHandler("quality", quality_cmd))
-    application.add_handler(CommandHandler("purge", purge_cmd))
-    application.add_handler(CommandHandler("mkplaylist", mkplaylist_cmd))
-    application.add_handler(CommandHandler("fixmetadata", fixmetadata_cmd))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logger.info("Bot starting...")
     try:
-        application.run_polling(bootstrap_retries=3)
+        asyncio.run(Bot(TOKEN, qm, cfg, logger).run())
     finally:
         lock.release()
 

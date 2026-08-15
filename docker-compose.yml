@@ -1,7 +1,7 @@
 services:
-  spoty-loop:
+  music-bot:
     build: .
-    container_name: spoty-loop
+    container_name: music-bot
     env_file: .env
     environment:
       - QUEUE_DB_PATH=/root/.spotiflac/queue.db

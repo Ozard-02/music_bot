@@ -1,12 +1,15 @@
 """Core download engine: run_url() handles tracks, albums, playlists.
 
-Standalone CLI: `python downloader.py <spotify_url>` still works.
+Runs inside the download subprocess (download_job.py) — never imported by the
+parent. Cross-job overlap protection uses flock lockfiles because each job is
+its own process.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -31,6 +34,18 @@ class DownloadResult:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DownloadResult":
+        return cls(
+            ok=data.get("ok", 0),
+            skipped=data.get("skipped", 0),
+            failed=data.get("failed", 0),
+            failed_tracks=[tuple(t) for t in data.get("failed_tracks", [])],
+            gave_up_tracks=[tuple(t) for t in data.get("gave_up_tracks", [])],
+            total=data.get("total", 0),
+            providers=data.get("providers", {}),
+        )
 
 
 async def run_url(
@@ -93,13 +108,7 @@ async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
 
 
 def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
-    """Write a .lrc sidecar from lyrics already embedded by SpotiFLAC.
-
-    SpotiFLAC stores fetched (possibly line-synced) lyrics in the FLAC LYRICS
-    tag as plain text — no player reads that as 'synchronized'.  Reading the
-    tag back and emitting a real `.lrc` sidecar makes the timing usable.
-    Reuses the just-emitted tag: no extra network fetch.
-    """
+    """Write a .lrc sidecar from lyrics already embedded by SpotiFLAC."""
     rel = track_relative_path(track, cfg)
     fpath = Path(cfg["output_dir"]) / rel
     if not fpath.exists():
@@ -113,25 +122,34 @@ def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
         logger.debug("Lyrics sidecar failed for %s", rel)
 
 
-# Cross-job in-flight guard: overlapping jobs (same track/album/playlist in the
-# queue in parallel) download each track exactly once; the second job counts
-# the track as skipped instead of writing a competing .part file.
-# asyncio.Lock would bind to the first event loop that touches it, but each job
-# runs on its own loop (asyncio.run per worker thread) — a threading-based
-# adapter is cross-loop-safe (same fix as the qobuz lock, spotiflac_patch.py).
-_in_flight: set[str] = set()
+# Cross-process in-flight guard: each job is its own process, so process-local
+# state can't coordinate. A flock lockfile per track id (LOCK_EX|LOCK_NB) under
+# <output_dir>/.inflight/<id>.lock does. flock releases automatically on
+# process exit — no stale locks, no cleanup needed.
 _in_flight_lock = _AsyncLockAdapter()
 
 
-def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: float | None = None):
-    """Normalize a freshly downloaded file from SpotiFLAC's naming to ours.
+def _inflight_lockfile(track_id: str, cfg: dict) -> Path:
+    d = Path(cfg["output_dir"]) / ".inflight"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{track_id}.lock"
 
-    Only touches files this download actually wrote: `started` (wall clock
-    captured before the download) is compared against the file's mtime.  A
-    file that pre-dates the download is left completely untouched — never
-    deleted or moved, since naming drift can make `spoti_path` point at an
-    older, unrelated file (data-loss hazard).  Never raises.
-    """
+
+def _try_lock_track(track_id: str, cfg: dict) -> object | None:
+    """Return an open locked fd, or None if another job holds the lock."""
+    import fcntl
+
+    try:
+        fd = os.open(_inflight_lockfile(track_id, cfg), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except BlockingIOError:
+        os.close(fd)
+        return None
+
+
+def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: float | None = None):
+    """Normalize a freshly downloaded file from SpotiFLAC's naming to ours."""
     spoti_rel = spotiflac_track_relative_path(track, cfg)
     orig_rel = track_relative_path(track, cfg)
     if spoti_rel == orig_rel:
@@ -148,10 +166,6 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: fl
             )
             return
         if orig_path.exists():
-            # The fresh download duplicated an existing canonical file.
-            # Delete the duplicate ONLY when BOTH files provably are the same
-            # track (embedded Spotify ID matches the expected one); never
-            # delete what we can't prove.
             if (
                 get_spotify_id_from_file(spoti_path) == track.id
                 and get_spotify_id_from_file(orig_path) == track.id
@@ -207,11 +221,12 @@ async def _download_tracks(
     async def _dl(track):
         nonlocal done_count
         async with sem:
+            lock_fd = None
             async with _in_flight_lock:
-                if track.id in _in_flight:
+                lock_fd = _try_lock_track(track.id, cfg)
+                if lock_fd is None:
                     skipped_inflight.append(track)
                     return
-                _in_flight.add(track.id)
             try:
                 started = time.time()
                 fl = await client.download_track(track.external_url)
@@ -219,9 +234,6 @@ async def _download_tracks(
                     failed_list.append(track)
                     if failure_cb:
                         for f in fl:
-                            # SpotiFLAC's download_track returns the failed tracks,
-                            # as TrackMetadata (1.5.x/1.6.x) or (id, title, artists,
-                            # error) tuples (older versions). Normalize both shapes.
                             if isinstance(f, tuple):
                                 title, err = f[1], f[3] or "download_failed"
                             else:
@@ -237,8 +249,11 @@ async def _download_tracks(
                 if failure_cb:
                     failure_cb(track.title, str(exc))
             finally:
-                async with _in_flight_lock:
-                    _in_flight.discard(track.id)
+                if lock_fd is not None:
+                    try:
+                        os.close(lock_fd)  # releases flock
+                    except OSError:
+                        pass
             done_count += 1
             provider = pop_track_provider(track.id)
             if provider:
@@ -249,8 +264,6 @@ async def _download_tracks(
     await asyncio.gather(*[_dl(t) for t in missing], return_exceptions=True)
 
     # Reconcile: a track counts as ok only if a file actually exists on disk
-    # (canonical layout or SpotiFLAC layout) — "success but no file" (naming
-    # drift, provider glitch) is reported as failed, not silently ok.
     failed_ids = {t.id for t in failed_list}
     skip_ids = {t.id for t in skipped_inflight}
     base = Path(cfg["output_dir"])
