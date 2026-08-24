@@ -25,6 +25,12 @@ def client():
     return TelegramClient("TOKEN", logger=None)
 
 
+def _fake_sleep(into):
+    async def fake_sleep(s):
+        into.append(s)
+    return fake_sleep
+
+
 @pytest.mark.asyncio
 async def test_get_updates_passes_offset(client):
     captured = {}
@@ -56,7 +62,31 @@ async def test_get_updates_no_offset(client):
 @pytest.mark.asyncio
 async def test_get_updates_network_error_returns_empty(client):
     with patch.object(TelegramClient, "_call", side_effect=TimeoutError("boom")):
-        assert await client.get_updates() == []
+        with patch("telegram_client.asyncio.sleep", new=_fake_sleep([])):
+            assert await client.get_updates() == []
+
+
+@pytest.mark.asyncio
+async def test_get_updates_backoff_and_reset(client):
+    sleeps = []
+    calls = {"n": 0}
+
+    async def fake_call(self, method, params, timeout=30):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise TimeoutError("boom")
+        return [{"update_id": 1, "message": {}}]
+
+    with patch.object(TelegramClient, "_call", new=fake_call):
+        with patch("telegram_client.asyncio.sleep", new=_fake_sleep(sleeps)):
+            assert await client.get_updates() == []
+            assert await client.get_updates() == []
+            assert await client.get_updates() == [{"update_id": 1, "message": {}}]
+            # backoff resets after success
+            with patch.object(TelegramClient, "_call", side_effect=TimeoutError("boom")):
+                with patch("telegram_client.asyncio.sleep", new=_fake_sleep(sleeps)):
+                    assert await client.get_updates() == []
+    assert sleeps == [5, 10, 5]
 
 
 @pytest.mark.asyncio

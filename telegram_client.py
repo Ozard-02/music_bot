@@ -13,6 +13,8 @@ from urllib.parse import urlencode
 
 _API = "https://api.telegram.org/bot{token}/{method}"
 _GETUPDATES_TIMEOUT = 50  # long-poll seconds
+_BACKOFF_BASE = 5  # seconds; doubles per consecutive getUpdates failure
+_BACKOFF_CAP = 60
 
 
 class TelegramError(Exception):
@@ -23,6 +25,7 @@ class TelegramClient:
     def __init__(self, token: str, logger: logging.Logger | None = None):
         self._token = token
         self._logger = logger or logging.getLogger("telegram_client")
+        self._fails = 0  # consecutive getUpdates failures (drives backoff)
 
     def _call_sync(self, method: str, params: dict, timeout: float = 30) -> dict:
         """Blocking POST to the Bot API; raises TelegramError on failure."""
@@ -46,9 +49,14 @@ class TelegramClient:
         if offset is not None:
             params["offset"] = offset
         try:
-            return await self._call("getUpdates", params, timeout=_GETUPDATES_TIMEOUT + 15)
+            result = await self._call("getUpdates", params, timeout=_GETUPDATES_TIMEOUT + 15)
+            self._fails = 0
+            return result
         except (urllib.error.URLError, TimeoutError, TelegramError) as e:
             self._logger.warning("getUpdates failed: %s", e)
+            # ponytail: backoff so outages retry once/min instead of hammering; cap 60s
+            await asyncio.sleep(min(_BACKOFF_BASE * 2 ** self._fails, _BACKOFF_CAP))
+            self._fails += 1
             return []
 
     async def send_message(self, chat_id: int, text: str) -> dict | None:
