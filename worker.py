@@ -109,6 +109,80 @@ def _done_message(display: str, result: dict, given_up: int) -> str:
     return msg
 
 
+async def stream_job(
+    spec: dict,
+    *,
+    logger: logging.Logger,
+    on_event,
+    stall_timeout: float,
+    deadline: float | None = None,
+) -> tuple[dict | None, str | None]:
+    """Spawn download_job.py, write `spec` to its stdin, stream its JSON-lines.
+
+    Every event except `result` is passed to `on_event(event)`. The child is
+    killed on stall (no line for `stall_timeout`), on `deadline` (monotonic
+    timestamp), or when cancelled — killing it reclaims its RSS by
+    construction.
+
+    Returns (result, reason): reason is None iff a result event arrived;
+    otherwise 'stall', 'timeout', or 'crash' (exit without a result).
+    """
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, JOB_SCRIPT,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    proc.stdin.write((json.dumps(spec) + "\n").encode())
+    await proc.stdin.drain()
+    proc.stdin.close()
+
+    result = None
+    reason = None
+    last_event = time.monotonic()
+    try:
+        while result is None and reason is None:
+            remaining = max(0.0, deadline - time.monotonic()) if deadline is not None else stall_timeout
+            wait = min(stall_timeout, remaining)
+            if wait <= 0:
+                reason = "timeout"
+                break
+            try:
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=wait)
+            except asyncio.TimeoutError:
+                reason = "stall" if time.monotonic() - last_event >= stall_timeout else "timeout"
+                break
+            if not line:
+                break  # EOF
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("Bad line from job subprocess: %r", line[:200])
+                continue
+            last_event = time.monotonic()
+            if event.get("event") == "result":
+                result = event.get("result") or {}
+            else:
+                await on_event(event)
+    except asyncio.CancelledError:
+        proc.kill()
+        raise
+    finally:
+        if reason is not None:
+            proc.kill()
+        if reason is not None or result is not None:
+            # bounded reap; after SIGKILL this is instant unless the child is
+            # stuck in uninterruptible I/O
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=stall_timeout)
+            except asyncio.TimeoutError:
+                pass
+
+    if result is None and reason is None:
+        reason = "crash"
+    return result, reason
+
+
 class Worker:
     def __init__(
         self,
@@ -253,11 +327,28 @@ class Worker:
             )
 
     async def _run_job(self, item: dict, skip_titles: set[str], cfg: dict, chat: int | None):
-        """Spawn download_job.py, stream its JSON-lines, kill on stall/timeout.
+        """Run one download via stream_job (shared IPC loop) and translate its
+        events into queue updates.
 
-        Returns (result_dict, display) or None when killed. Killing the child
-        reclaims its RSS — the leaked-straggler-thread problem is gone by
-        construction (no thread survives a dead process)."""
+        Returns (result_dict, display) or None when killed/crashed. A killed
+        child's RSS is reclaimed — no leaked straggler threads by construction."""
+        display = item["query"]
+
+        async def on_event(event: dict):
+            nonlocal display
+            kind = event.get("event")
+            if kind == "progress":
+                status = f"{event.get('done', 0)}/{event.get('total', 0)} · Now: {event.get('title', '')}"
+                if event.get("provider"):
+                    status += f" · via {event['provider']}"
+                await asyncio.to_thread(self._queue.set_progress, item["id"], status)
+            elif kind == "failure":
+                await asyncio.to_thread(
+                    self._queue.log_failed_track, item["id"], event.get("title", ""), event.get("error"),
+                )
+            elif kind == "resolved":
+                display = event.get("display") or display
+
         spec = {
             "id": item["id"],
             "type": item["input_type"],
@@ -271,64 +362,17 @@ class Worker:
         else:
             spec["url"] = item["query"]
 
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, JOB_SCRIPT,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+        result, reason = await stream_job(
+            spec,
+            logger=self._logger,
+            on_event=on_event,
+            stall_timeout=cfg.get("stall_timeout", STALL_TIMEOUT),
+            deadline=time.monotonic() + cfg.get("max_download_timeout", MAX_DOWNLOAD_TIMEOUT),
         )
 
-        proc.stdin.write((json.dumps(spec) + "\n").encode())
-        await proc.stdin.drain()
-        proc.stdin.close()
-
-        timeout = cfg.get("max_download_timeout", MAX_DOWNLOAD_TIMEOUT)
-        stall_timeout = cfg.get("stall_timeout", STALL_TIMEOUT)
-        deadline = time.monotonic() + timeout
-        last_event = time.monotonic()
-        result = None
-        display = item["query"]
-
-        try:
-            while True:
-                wait = min(stall_timeout, max(0.0, deadline - time.monotonic()))
-                if wait <= 0:
-                    return await self._kill_timeout(item, display, chat, "timeout")
-                try:
-                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=wait)
-                except asyncio.TimeoutError:
-                    if time.monotonic() - last_event >= stall_timeout:
-                        return await self._kill_timeout(item, display, chat, "stall")
-                    return await self._kill_timeout(item, display, chat, "timeout")
-                if not line:
-                    break  # EOF
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    self._logger.warning("#%d: bad line from subprocess: %r", item["id"], line)
-                    continue
-                last_event = time.monotonic()
-                kind = event.get("event")
-                if kind == "progress":
-                    p = event
-                    status = f"{p.get('done', 0)}/{p.get('total', 0)} · Now: {p.get('title', '')}"
-                    if p.get("provider"):
-                        status += f" · via {p['provider']}"
-                    await asyncio.to_thread(self._queue.set_progress, item["id"], status)
-                elif kind == "failure":
-                    await asyncio.to_thread(
-                        self._queue.log_failed_track, item["id"], event.get("title", ""), event.get("error"),
-                    )
-                elif kind == "resolved":
-                    display = event.get("display") or display
-                elif kind == "result":
-                    result = event.get("result") or {}
-            await proc.wait()
-        except asyncio.CancelledError:
-            proc.kill()
-            raise
-
-        if result is None:
+        if reason in ("stall", "timeout"):
+            return await self._kill_timeout(item, display, chat, reason)
+        if reason == "crash":
             await asyncio.to_thread(self._queue.mark_failed, item["id"], "subprocess crashed")
             await self._safe_notify(
                 f"❌ <b>{esc(display)}</b>\n  💥 Download subprocess crashed — will retry",

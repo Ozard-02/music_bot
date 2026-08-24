@@ -2,8 +2,7 @@
 """Telegram bot for queueing Spotify downloads (stdlib-only parent)."""
 
 import asyncio
-import functools
-import json
+import gc
 import logging
 import os
 import sys
@@ -11,12 +10,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import JOB_SCRIPT, STALL_TIMEOUT, setup_logger, load_config, esc
+from config import STALL_TIMEOUT, setup_logger, load_config, esc
 from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from queue_manager import QueueManager
 from resolver import parse_input, format_help
 from telegram_client import TelegramClient
-from worker import Worker
+from worker import Worker, stream_job
 
 
 def _load_env(path: str | Path):
@@ -250,12 +249,12 @@ class Bot:
         )
 
     async def _run_command_job(self, chat_id: int, spec: dict) -> tuple[dict | None, int | None]:
-        """Spawn download_job.py for a one-shot command (m3u8 / fix_metadata),
-        stream its JSON-lines into a single progress-then-final Telegram message.
+        """Run a one-shot command (m3u8 / fix_metadata) via stream_job —
+        the same IPC loop downloads use — streaming progress into a single
+        Telegram message.
 
-        Returns (result_dict, message_id) so the caller can edit the final
-        message; (None, message_id) on timeout/crash/error — the message is
-        already edited to show the failure."""
+        Returns (result_dict, message_id); (None, message_id) on
+        stall/timeout/crash/error with the message already edited."""
         header = spec.get("header", "⏳ Running…")
         msg = await self._client.send_message(chat_id, header)
         message_id = msg.get("message_id") if msg else None
@@ -265,47 +264,32 @@ class Bot:
                 self._client.edit_message(chat_id, message_id, text)
 
         spec = {**spec, "log_path": self._logger.handlers[0].baseFilename if self._logger.handlers else None}
-        result = None
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, JOB_SCRIPT,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            proc.stdin.write((json.dumps(spec) + "\n").encode())
-            await proc.stdin.drain()
-            proc.stdin.close()
 
-            while True:
-                try:
-                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=STALL_TIMEOUT)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    _edit("❌ <b>Command stalled — killed after no progress for a long time</b>")
-                    return None, message_id
-                if not line:
-                    break
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                kind = event.get("event")
-                if kind == "progress":
-                    p = event
-                    pct = f" \u00b7 {p.get('done', 0) * 100 // max(1, p.get('total', 1))}%" if p.get("total") else ""
-                    _edit(f"⏳ {header}\n  {p.get('done', 0)}/{p.get('total', 0)}{pct}\n  <code>{esc((p.get('title') or '')[:200])}</code>")
-                elif kind == "result":
-                    result = event.get("result") or {}
-            await proc.wait()
+        async def on_event(event: dict):
+            if event.get("event") != "progress":
+                return
+            pct = f" \u00b7 {event.get('done', 0) * 100 // max(1, event.get('total', 1))}%" if event.get("total") else ""
+            _edit(
+                f"⏳ {header}\n  {event.get('done', 0)}/{event.get('total', 0)}{pct}\n"
+                f"  <code>{esc((event.get('title') or '')[:200])}</code>"
+            )
+
+        try:
+            result, reason = await stream_job(
+                spec,
+                logger=self._logger,
+                on_event=on_event,
+                stall_timeout=STALL_TIMEOUT,
+            )
         except Exception as e:
             self._logger.exception("Command job error: %s", e)
             _edit(f"❌ <b>Command error:</b> <code>{esc(e)}</code>")
             return None, message_id
 
-        if result is None:
+        if reason == "crash":
             _edit("❌ <b>Command failed — check logs</b>")
+        elif reason is not None:
+            _edit("❌ <b>Command stalled — killed after no progress for a long time</b>")
         return result, message_id
 
     async def _mkplaylist(self, chat_id: int, user: dict, args: str) -> None:
@@ -474,6 +458,7 @@ def main() -> None:
     lock.acquire()
 
     qm = QueueManager(str(QUEUE_DB))
+    gc.freeze()  # startup objects are permanent — stop GC rescanning them
     try:
         asyncio.run(Bot(TOKEN, qm, cfg, logger).run())
     finally:
