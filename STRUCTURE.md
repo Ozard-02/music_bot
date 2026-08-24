@@ -3,8 +3,8 @@
 ```
 music_bot_rewrite/
 ├── bot.py               # Telegram dispatch + handlers + main loop (parent)
-├── telegram_client.py   # raw Bot API client: getUpdates/sendMessage/editMessageText (parent)
-├── worker.py            # job orchestration: spawn subprocess, stream JSON-lines, watchdog (parent)
+├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (parent)
+├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (parent)
 ├── queue_manager.py     # SQLite queue (parent; stdlib-only)
 ├── resolver.py          # text/URL parsing only (parent; no SpotiFLAC)
 ├── config.py            # constants, config.json, logger (parent; silence inlined)
@@ -65,10 +65,13 @@ bot.py ──► queue_manager.stats(user) ──► sendMessage
 
 ### /mkplaylist and /fixmetadata (one-shot subprocess commands)
 ```
-bot.py ──► _run_command_job(spec) ──► spawn download_job.py (type=m3u8|fix_metadata)
-   ──► write JSON spec to stdin ──► child: build_m3u8 / fix_library
+bot.py ──► _run_command_job(spec) ──► worker.stream_job (type=m3u8|fix_metadata)
+   ──► child: build_m3u8 / fix_library
    ──► progress / result JSON-lines on stdout ──► bot edits one Telegram message
 ```
+
+Downloads and one-shot commands share `worker.stream_job()`: one implementation
+of spawn → stdin spec → stdout JSON-lines → stall/timeout/cancel watchdog.
 
 ## Subprocess job spec (stdin, one JSON line)
 ```json
