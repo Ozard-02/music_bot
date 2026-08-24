@@ -1,5 +1,9 @@
 FROM python:3.14-slim
 
+# Cap glibc malloc arenas: threaded Python (to_thread + subprocesses) otherwise
+# spawns an arena per thread and RSS balloons. 2 is plenty for our workload.
+ENV MALLOC_ARENA_MAX=2
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     flac \

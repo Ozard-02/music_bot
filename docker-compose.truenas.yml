@@ -5,6 +5,7 @@ services:
     env_file: .env
     environment:
       - QUEUE_DB_PATH=/root/.spotiflac/queue.db
+      - MALLOC_ARENA_MAX=2
     volumes:
       - /mnt/TB2/navidrome/Music:/root/Music
       - /mnt/TB2/VM/spotiflac:/root/.spotiflac

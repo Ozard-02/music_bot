@@ -1,23 +1,53 @@
 import json
 from unittest.mock import patch
 
+import http.client
 import pytest
 
 from telegram_client import TelegramClient, TelegramError
 
 
-class FakeResp:
-    def __init__(self, payload):
-        self._payload = payload
+class FakeConn:
+    """Minimal HTTPSConnection stand-in; scripted via class attrs."""
 
-    def __enter__(self):
+    host = None
+    timeout = None
+    closed = False
+    payload: bytes = b"{}"
+    status = 200
+    error: Exception | None = None  # raised once from getresponse, then cleared
+
+    instances: list["FakeConn"] = []
+
+    def __init__(self, host, timeout=None):
+        self.host, self.timeout = host, timeout
+        self.closed = False
+        FakeConn.instances.append(self)
+
+    def request(self, method, path, body=None, headers=None):
+        self.path = path
+
+    def getresponse(self):
+        if FakeConn.error is not None:
+            err, FakeConn.error = FakeConn.error, None
+            raise err
         return self
 
-    def __exit__(self, *a):
-        return False
-
     def read(self):
-        return json.dumps(self._payload).encode()
+        return FakeConn.payload
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def fake_conn():
+    FakeConn.instances = []
+    FakeConn.payload = b"{}"
+    FakeConn.status = 200
+    FakeConn.error = None
+    with patch("telegram_client.http.client.HTTPSConnection", FakeConn):
+        yield FakeConn
 
 
 @pytest.fixture
@@ -111,12 +141,41 @@ async def test_send_message_error_returns_none(client):
         assert await client.send_message(1, "x") is None
 
 
-def test_call_sync_ok():
-    with patch("telegram_client.urllib.request.urlopen", return_value=FakeResp({"ok": True, "result": ["r"]})):
-        assert TelegramClient("t")._call_sync("getUpdates", {}) == ["r"]
+def test_call_sync_ok(fake_conn):
+    fake_conn.payload = json.dumps({"ok": True, "result": ["r"]}).encode()
+    assert TelegramClient("t")._call_sync("getUpdates", {}) == ["r"]
+    assert "/bott/getUpdates" in fake_conn.instances[0].path
 
 
-def test_call_sync_error_raises():
-    with patch("telegram_client.urllib.request.urlopen", return_value=FakeResp({"ok": False, "description": "bot was blocked"})):
-        with pytest.raises(TelegramError, match="bot was blocked"):
+def test_call_sync_error_raises(fake_conn):
+    fake_conn.payload = json.dumps({"ok": False, "description": "bot was blocked"}).encode()
+    with pytest.raises(TelegramError, match="bot was blocked"):
+        TelegramClient("t")._call_sync("sendMessage", {})
+
+
+def test_http_error_status_raises(fake_conn):
+    fake_conn.payload = b"Internal Server Error"
+    fake_conn.status = 500
+    with pytest.raises(TelegramError, match="HTTP 500"):
+        TelegramClient("t")._call_sync("sendMessage", {})
+
+
+def test_dead_socket_reconnects_once(fake_conn):
+    # first attempt hits a socket the server closed (idle keep-alive);
+    # the client must reconnect on a fresh conn and succeed
+    fake_conn.error = ConnectionResetError("dead socket")
+    fake_conn.payload = json.dumps({"ok": True, "result": {"message_id": 1}}).encode()
+    assert TelegramClient("t")._call_sync("sendMessage", {}) == {"message_id": 1}
+    assert len(fake_conn.instances) == 2
+    assert fake_conn.instances[0].closed
+
+
+def test_persistent_failure_raises_after_retry(fake_conn):
+    class DeadConn(FakeConn):
+        def getresponse(self):
+            raise ConnectionResetError("still dead")
+
+    with patch("telegram_client.http.client.HTTPSConnection", DeadConn):
+        with pytest.raises(TelegramError):
             TelegramClient("t")._call_sync("sendMessage", {})
+        assert len(DeadConn.instances) == 2  # exactly one retry

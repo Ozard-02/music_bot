@@ -28,10 +28,10 @@ imported. Idle RSS is a hard requirement (see AGENTS.md), so we split:
 ### Parent (stdlib only)
 | Module | Role |
 |--------|------|
-| `telegram_client.py` | Raw Telegram Bot API client: `getUpdates` long-poll, `sendMessage`, `editMessageText` |
+| `telegram_client.py` | Raw Telegram Bot API client on `http.client` with two persistent keep-alive connections (one for the long-poll, one locked-shared for sends) |
 | `bot.py` | Message dispatch, command handlers, allowlist, main loop |
 | `queue_manager.py` | SQLite queue (`queue`, `users`, `failed_tracks`) |
-| `worker.py` | Job orchestration: spawn subprocess, stream JSON-lines, stall watchdog |
+| `worker.py` | Job orchestration; owns `stream_job()`, the shared spawn/stream/watchdog IPC loop used by both downloads and one-shot commands |
 | `config.py` | Constants, config.json loading, logger setup (`silence_spotiflac_loggers` inlined) |
 | `resolver.py` | Text parsing only (`parse_spotify_url`); search resolved in subprocess |
 | `library.py` | Library paths (user folders, per-user output dir) |
@@ -79,10 +79,11 @@ This is why `setup_logger` in the child must keep its StreamHandler on stderr.
 
 ## Stall watchdog
 
-The parent reads stdout asynchronously. If no line arrives for
-`stall_timeout_seconds` (config, default 1800), the parent sends SIGKILL to the
-child. This permanently fixes the old "leaked straggler thread" bug: a dead
-child's RSS is reclaimed by the kernel, no orphan threads survive.
+`worker.stream_job()` reads the child's stdout asynchronously. If no line
+arrives for `stall_timeout_seconds` (config, default 1800), or the job exceeds
+its overall deadline, the child is SIGKILLed and reaped. The same loop kills
+on task cancellation. This permanently fixes the old "leaked straggler thread"
+bug: a dead child's RSS is reclaimed by the kernel, no orphan threads survive.
 
 ## Cross-process in-flight guard
 
@@ -96,19 +97,28 @@ so overlap protection moves to **`fcntl.flock` lockfiles**:
 
 ## Energy profile (idle)
 
-- Telegram long-poll: one held HTTP request (`getUpdates?timeout=50`), no busy loop.
+- Telegram long-poll: one held HTTPS request (`getUpdates?timeout=50`) on a
+  persistent keep-alive connection — zero TLS handshakes while idle (the old
+  urllib client shook hands on every API call, ~1700/day from polling alone).
 - Worker: `asyncio.Event` — wakes instantly when the bot enqueues, otherwise
   sleeps with idle backoff 5s -> 10 -> 20 -> 40 -> 80 -> 160 -> 300s cap.
 - QueueManager: one persistent SQLite connection, no polling.
+- `gc.freeze()` after startup: permanent objects are never rescanned.
 - Idle cost is one long-poll request + zero DB polls. Near-zero CPU.
 
 ## RSS budget
 
+Measured (host, import chain): interpreter ~12.6MiB + logging ~4.3MiB +
+asyncio ~5.5MiB + http.client/ssl ~2.5MiB + app code — **parent idle
+~26MiB** (was ~29.4MiB on `urllib.request`). `MALLOC_ARENA_MAX=2` (Dockerfile/
+compose) trims glibc arena overhead under threads; container idle lands in the
+high-20s MiB.
+
 | Component | RSS |
 |-----------|-----|
-| python interpreter base | ~10-12MiB |
-| stdlib (`sqlite3`, `urllib`, `json`, `asyncio`) | ~1-2MiB |
-| parent app code | ~2-4MiB |
-| **parent idle total** | **~15-20MiB** |
+| python interpreter base | ~12-13MiB |
+| stdlib (`logging`, `asyncio`, `sqlite3`, `http.client`, `json`) | ~12MiB |
+| parent app code | ~1-2MiB |
+| **parent idle total** | **~26MiB** |
 | subprocess peak (during job) | ~150-250MiB (transient, reclaimed at exit) |
-| idle container total | **well under current 89MiB** |
+| idle container total | **high-20s MiB** |

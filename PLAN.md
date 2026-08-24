@@ -50,6 +50,18 @@ single-process implementation's git history — don't reinvent.
 - [x] Measure idle RSS — measured **~15MiB parent / ~31MiB container** (was ~252MiB)
 - [x] End-to-end: queue a link, watch FLAC appear (13/13 ok)
 
+## Phase 6b — RSS/KISS pass (DONE)
+- [x] `telegram_client.py` on `http.client` with two keep-alive connections
+      (dedicated long-poll + locked short-call slot) — parent 29.4 → 26.2MiB,
+      zero per-call TLS handshakes (~1700/day eliminated)
+- [x] `worker.stream_job()` shared IPC loop: downloads + one-shot commands use
+      one spawn/stream/watchdog implementation; fixes child not killed on
+      worker stall/timeout and on command-job cancellation
+- [x] `MALLOC_ARENA_MAX=2` (Dockerfile + compose files)
+- [x] `gc.freeze()` after startup in bot.main()
+- [x] tests/test_stream_job.py: real-subprocess coverage of the IPC loop
+- [x] Full suite green: 271 passed
+
 ## Phase 7 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/TB2 volumes)
 - [ ] Push image, deploy, verify
