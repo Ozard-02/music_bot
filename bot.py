@@ -503,10 +503,9 @@ class Bot:
                     except OSError:
                         break
                     parent = parent.parent
-            # remove playlist artefacts
+            # keep playlist but be sure it's empty – truncate to header only
             try:
-                if m3u.is_file():
-                    m3u.unlink()
+                m3u.write_text("#EXTM3U\n", encoding="utf-8")
             except Exception:
                 pass
             try:
@@ -560,16 +559,16 @@ class Bot:
                 chat_id, f"❌ <b>Failed to read playlist:</b> <code>{esc(result['name'])}</code> — <code>{esc(result.get('detail',''))}</code>"
             )
             return
-        # success
+        # success – keep file, truncate to empty
         lines = [
-            f"🗑️ <b>Deleted playlist: {esc(result['name'])}</b>",
+            f"🗑️ <b>Emptied playlist: {esc(result['name'])}</b>",
             f"  🧹 {result['deleted']}/{result['total']} tracks deleted",
         ]
         if result["not_found"]:
             lines.append(f"  ⚠️ {result['not_found']} not on disk (already gone)")
         if result["pruned"]:
             lines.append(f"  📂 {result['pruned']} empty folder{'s' if result['pruned']!=1 else ''} pruned")
-        lines.append(f"  📄 <code>{esc(result['file_name'])}.m3u8</code> removed")
+        lines.append(f"  📄 <code>{esc(result['file_name'])}.m3u8</code> kept empty")
         await self._client.send_message(chat_id, "\n".join(lines))
         self._logger.info(
             "rmplaylist %s: %d/%d deleted, %d not_found, %d pruned",
