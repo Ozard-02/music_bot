@@ -503,15 +503,9 @@ class Bot:
                     except OSError:
                         break
                     parent = parent.parent
-            # keep playlist but be sure it's empty – truncate to header only
+            # keep playlist but be sure it's empty – truncate to header only; keep cover
             try:
                 m3u.write_text("#EXTM3U\n", encoding="utf-8")
-            except Exception:
-                pass
-            try:
-                cover = m3u.with_suffix(".jpg")
-                if cover.is_file():
-                    cover.unlink()
             except Exception:
                 pass
             try:
