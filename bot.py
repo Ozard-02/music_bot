@@ -15,6 +15,7 @@ from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from queue_manager import QueueManager
 from resolver import parse_input, format_help
 from telegram_client import TelegramClient
+from track_utils import sanitize
 from worker import Worker, stream_job
 
 
@@ -163,6 +164,8 @@ class Bot:
             await self._mkplaylist(chat_id, user, args)
         elif command == "fixmetadata":
             await self._fixmetadata(chat_id, user, args)
+        elif command == "rmplaylist":
+            await self._rmplaylist(chat_id, user, args)
 
     async def _status(self, chat_id: int) -> None:
         s = await asyncio.to_thread(self._qm.get_status)
@@ -369,6 +372,160 @@ class Bot:
                 lines.append(f"  <code>{esc(Path(f).name)} \u2192 {esc(Path(f).parent.name)}/</code>")
         if message_id:
             await self._client.edit_message(chat_id, message_id, "\n".join(lines))
+
+    async def _rmplaylist(self, chat_id: int, user: dict, args: str) -> None:
+        """Delete every FLAC listed in a local .m3u8 (default Trash) and prune empty album/artist folders.
+
+        Local-only: reads ``<output_dir>/<sanitize(name)>.m3u8`` (as created by
+        /mkplaylist), deletes each listed ``.flac`` + ``.lrc`` sidecar, then
+        prunes empty parents and removes the .m3u8 + cover + missing log.
+        Navidrome picks it up on next scan – hence the trash-bin workflow.
+        """
+        name = args.strip() or "Trash"
+        # keep display name as user typed; file name uses sanitize
+        file_name = sanitize(name, fallback="playlist")
+        ucfg = _user_cfg(self._qm, self._cfg, user)
+        root = Path(ucfg["output_dir"])
+        m3u = root / f"{file_name}.m3u8"
+
+        def _do_delete() -> dict:
+            if not m3u.is_file():
+                avail = sorted(p.stem for p in root.glob("*.m3u8"))
+                return {"error": "not_found", "name": name, "path": str(m3u), "avail": avail}
+            try:
+                text = m3u.read_text(encoding="utf-8")
+            except Exception as e:
+                return {"error": "read_error", "name": name, "detail": str(e)}
+            rels = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+            deleted = 0
+            not_found = 0
+            pruned = 0
+            # need root resolved for traversal guard
+            try:
+                root_res = root.resolve()
+            except Exception:
+                root_res = root
+            for rel in rels:
+                # guard absolute / traversal – m3u should be relative
+                if rel.startswith("/") or rel.startswith("\\"):
+                    not_found += 1
+                    continue
+                p = root / rel
+                # ensure p is inside root (even when p doesn't exist yet, resolve parent)
+                try:
+                    # resolve() follows symlinks; for missing files it resolves as far as possible
+                    p_res = p.resolve()
+                    if not p_res.is_relative_to(root_res):
+                        not_found += 1
+                        continue
+                except Exception:
+                    not_found += 1
+                    continue
+                if not p.is_file():
+                    not_found += 1
+                    continue
+                try:
+                    p.unlink()
+                    deleted += 1
+                except Exception as e:
+                    self._logger.warning("rmplaylist: failed to delete %s: %s", p, e)
+                    not_found += 1
+                    continue
+                # sidecar .lrc
+                try:
+                    lrc = p.with_suffix(".lrc")
+                    if lrc.is_file():
+                        lrc.unlink()
+                except Exception:
+                    pass
+                # prune empty album/artist dirs, count how many were removed
+                # duplicate prune_empty_parents logic but count
+                parent = p.parent
+                while True:
+                    try:
+                        # need to be inside root and not root itself
+                        if parent == root or parent == root_res or not parent.is_relative_to(root_res):
+                            break
+                    except Exception:
+                        break
+                    try:
+                        parent.rmdir()
+                        pruned += 1
+                    except OSError:
+                        break
+                    parent = parent.parent
+            # remove playlist artefacts
+            try:
+                if m3u.is_file():
+                    m3u.unlink()
+            except Exception:
+                pass
+            try:
+                cover = m3u.with_suffix(".jpg")
+                if cover.is_file():
+                    cover.unlink()
+            except Exception:
+                pass
+            try:
+                missing_log = root / "temp" / f"{file_name}_missing.txt"
+                if missing_log.is_file():
+                    missing_log.unlink()
+                    # prune temp if empty
+                    try:
+                        Path(root / "temp").rmdir()
+                    except OSError:
+                        pass
+            except Exception:
+                pass
+            return {
+                "name": name,
+                "file_name": file_name,
+                "total": len(rels),
+                "deleted": deleted,
+                "not_found": not_found,
+                "pruned": pruned,
+                "path": str(m3u),
+            }
+
+        result = await asyncio.to_thread(_do_delete)
+        if result.get("error") == "not_found":
+            avail = result.get("avail") or []
+            if avail:
+                avail_str = ", ".join(f"<code>{esc(a)}</code>" for a in avail[:20])
+                await self._client.send_message(
+                    chat_id,
+                    f"❌ <b>Playlist not found:</b> <code>{esc(result['name'])}</code>\n"
+                    f"  Available: {avail_str}\n"
+                    f"  Create it with /mkplaylist &lt;url&gt; {esc(result['name'])}",
+                )
+            else:
+                await self._client.send_message(
+                    chat_id,
+                    f"❌ <b>Playlist not found:</b> <code>{esc(result['name'])}</code>\n"
+                    f"  No .m3u8 playlists in <code>{esc(root)}</code>\n"
+                    f"  Create one with /mkplaylist &lt;url&gt; {esc(result['name'])}",
+                )
+            return
+        if result.get("error") == "read_error":
+            await self._client.send_message(
+                chat_id, f"❌ <b>Failed to read playlist:</b> <code>{esc(result['name'])}</code> — <code>{esc(result.get('detail',''))}</code>"
+            )
+            return
+        # success
+        lines = [
+            f"🗑️ <b>Deleted playlist: {esc(result['name'])}</b>",
+            f"  🧹 {result['deleted']}/{result['total']} tracks deleted",
+        ]
+        if result["not_found"]:
+            lines.append(f"  ⚠️ {result['not_found']} not on disk (already gone)")
+        if result["pruned"]:
+            lines.append(f"  📂 {result['pruned']} empty folder{'s' if result['pruned']!=1 else ''} pruned")
+        lines.append(f"  📄 <code>{esc(result['file_name'])}.m3u8</code> removed")
+        await self._client.send_message(chat_id, "\n".join(lines))
+        self._logger.info(
+            "rmplaylist %s: %d/%d deleted, %d not_found, %d pruned",
+            result["name"], result["deleted"], result["total"], result["not_found"], result["pruned"],
+        )
 
     async def _handle_text(self, chat_id: int, user: dict, text: str) -> None:
         input_type, value = parse_input(text)

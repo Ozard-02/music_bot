@@ -70,6 +70,13 @@ bot.py ──► _run_command_job(spec) ──► worker.stream_job (type=m3u8|f
    ──► progress / result JSON-lines on stdout ──► bot edits one Telegram message
 ```
 
+### /rmplaylist (local, no subprocess)
+```
+bot.py ──► _rmplaylist(name) ──► reads <user_output>/name.m3u8 (sanitize)
+   ──► deletes each listed FLAC + .lrc sidecar, prune_empty_parents
+   ──► deletes .m3u8 + .jpg + temp/name_missing.txt
+```
+
 Downloads and one-shot commands share `worker.stream_job()`: one implementation
 of spawn → stdin spec → stdout JSON-lines → stall/timeout/cancel watchdog.
 
