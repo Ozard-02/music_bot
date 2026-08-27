@@ -34,6 +34,7 @@ download job** whose RSS is reclaimed on exit. See [ARCHITECTURE.md](ARCHITECTUR
 | `/purge` | Clear all queued items |
 | `/mkplaylist <url>` | Generate m3u8 playlist file |
 | `/fixmetadata [folder]` | Re-tag all FLACs in a folder (fixes split albums in Navidrome) |
+| `/rmplaylist [name]` | Delete every track in `name.m3u8` (default `Trash`) + prune empty folders |
 
 ## Quick start (local Docker)
 
