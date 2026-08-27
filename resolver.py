@@ -40,7 +40,8 @@ def format_help() -> str:
         "  /status \u2014 queue status and recent items\n"
         "  /quality [value] \u2014 set your download quality (no arg lists options)\n"
         "  /purge \u2014 remove all queued items\n"
-        "  /mkplaylist &lt;url&gt; [name] \u2014 build a .m3u8 from tracks on disk\n"
+        "  /mkplaylist &lt;url&gt; [name] \u2014 build a .m3u8 from tracks on disk (name defaults to Spotify title)\n"
+        "  /mkplaylist &lt;name&gt; \u2014 create empty <code>&lt;name&gt;.m3u8</code> (no url)\n"
         "  /fixmetadata [album folder] \u2014 re-tag + fix covers (--lyrics also embeds lyrics; your library if omitted)\n"
         "  /rmplaylist [name] \u2014 delete every track listed in &lt;name&gt;.m3u8 (default Trash) and prune empty folders"
     )
