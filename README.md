@@ -32,7 +32,8 @@ download job** whose RSS is reclaimed on exit. See [ARCHITECTURE.md](ARCHITECTUR
 | `/status` | Queue stats + recent items |
 | `/quality [value]` | Set download quality |
 | `/purge` | Clear all queued items |
-| `/mkplaylist <url>` | Generate m3u8 playlist file |
+| `/mkplaylist <url> [name]` | Generate m3u8 from Spotify playlist (name defaults to Spotify title) |
+| `/mkplaylist <name>` | Create empty `name.m3u8` (no url) |
 | `/fixmetadata [folder]` | Re-tag all FLACs in a folder (fixes split albums in Navidrome) |
 | `/rmplaylist [name]` | Delete every track in `name.m3u8` (default `Trash`) + prune empty folders |
 

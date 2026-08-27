@@ -296,14 +296,63 @@ class Bot:
         return result, message_id
 
     async def _mkplaylist(self, chat_id: int, user: dict, args: str) -> None:
-        parts = args.split()
-        if not parts:
+        raw = args.strip()
+        if not raw:
             await self._client.send_message(
                 chat_id,
                 "📋 <b>Usage:</b> /mkplaylist &lt;playlist_url&gt; [playlist_name]\n"
+                "  /mkplaylist &lt;name&gt; — create empty <code>&lt;name&gt;.m3u8</code> (no url)\n"
                 "  Builds a .m3u8 from tracks already on disk (no downloads).",
             )
             return
+        # keep current bot state: url default name, plus empty name-only shortcut
+        parts = raw.split()
+        # treat as url if looks like spotify link (keep test short ids like /playlist/abc)
+        first = parts[0]
+        first_is_url = first.startswith("https://") or first.startswith("http://") or "open.spotify.com/" in first
+        if not first_is_url:
+            # name-only → create empty playlist (no Spotify lookup)
+            name = raw  # preserve spaces: "My Playlist" not just parts[0]
+            file_name = sanitize(name, fallback="playlist")
+            ucfg = _user_cfg(self._qm, self._cfg, user)
+            root = Path(ucfg["output_dir"])
+            m3u = root / f"{file_name}.m3u8"
+
+            def _do_create() -> dict:
+                if m3u.is_file():
+                    return {"error": "exists", "name": name, "file_name": file_name, "path": str(m3u)}
+                try:
+                    root.mkdir(parents=True, exist_ok=True)
+                    m3u.write_text("#EXTM3U\n", encoding="utf-8")
+                except Exception as e:
+                    return {"error": "write_error", "name": name, "detail": str(e)}
+                return {"name": name, "file_name": file_name, "path": str(m3u)}
+
+            result = await asyncio.to_thread(_do_create)
+            if result.get("error") == "exists":
+                await self._client.send_message(
+                    chat_id,
+                    f"⚠️ <b>Playlist already exists:</b> <code>{esc(result['name'])}</code>\n"
+                    f"  <code>{esc(result['file_name'])}.m3u8</code>\n"
+                    f"  Use /rmplaylist {esc(result['name'])} to delete it first.",
+                )
+                return
+            if result.get("error") == "write_error":
+                await self._client.send_message(
+                    chat_id,
+                    f"❌ <b>Failed to create playlist:</b> <code>{esc(result['name'])}</code> — <code>{esc(result.get('detail',''))}</code>",
+                )
+                return
+            await self._client.send_message(
+                chat_id,
+                f"✅ <b>Empty playlist created: {esc(result['name'])}</b>\n"
+                f"  0 tracks\n"
+                f"  📄 <code>{esc(result['file_name'])}.m3u8</code>",
+            )
+            self._logger.info("mkplaylist empty %s -> %s", result["name"], result["path"])
+            return
+
+        # url mode: /mkplaylist <url> [name] — keep default Spotify name behaviour
         url = parts[0]
         name = " ".join(parts[1:]) if len(parts) > 1 else None
 
