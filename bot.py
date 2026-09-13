@@ -232,7 +232,7 @@ class Bot:
                 "  Available:",
             ]
             lines += [f"  {'✅' if q == current else '•'} <code>{esc(q)}</code>" for q in QUALITY_CHOICES]
-            lines.append("  Send /quality <value> to change.")
+            lines.append("  Send <code>/quality &lt;value&gt;</code> to change.")
             await self._client.send_message(chat_id, "\n".join(lines))
             return
 
@@ -248,7 +248,7 @@ class Bot:
         await asyncio.to_thread(self._qm.set_user_quality, user["id"], value)
         await self._client.send_message(
             chat_id,
-            f"✅ <b>Quality set to <code>{esc(value)}</code></b>\n  Applies to new downloads only.",
+            f"✅ <b>Quality set to</b> <code>{esc(value)}</code>\n  Applies to new downloads only.",
         )
 
     async def _run_command_job(self, chat_id: int, spec: dict) -> tuple[dict | None, int | None]:
