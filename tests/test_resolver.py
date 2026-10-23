@@ -171,6 +171,25 @@ class TestResolveSearch:
         assert kind == "track"
 
     @pytest.mark.asyncio
+    async def test_title_hint_picks_same_artist_track(self, client):
+        wrong = MagicMock()
+        wrong.artists = "Articolo 31"
+        wrong.title = "CHI SE NE FREGA DI NOI"
+        wrong.external_url = "https://open.spotify.com/track/wrong"
+        wrong.album = "PROTOMARANZA"
+        right = MagicMock()
+        right.artists = "Articolo 31"
+        right.title = "Noi no"
+        right.external_url = "https://open.spotify.com/track/right"
+        right.album = "Domani smetto"
+
+        client.search.return_value = {"tracks": [wrong, right], "albums": []}
+        url, display, kind = await resolve_search(client, "Articolo 31 - Noi no")
+        assert url == right.external_url
+        assert display == "Noi no"
+        assert kind == "track"
+
+    @pytest.mark.asyncio
     async def test_search_query_parts(self, client, mock_track):
         client.search.return_value = {"tracks": [mock_track], "albums": []}
         await resolve_search(client, "  Test Artist  -  Test Song  ")

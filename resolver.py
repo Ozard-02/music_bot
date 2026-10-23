@@ -62,7 +62,7 @@ async def resolve_search(
     tracks = results.get("tracks", [])
     albums = results.get("albums", [])
 
-    best_track = best_track_match(tracks, a)
+    best_track = best_track_match(tracks, a, b)
     best_album = _best_album_match(albums, a)
 
     if best_track and best_album:
@@ -89,15 +89,35 @@ def _pick_between_track_and_album(track, album, second_part: str, first_part: st
 
 
 def best_track_match(tracks: list, artist_hint: str = "", title_hint: str = ""):
-    """Return the search result that best matches the hints, else the first."""
+    """Return the search result that best matches the hints, else the first.
+
+    Artist and title are both scored: the artist match wins, but among tracks
+    by the same artist the one whose title matches the query wins too.  Before
+    this, a query like "Articolo 31 - Noi no" could resolve to any track by
+    that artist because only the artist hint was checked.
+    """
     artist = (artist_hint or "").strip().lower()
     title = (title_hint or "").strip().lower()
+    if not artist and not title:
+        return tracks[0] if tracks else None
+
+    best = None
+    best_score = 0
     for t in tracks:
-        if artist and artist in (getattr(t, "artists", "") or "").lower():
-            return t
-        if title and title == (getattr(t, "title", "") or "").lower():
-            return t
-    return tracks[0] if tracks else None
+        track_artist = (getattr(t, "artists", "") or "").lower()
+        track_title = (getattr(t, "title", "") or "").lower()
+        score = 0
+        if artist and artist in track_artist:
+            score += 2
+        if title and (
+            title == track_title
+            or (min(len(title), len(track_title)) >= 4
+                and (title in track_title or track_title in title))
+        ):
+            score += 1
+        if score > best_score:
+            best, best_score = t, score
+    return best if best is not None else (tracks[0] if tracks else None)
 
 
 def _best_album_match(albums: list, artist_hint: str):
