@@ -13,7 +13,7 @@ music_bot_rewrite/
 │
 ├── download_job.py      # subprocess entry point: stdin spec → JSON-lines events
 ├── downloader.py        # download engine: run_url, partition, rename, cover (subprocess)
-├── spotiflac_patch.py   # import-time SpotiFLAC monkey-patches (subprocess)
+├── spotiflac_patch.py   # import-time SpotiFLAC monkey-patches + match guards (subprocess)
 ├── m3u8.py              # playlist m3u8 + cover (subprocess)
 ├── flac_utils.py        # FLAC tag/cover utilities (subprocess)
 │

@@ -62,6 +62,15 @@ single-process implementation's git history — don't reinvent.
 - [x] tests/test_stream_job.py: real-subprocess coverage of the IPC loop
 - [x] Full suite green: 271 passed
 
+## Phase 6c — Provider matching guards (DONE)
+- [x] `spotiflac_patch._patch_provider_matching()` — reject fuzzy Qobuz/Deezer
+      candidates that don't match title/artist (and ISRC/duration when available)
+- [x] Log rejected candidates at WARNING (`spoty_loop.patch`)
+- [x] `resolver.best_track_match` scores the title too (same-artist wrong song fix)
+- [x] Tests: real false candidates (Noi no/Articolo 31), resolver title hint
+- [x] E2E: track `1ucxAsJ9oqhyVWBYQ7vzUA` → provider `deezer`, 297.6s, ISRC
+      `ITA270200113` (Qobuz candidate correctly rejected)
+
 ## Phase 7 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/TB2 volumes)
 - [ ] Push image, deploy, verify

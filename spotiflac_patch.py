@@ -2,18 +2,22 @@
 
 Kept in one module so the hacks are easy to find and review.  Importing this
 module runs `install_console_silencing()`, `_patch_qobuz_lock()`,
-`_patch_community_dead()`, `_patch_musicbrainz()`, `_patch_track_provider()`
-and `disable_progress_manager()` once — downloader.py relies on that
-side-effect (regression-tested in tests/test_downloader.py).
+`_patch_community_dead()`, `_patch_musicbrainz()`, `_patch_track_provider()`,
+`_patch_provider_matching()` and `disable_progress_manager()` once —
+downloader.py relies on that side-effect (regression-tested in
+tests/test_downloader.py).
 """
 
 from __future__ import annotations
 
 import asyncio
 import builtins
+import difflib
 import logging
+import re
 import sys
 import threading
+import unicodedata
 
 _CONSOLE_PRINTS = (
     "print_source_banner",
@@ -185,6 +189,214 @@ def pop_track_provider(track_id: str) -> str | None:
     return _track_providers.pop(track_id, None)
 
 
+# ---------------------------------------------------------------------------
+# Provider track matching
+#
+# SpotiFLAC 1.6.0 falls back to fuzzy text search when the ISRC is not in a
+# provider catalog.  Both fallbacks are unsafe:
+#   * QobuzProvider._search_by_text_async returns its best candidate even below
+#     its own score threshold (and the album-search loop never re-checks it).
+#   * QobuzProvider._search_by_text_with_duration_async picks the closest
+#     duration with no title/artist check at all.
+# For "Noi no" by Articolo 31 (ISRC ITA270200113, absent from Qobuz) that chain
+# downloaded "CHI SE NE FREGA DI NOI" and then a random Vietnamese track whose
+# duration was ~5s off — with Spotify tags on top, so the file looked correct.
+# The guards below reject any candidate whose title/artist (and ISRC/duration,
+# when available) do not plausibly match, letting SpotiFLAC fall through to the
+# next provider (Deezer does an exact ISRC lookup and had the right track).
+# ---------------------------------------------------------------------------
+
+_match_logger = logging.getLogger("spoty_loop.patch")
+
+_MATCH_TITLE_RATIO = 0.82
+_MATCH_ARTIST_RATIO = 0.75
+_MATCH_DURATION_TOLERANCE_S = 10
+_ARTIST_SPLIT_RE = re.compile(
+    r"\s*(?:,|&|/|;|\bfeat\.?\b|\bft\.?\b|\bwith\b)\s*",
+    re.IGNORECASE,
+)
+_ISRC_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$")
+
+
+def _normalize_for_match(text) -> str:
+    """Lowercase, strip accents/punctuation, collapse whitespace."""
+    value = unicodedata.normalize("NFKD", str(text or ""))
+    value = value.encode("ascii", "ignore").decode("ascii").lower()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _title_matches(expected: str, candidate: str) -> bool:
+    exp = _normalize_for_match(expected)
+    cand = _normalize_for_match(candidate)
+    if not exp or not cand:
+        return False
+    if exp == cand:
+        return True
+    # Containment catches "(Remastered)"/"(feat. X)" suffixes, but only for
+    # long enough strings: "Noi" must not match "Noi no" just by prefix.
+    if min(len(exp), len(cand)) >= 4 and (exp in cand or cand in exp):
+        return True
+    return difflib.SequenceMatcher(None, exp, cand).ratio() >= _MATCH_TITLE_RATIO
+
+
+def _artist_matches(expected: str, candidate: str) -> bool:
+    cand = _normalize_for_match(candidate)
+    if not cand:
+        return False
+    for part in _ARTIST_SPLIT_RE.split(str(expected or "")):
+        exp = _normalize_for_match(part)
+        if not exp:
+            continue
+        if exp == cand or exp in cand or cand in exp:
+            return True
+        if difflib.SequenceMatcher(None, exp, cand).ratio() >= _MATCH_ARTIST_RATIO:
+            return True
+    return False
+
+
+def _candidate_artist(track: dict) -> str:
+    """Artist name from a provider track dict (qobuz/deezer shapes)."""
+    for key in ("performer", "artist"):
+        value = track.get(key)
+        if isinstance(value, dict) and value.get("name"):
+            return str(value["name"])
+        if isinstance(value, str) and value:
+            return value
+    album = track.get("album")
+    if isinstance(album, dict):
+        artist = album.get("artist")
+        if isinstance(artist, dict) and artist.get("name"):
+            return str(artist["name"])
+    return ""
+
+
+def _normalize_isrc_for_match(value: str) -> str:
+    text = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    return text if _ISRC_RE.match(text) else ""
+
+
+def _track_matches(
+    track: dict,
+    title: str,
+    artist: str,
+    duration_s: int | None = None,
+) -> tuple[bool, str]:
+    """True when a provider candidate is plausibly the requested track."""
+    candidate_title = str(track.get("title") or "")
+    candidate_artist = _candidate_artist(track)
+    if not _title_matches(title, candidate_title):
+        return False, f"title {candidate_title!r} vs {title!r}"
+    if artist and not _artist_matches(artist, candidate_artist):
+        return False, f"artist {candidate_artist!r} vs {artist!r}"
+    if duration_s:
+        candidate_duration = track.get("duration") or 0
+        if (
+            isinstance(candidate_duration, (int, float))
+            and candidate_duration > 0
+            and abs(candidate_duration - duration_s) > _MATCH_DURATION_TOLERANCE_S
+        ):
+            return False, f"duration {candidate_duration}s vs {duration_s}s"
+    return True, ""
+
+
+def _isrc_matches(expected: str, candidate: str) -> bool:
+    exp = _normalize_isrc_for_match(expected)
+    cand = _normalize_isrc_for_match(candidate)
+    if not exp or not cand:
+        return True  # nothing to compare against (candidate may omit ISRC)
+    return exp == cand
+
+
+def _reject(
+    provider: str,
+    kind: str,
+    track: dict,
+    title: str,
+    artist: str,
+    reason: str,
+) -> None:
+    _match_logger.warning(
+        "%s %s match rejected for %r - %r: candidate %r by %r (%ss) — %s",
+        provider,
+        kind,
+        title,
+        artist,
+        track.get("title"),
+        _candidate_artist(track),
+        track.get("duration"),
+        reason,
+    )
+
+
+def _patch_provider_matching() -> None:
+    """Reject fuzzy-search candidates that are not the requested track."""
+    try:
+        from SpotiFLAC.providers import deezer, qobuz
+    except ImportError:
+        return
+
+    if not getattr(qobuz.QobuzProvider, "_spoty_loop_match_patched", False):
+        qobuz.QobuzProvider._spoty_loop_match_patched = True
+
+        _orig_isrc = qobuz.QobuzProvider._search_by_isrc_async
+
+        async def _isrc_guarded(self, isrc):
+            track = await _orig_isrc(self, isrc)
+            if track and not _isrc_matches(isrc, track.get("isrc") or ""):
+                _reject(
+                    "qobuz", "isrc", track, "", "",
+                    f"asked {isrc}, got {track.get('isrc')}",
+                )
+                return None
+            return track
+
+        _orig_text = qobuz.QobuzProvider._search_by_text_async
+
+        async def _text_guarded(self, title, artist):
+            track = await _orig_text(self, title, artist)
+            if not track:
+                return None
+            ok, reason = _track_matches(track, title, artist)
+            if not ok:
+                _reject("qobuz", "text", track, title, artist, reason)
+                return None
+            return track
+
+        _orig_duration = qobuz.QobuzProvider._search_by_text_with_duration_async
+
+        async def _duration_guarded(self, title, artist, target_duration_s):
+            track = await _orig_duration(self, title, artist, target_duration_s)
+            if not track:
+                return None
+            ok, reason = _track_matches(track, title, artist, target_duration_s)
+            if not ok:
+                _reject("qobuz", "duration", track, title, artist, reason)
+                return None
+            return track
+
+        qobuz.QobuzProvider._search_by_isrc_async = _isrc_guarded
+        qobuz.QobuzProvider._search_by_text_async = _text_guarded
+        qobuz.QobuzProvider._search_by_text_with_duration_async = _duration_guarded
+
+    if not getattr(deezer.DeezerProvider, "_spoty_loop_match_patched", False):
+        deezer.DeezerProvider._spoty_loop_match_patched = True
+
+        _orig_deezer_text = deezer.DeezerProvider._search_track_text_async
+
+        async def _deezer_text_guarded(self, title, artist):
+            track = await _orig_deezer_text(self, title, artist)
+            if not track:
+                return None
+            ok, reason = _track_matches(track, title, artist)
+            if not ok:
+                _reject("deezer", "text", track, title, artist, reason)
+                return None
+            return track
+
+        deezer.DeezerProvider._search_track_text_async = _deezer_text_guarded
+
+
 def _patch_musicbrainz() -> None:
     """No-op SpotiFLAC's MusicBrainz lookup at download time.
 
@@ -298,4 +510,5 @@ _patch_qobuz_lock()
 _patch_community_dead()
 _patch_musicbrainz()
 _patch_track_provider()
+_patch_provider_matching()
 disable_progress_manager()

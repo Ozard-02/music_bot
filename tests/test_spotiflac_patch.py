@@ -152,3 +152,162 @@ def test_track_provider_ignores_failed_and_skipped():
 
     assert spotiflac_patch.pop_track_provider("f1") is None
     assert spotiflac_patch.pop_track_provider("s1") is None
+
+
+# ---------------------------------------------------------------------------
+# Provider matching guards — regression for "Noi no" by Articolo 31
+# (ISRC ITA270200113 missing from Qobuz): the fuzzy text fallback picked
+# "CHI SE NE FREGA DI NOI" and then a Vietnamese track with a similar duration.
+# ---------------------------------------------------------------------------
+
+_WRONG_QOBUZ_CANDIDATES = [
+    {"title": "CHI SE NE FREGA DI NOI", "performer": {"name": "Articolo 31"}, "duration": 163},
+    {"title": "Hoa Nở Không Màu", "performer": {"name": "Y Phuong"}, "duration": 303},
+    {"title": "Noi no", "performer": {"name": "Gazzelle"}, "duration": 196},
+    {"title": "Noi No", "performer": {"name": "Claudio Baglioni"}, "duration": 314},
+]
+
+
+@pytest.mark.parametrize("candidate", _WRONG_QOBUZ_CANDIDATES)
+def test_track_matches_rejects_unrelated_candidates(candidate):
+    ok, _reason = spotiflac_patch._track_matches(
+        candidate, "Noi no", "Articolo 31", 298,
+    )
+    assert not ok
+
+
+def test_track_matches_accepts_correct_and_remastered():
+    for title in ("Noi no", "Noi no (Remastered)", "NOI NO"):
+        ok, reason = spotiflac_patch._track_matches(
+            {"title": title, "performer": {"name": "Articolo 31"}, "duration": 298},
+            "Noi no",
+            "Articolo 31",
+            298,
+        )
+        assert ok, reason
+
+
+def test_track_matches_rejects_duration_mismatch():
+    ok, reason = spotiflac_patch._track_matches(
+        {"title": "Noi no", "performer": {"name": "Articolo 31"}, "duration": 330},
+        "Noi no",
+        "Articolo 31",
+        298,
+    )
+    assert not ok
+    assert "duration" in reason
+
+
+def test_artist_match_uses_any_artist():
+    assert spotiflac_patch._artist_matches(
+        "Articolo 31, Dj Jad", "Articolo 31",
+    )
+
+
+def test_title_match_does_not_accept_short_prefix():
+    assert not spotiflac_patch._title_matches("Noi no", "Noi")
+    assert spotiflac_patch._title_matches("Noi no", "Noi no (feat. X)")
+
+
+def test_isrc_match_normalizes_and_rejects_mismatch():
+    assert spotiflac_patch._isrc_matches("ITA270200113", "it-a27-02-00113")
+    assert not spotiflac_patch._isrc_matches("ITA270200113", "ITB002400413")
+    # Candidate without ISRC: cannot disprove, accept.
+    assert spotiflac_patch._isrc_matches("ITA270200113", "")
+
+
+@pytest.mark.asyncio
+async def test_qobuz_text_guard_rejects_wrong_candidate(monkeypatch):
+    from SpotiFLAC.providers import qobuz
+
+    qobuz.QobuzProvider._spoty_loop_match_patched = False
+
+    async def _fake_text(self, title, artist):
+        return _WRONG_QOBUZ_CANDIDATES[0]
+
+    monkeypatch.setattr(qobuz.QobuzProvider, "_search_by_text_async", _fake_text)
+    spotiflac_patch._patch_provider_matching()
+
+    result = await qobuz.QobuzProvider._search_by_text_async(
+        None, "Noi no", "Articolo 31",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_qobuz_duration_guard_rejects_wrong_candidate(monkeypatch):
+    from SpotiFLAC.providers import qobuz
+
+    qobuz.QobuzProvider._spoty_loop_match_patched = False
+
+    async def _fake_duration(self, title, artist, target):
+        return _WRONG_QOBUZ_CANDIDATES[1]
+
+    monkeypatch.setattr(
+        qobuz.QobuzProvider, "_search_by_text_with_duration_async", _fake_duration,
+    )
+    spotiflac_patch._patch_provider_matching()
+
+    result = await qobuz.QobuzProvider._search_by_text_with_duration_async(
+        None, "Noi no", "Articolo 31", 298,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_qobuz_isrc_guard_rejects_mismatch(monkeypatch):
+    from SpotiFLAC.providers import qobuz
+
+    qobuz.QobuzProvider._spoty_loop_match_patched = False
+
+    async def _fake_isrc(self, isrc):
+        return {"title": "Another song", "isrc": "ITB002400413"}
+
+    monkeypatch.setattr(qobuz.QobuzProvider, "_search_by_isrc_async", _fake_isrc)
+    spotiflac_patch._patch_provider_matching()
+
+    assert await qobuz.QobuzProvider._search_by_isrc_async(
+        None, "ITA270200113",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_deezer_text_guard_rejects_wrong_candidate(monkeypatch):
+    from SpotiFLAC.providers import deezer
+
+    deezer.DeezerProvider._spoty_loop_match_patched = False
+
+    async def _fake_text(self, title, artist):
+        return {"title": "Noi no", "artist": {"name": "Gazzelle"}, "duration": 196}
+
+    monkeypatch.setattr(
+        deezer.DeezerProvider, "_search_track_text_async", _fake_text,
+    )
+    spotiflac_patch._patch_provider_matching()
+
+    result = await deezer.DeezerProvider._search_track_text_async(
+        None, "Noi no", "Articolo 31",
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_qobuz_text_guard_accepts_correct_candidate(monkeypatch):
+    from SpotiFLAC.providers import qobuz
+
+    qobuz.QobuzProvider._spoty_loop_match_patched = False
+    correct = {
+        "title": "Noi no",
+        "performer": {"name": "Articolo 31"},
+        "duration": 298,
+    }
+
+    async def _fake_text(self, title, artist):
+        return correct
+
+    monkeypatch.setattr(qobuz.QobuzProvider, "_search_by_text_async", _fake_text)
+    spotiflac_patch._patch_provider_matching()
+
+    assert await qobuz.QobuzProvider._search_by_text_async(
+        None, "Noi no", "Articolo 31",
+    ) is correct

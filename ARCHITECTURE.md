@@ -42,9 +42,24 @@ imported. Idle RSS is a hard requirement (see AGENTS.md), so we split:
 |--------|------|
 | `download_job.py` | Entry point: reads one JSON spec from stdin, runs the job, emits JSON-lines |
 | `downloader.py` | Download engine (`run_url`): resolution, partition, parallel download, rename, cover |
-| `spotiflac_patch.py` | Import-time monkey-patches (console silencing, community-dead, MB no-op, provider tracking) |
+| `spotiflac_patch.py` | Import-time monkey-patches (console silencing, community-dead, MB no-op, provider tracking, provider matching guards) |
 | `m3u8.py` | Playlist m3u8 + cover generation (auto-build happens here, not in parent) |
 | `flac_utils.py` | FLAC tag read/write, cover embed/dedupe (httpx/mutagen/pillow live here) |
+
+### Provider matching guards
+
+SpotiFLAC falls back to fuzzy text search when an ISRC is missing from a
+provider catalog.  Qobuz's fallbacks are unsafe: `_search_by_text_async`
+returns its best candidate even below its own threshold, and
+`_search_by_text_with_duration_async` picks the closest duration without
+checking title or artist.  That downloaded a random unrelated track while
+Spotify tags were applied on top (right metadata, wrong audio).
+
+`spotiflac_patch._patch_provider_matching()` wraps those searches (plus
+Deezer's text search and Qobuz's ISRC search) and rejects candidates whose
+title/artist — and ISRC/duration where available — do not plausibly match.
+Rejections are logged to `spoty_loop.patch` at `WARNING`; the provider then
+fails and the next service runs (Deezer does an exact ISRC lookup).
 
 ## IPC protocol
 
