@@ -97,7 +97,7 @@ class TestResolveSearch:
         assert kind == "album"
 
     @pytest.mark.asyncio
-    async def test_album_wins_when_both_hit_and_b_not_track_album(
+    async def test_artist_song_query_prefers_track(
         self, client, mock_track, mock_album,
     ):
         mock_track.artists = "Test Artist"
@@ -105,10 +105,11 @@ class TestResolveSearch:
         mock_track.album = "Some Other Album"
         client.search.return_value = {"tracks": [mock_track], "albums": [mock_album]}
         url, display, kind = await resolve_search(client, "Test Artist - Test Song")
-        assert kind == "album"
+        assert kind == "track"
+        assert url == mock_track.external_url
 
     @pytest.mark.asyncio
-    async def test_track_wins_when_b_matches_track_album_name(
+    async def test_album_name_query_prefers_album(
         self, client, mock_track, mock_album,
     ):
         mock_track.album = "Test Album"
@@ -117,7 +118,8 @@ class TestResolveSearch:
         url, display, kind = await resolve_search(
             client, "Test Artist - Test Album"
         )
-        assert kind == "track"
+        assert kind == "album"
+        assert url == mock_album["external_url"]
 
     @pytest.mark.asyncio
     async def test_artist_hint_filters_tracks(self, client, mock_track):
@@ -142,6 +144,35 @@ class TestResolveSearch:
         )
         assert url == mock_album["external_url"]
         assert kind == "album"
+
+    @pytest.mark.asyncio
+    async def test_album_name_hint_picks_correct_album(self, client, mock_track):
+        wrong = {"external_url": "https://open.spotify.com/album/wrong",
+                 "name": "Some Album", "artists": "Test Artist"}
+        right = {"external_url": "https://open.spotify.com/album/right",
+                 "name": "Test Album", "artists": "Test Artist"}
+        client.search.return_value = {"tracks": [mock_track], "albums": [wrong, right]}
+        url, display, kind = await resolve_search(client, "Test Artist - Test Album")
+        assert kind == "album"
+        assert url == right["external_url"]
+        assert display == "Test Album"
+
+    @pytest.mark.asyncio
+    async def test_accentless_query_matches(self, client):
+        wrong = MagicMock()
+        wrong.artists = "Beyoncé"
+        wrong.title = "Halo"
+        wrong.external_url = "https://open.spotify.com/track/wrong"
+        wrong.album = "X"
+        right = MagicMock()
+        right.artists = "Beyoncé"
+        right.title = "Café"
+        right.external_url = "https://open.spotify.com/track/right"
+        right.album = "Y"
+        client.search.return_value = {"tracks": [wrong, right], "albums": []}
+        url, display, kind = await resolve_search(client, "Beyonce - Cafe")
+        assert kind == "track"
+        assert url == right.external_url
 
     @pytest.mark.asyncio
     async def test_no_results_raises(self, client):
