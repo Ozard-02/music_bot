@@ -180,7 +180,7 @@ async def fix_album_folder(
                         res["skipped"] += 1
                         res["details"].append(f"SKIP {fpath.name} — no Spotify match")
                         return
-                    track = best_track_match(tracks, artist)
+                    track = best_track_match(tracks, artist, title)
                 if not track or not getattr(track, "id", None):
                     res["failed"] += 1
                     res["failed_files"].append(fpath.name)
