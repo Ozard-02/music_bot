@@ -95,9 +95,9 @@ class QueueManager:
         with self._lock:
             conn = self._connect()
             existing = conn.execute(
-                "SELECT id FROM queue WHERE input_type=? AND query=? "
+                "SELECT id FROM queue WHERE input_type=? AND query=? AND user IS ? "
                 "AND status IN ('queued', 'running')",
-                (input_type, query),
+                (input_type, query, user),
             ).fetchone()
             if existing is not None:
                 return existing["id"], False
@@ -196,12 +196,21 @@ class QueueManager:
                     (text, item_id),
                 )
 
-    def get_status(self) -> dict:
+    def get_status(self, user_id: int | None = None) -> dict:
         conn = self._connect()
-        cur = conn.execute("SELECT status, COUNT(*) FROM queue GROUP BY status")
+        where = "1=1"
+        params: list = []
+        if user_id is not None:
+            where += " AND user IS ?"
+            params.append(user_id)
+        cur = conn.execute(
+            f"SELECT status, COUNT(*) FROM queue WHERE {where} GROUP BY status",
+            params,
+        )
         counts = dict(cur.fetchall())
         cur = conn.execute(
-            "SELECT id FROM queue WHERE status='queued' ORDER BY id LIMIT 1"
+            f"SELECT id FROM queue WHERE {where} AND status='queued' ORDER BY id LIMIT 1",
+            params,
         )
         row = cur.fetchone()
         return {
@@ -212,11 +221,17 @@ class QueueManager:
             "next_id": row["id"] if row else None,
         }
 
-    def get_running(self) -> list[dict]:
+    def get_running(self, user_id: int | None = None) -> list[dict]:
         conn = self._connect()
-        cursor = conn.execute(
-            "SELECT * FROM queue WHERE status='running' ORDER BY id"
-        )
+        if user_id is None:
+            cursor = conn.execute(
+                "SELECT * FROM queue WHERE status='running' ORDER BY id"
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT * FROM queue WHERE status='running' AND user IS ? ORDER BY id",
+                (user_id,),
+            )
         return [dict(row) for row in cursor.fetchall()]
 
     def log_failed_track(self, item_id: int, track_title: str, error: str | None = None):
@@ -254,19 +269,37 @@ class QueueManager:
         )
         return {row["track_title"] for row in cursor.fetchall()}
 
-    def purge_all(self) -> int:
+    def purge_all(self, user_id: int | None = None) -> int:
+        """Delete queued/done/failed rows (all users, or one user when given)."""
         with self._lock:
             conn = self._connect()
             with conn:
-                cursor = conn.execute("DELETE FROM queue")
+                if user_id is None:
+                    conn.execute("DELETE FROM failed_tracks")
+                    cursor = conn.execute("DELETE FROM queue")
+                else:
+                    conn.execute(
+                        "DELETE FROM failed_tracks WHERE item_id IN "
+                        "(SELECT id FROM queue WHERE user IS ?)",
+                        (user_id,),
+                    )
+                    cursor = conn.execute(
+                        "DELETE FROM queue WHERE user IS ?", (user_id,)
+                    )
                 return cursor.rowcount
 
-    def get_history(self, limit: int = 10) -> list[dict]:
+    def get_history(self, limit: int = 10, user_id: int | None = None) -> list[dict]:
         conn = self._connect()
-        cursor = conn.execute(
-            "SELECT * FROM queue ORDER BY id DESC LIMIT ?",
-            (limit,),
-        )
+        if user_id is None:
+            cursor = conn.execute(
+                "SELECT * FROM queue ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT * FROM queue WHERE user IS ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            )
         return [dict(row) for row in cursor.fetchall()]
 
     def upsert_user(self, telegram_user_id: int, username: str, folder: str, quality: str):

@@ -11,7 +11,7 @@ os.environ["TELEGRAM_ALLOWED_USER_IDS"] = "12345"
 # neutralize the legacy var, whether it leaks from the shell or from ./env
 os.environ["TELEGRAM_ALLOWED_USER_ID"] = ""
 
-from bot import Bot, _parse_allowed_user_ids, ALLOWED_USER_IDS
+from bot import Bot, _parse_allowed_user_ids, _user_folder, ALLOWED_USER_IDS
 
 
 @pytest.fixture
@@ -39,6 +39,14 @@ def _assert_sent(bot, contains: str):
 class TestAllowlist:
     def test_parse_allowed_user_ids(self):
         assert _parse_allowed_user_ids() == {12345}
+
+    def test_user_folder_unique_without_username(self):
+        assert _user_folder({"id": 10, "first_name": "Andrea"}) != _user_folder(
+            {"id": 11, "first_name": "Andrea"}
+        )
+
+    def test_user_folder_uses_username(self):
+        assert _user_folder({"id": 10, "username": "espo"}) == "espo_Music"
 
     @pytest.mark.asyncio
     async def test_unknown_user_rejected(self, bot):
@@ -95,7 +103,7 @@ class TestHandlers:
     @pytest.mark.asyncio
     async def test_purge(self, bot):
         bot._client.send_message = AsyncMock()
-        bot._qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        bot._qm.enqueue_unique("link", "https://open.spotify.com/track/abc", 12345)
         await bot._handle_update(_update(text="/purge"))
         bot._client.send_message.assert_awaited_once()
         assert "Purged" in bot._client.send_message.call_args.args[1]
@@ -153,6 +161,20 @@ class TestHandlers:
             {"folders": 1, "fixed": 2, "moved": 0, "failed": 0, "failed_files": [], "moved_files": []}, 7))
         await bot._handle_update(_update(text="/fixmetadata --lyrics"))
         assert bot._run_command_job.call_args.args[1]["lyrics"] is True
+
+    @pytest.mark.asyncio
+    async def test_fixmetadata_lyrics_flag_after_folder(self, bot, tmp_path):
+        bot._cfg["output_dir"] = str(tmp_path)
+        folder = tmp_path / "espo_Music" / "Album"
+        folder.mkdir(parents=True)
+        bot._client.send_message = AsyncMock(return_value={"message_id": 7})
+        bot._client.edit_message = AsyncMock()
+        bot._run_command_job = AsyncMock(return_value=(
+            {"folders": 1, "fixed": 2, "moved": 0, "failed": 0, "failed_files": [], "moved_files": []}, 7))
+        await bot._handle_update(_update(text="/fixmetadata Album --lyrics"))
+        spec = bot._run_command_job.call_args.args[1]
+        assert spec["lyrics"] is True
+        assert spec["folder"].endswith("/Album")
 
     @pytest.mark.asyncio
     async def test_fixmetadata_missing_folder(self, bot, tmp_path):

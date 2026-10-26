@@ -101,7 +101,12 @@ class SingleInstanceLock:
 
 
 def _user_folder(user: dict) -> str:
-    return user_folder_name(user.get("username"), fallback=user.get("first_name") or "user")
+    username = user.get("username")
+    if username:
+        return user_folder_name(username)
+    # No username: include the user id, otherwise two "Andrea"s share a folder.
+    name = f"{user.get('first_name') or 'user'}_{user['id']}"
+    return user_folder_name(name)
 
 
 def _get_or_create_user(qm: QueueManager, user: dict, default_quality: str) -> dict:
@@ -152,11 +157,11 @@ class Bot:
         elif command == "help":
             await self._client.send_message(chat_id, format_help())
         elif command == "status":
-            await self._status(chat_id)
+            await self._status(chat_id, user)
         elif command == "quality":
             await self._quality(chat_id, user, args)
         elif command == "purge":
-            count = await asyncio.to_thread(self._qm.purge_all)
+            count = await asyncio.to_thread(self._qm.purge_all, user["id"])
             await self._client.send_message(
                 chat_id, f"🗑️ <b>Purged {count} item{'s' if count != 1 else ''}</b>"
             )
@@ -167,10 +172,11 @@ class Bot:
         elif command == "rmplaylist":
             await self._rmplaylist(chat_id, user, args)
 
-    async def _status(self, chat_id: int) -> None:
-        s = await asyncio.to_thread(self._qm.get_status)
-        history = await asyncio.to_thread(self._qm.get_history, 5)
-        running = await asyncio.to_thread(self._qm.get_running)
+    async def _status(self, chat_id: int, user: dict) -> None:
+        uid = user["id"]
+        s = await asyncio.to_thread(self._qm.get_status, uid)
+        history = await asyncio.to_thread(self._qm.get_history, 5, uid)
+        running = await asyncio.to_thread(self._qm.get_running, uid)
         user_names = {
             r["telegram_user_id"]: (r.get("username") or r["folder"])
             for r in await asyncio.to_thread(self._qm.get_users)
@@ -380,11 +386,8 @@ class Bot:
         ucfg = _user_cfg(self._qm, self._cfg, user)
         root = Path(ucfg["output_dir"])
 
-        lyrics = False
-        parts = args.split()
-        if parts and parts[0].lower() == "--lyrics":
-            lyrics = True
-            parts = parts[1:]
+        lyrics = any(p.lower() == "--lyrics" for p in args.split())
+        parts = [p for p in args.split() if p.lower() != "--lyrics"]
 
         if not parts:
             folder = root
@@ -589,7 +592,7 @@ class Bot:
         self._wake_event.set()
         self._logger.info("Enqueued #%d: %s (%s)", item_id, value, input_type)
 
-        s = await asyncio.to_thread(self._qm.get_status)
+        s = await asyncio.to_thread(self._qm.get_status, user["id"])
         pos = s["queued"] + s["running"]
         await self._client.send_message(
             chat_id,
