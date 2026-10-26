@@ -374,6 +374,47 @@ class TestUserColumn:
         item_id, _ = qm.enqueue_unique("link", "url")
         assert qm.get_item(item_id)["user"] is None
 
+    def test_same_query_different_users_not_deduped(self, queue_manager: QueueManager):
+        qm = queue_manager
+        id1, new1 = qm.enqueue_unique("link", "same-url", user=1)
+        id2, new2 = qm.enqueue_unique("link", "same-url", user=2)
+        assert new1 and new2
+        assert id1 != id2
+        assert qm.get_item(id2)["user"] == 2
+
+    def test_same_query_same_user_deduped(self, queue_manager: QueueManager):
+        qm = queue_manager
+        id1, _ = qm.enqueue_unique("link", "same-url", user=1)
+        id2, is_new = qm.enqueue_unique("link", "same-url", user=1)
+        assert not is_new
+        assert id1 == id2
+
+    def test_purge_scoped_to_user(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue_unique("link", "a", user=1)
+        qm.enqueue_unique("link", "b", user=2)
+        assert qm.purge_all(1) == 1
+        assert [r["query"] for r in qm.get_history()] == ["b"]
+
+    def test_status_history_running_scoped(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue_unique("link", "a", user=1)
+        qm.enqueue_unique("link", "b", user=2)
+        qm.dequeue()  # oldest -> user 1 running
+        assert qm.get_status(1)["running"] == 1
+        assert qm.get_status(1)["queued"] == 0
+        assert qm.get_status(2)["queued"] == 1
+        assert [r["query"] for r in qm.get_history(10, 2)] == ["b"]
+        assert [r["query"] for r in qm.get_running(2)] == []
+        assert [r["query"] for r in qm.get_running(1)] == ["a"]
+
+    def test_purge_removes_failed_track_rows(self, queue_manager: QueueManager):
+        qm = queue_manager
+        item_id, _ = qm.enqueue_unique("link", "a", user=1)
+        qm.log_failed_track(item_id, "Broken", "err")
+        qm.purge_all(1)
+        assert qm.get_failed_tracks() == []
+
 
 class TestUsersTable:
     def test_upsert_and_get(self, queue_manager: QueueManager):
