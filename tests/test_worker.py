@@ -122,6 +122,24 @@ class TestWorkerProcess:
         assert "timed out" in msg
 
     @pytest.mark.asyncio
+    async def test_crash_requeues_instead_of_failing(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        async def crash_job(spec, *, logger, on_event, stall_timeout, deadline=None):
+            return None, "crash"
+
+        with patch("worker.stream_job", new=crash_job):
+            assert await worker._run_job(item, set(), {}, 12345) is None
+
+        row = qm.get_item(item["id"])
+        assert row["status"] == "queued"
+        assert row["retries"] == 1
+        bot.assert_awaited()
+        assert "retry" in bot.call_args.args[0].lower()
+
+    @pytest.mark.asyncio
     async def test_success_sends_correct_message(self, worker, bot):
         qm = worker._queue
         qm.enqueue_unique("link", "https://open.spotify.com/track/abc")

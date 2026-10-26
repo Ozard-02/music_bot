@@ -373,11 +373,30 @@ class Worker:
         if reason in ("stall", "timeout"):
             return await self._kill_timeout(item, display, chat, reason)
         if reason == "crash":
-            await asyncio.to_thread(self._queue.mark_failed, item["id"], "subprocess crashed")
-            await self._safe_notify(
-                f"❌ <b>{esc(display)}</b>\n  💥 Download subprocess crashed — will retry",
-                chat,
+            # A crash is transient (OOM/SIGKILL): retry it like any other
+            # failure instead of marking it permanently failed.  The old code
+            # said "will retry" but never requeued.
+            decision = decide_failure(
+                item,
+                {"failed_tracks": [(item.get("id"), display, "crash")]},
+                set(),
             )
+            if decision.action == "requeue":
+                delay = decision.detail
+                await asyncio.to_thread(self._queue.requeue, item["id"], delay)
+                when = f"retry in {delay}s" if delay > 0 else "retrying now"
+                await self._safe_notify(
+                    f"🔄 <b>{esc(display)}</b>\n  💥 Download subprocess crashed — {when}",
+                    chat,
+                )
+            else:
+                await asyncio.to_thread(
+                    self._queue.mark_failed, item["id"], "subprocess crashed",
+                )
+                await self._safe_notify(
+                    f"❌ <b>{esc(display)}</b>\n  💥 Download subprocess crashed — gave up",
+                    chat,
+                )
             return None
         return result, display
 
