@@ -215,6 +215,29 @@ class TestFixAlbumFolder:
         assert res["skipped"] == 0
 
     @pytest.mark.asyncio
+    async def test_tagless_file_uses_title_hint(self, tmp_path):
+        folder = self._make_folder(tmp_path, names=["Articolo 31 - Noi no.flac"])
+        wrong = _track(
+            album="PROTOMARANZA", title="CHI SE NE FREGA DI NOI",
+            album_artist="Articolo 31", artists="Articolo 31",
+        )
+        right = _track(
+            album="Domani smetto", title="Noi no",
+            album_artist="Articolo 31", artists="Articolo 31",
+        )
+
+        with self._patch_flac(), patch(
+            "SpotiFLAC.client.SpotifyMetadataClient"
+        ) as client_cls:
+            client = client_cls.return_value
+            client.search_tracks_async = AsyncMock(return_value=[wrong, right])
+            res = await fix_album_folder(folder, apply=False)
+
+        details = " ".join(res["details"])
+        assert "Domani smetto" in details
+        assert "PROTOMARANZA" not in details
+
+    @pytest.mark.asyncio
     async def test_foreign_file_moved_to_real_album_folder(self, tmp_path):
         folder = self._make_folder(
             tmp_path,
