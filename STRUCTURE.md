@@ -6,7 +6,7 @@ music_bot_rewrite/
 ├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (parent)
 ├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (parent)
 ├── queue_manager.py     # SQLite queue (parent; stdlib-only)
-├── resolver.py          # text/URL parsing only (parent; no SpotiFLAC)
+├── resolver.py          # input parsing + search resolution (parent; no SpotiFLAC)
 ├── config.py            # constants, config.json, logger (parent; silence inlined)
 ├── library.py           # per-user library paths (parent)
 ├── track_utils.py       # sanitize/path helpers (parent; TrackMetadata TYPE_CHECKING)

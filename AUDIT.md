@@ -1,40 +1,56 @@
-# Bug audit (pre-fix baseline)
+# Bug audit
 
-Audit performed against `561c6bc`. The full temp reproduction suite was run
-separately; this file records the findings that are being fixed next.
+Audit performed against `561c6bc`; fixes below are on `main` after that commit.
 
-## High
+## Fixed
 
-1. `resolver.py` — `"Artist - Song"` can resolve to an album and
-   `"Artist - Album"` to a single track. `_pick_between_track_and_album`
-   checks `second_part == track.album` before the album name, and defaults to
-   the album when the artist matches.
-2. `scripts/fix_metadata.py` — tagless files are matched with
-   `best_track_match(tracks, artist)` (no title hint), so a file can be
-   retagged and moved using another song by the same artist.
-3. `queue_manager.py` — `enqueue_unique()` dedupes on `(type, query)` only,
-   ignoring `user`; a second user's identical link is dropped.
-4. `queue_manager.py` — `purge_all()` deletes every user's queue; `/purge`
-   is reachable by any allowed user.
+1. **Resolver album/song inversion** (`resolver.py`) — `"Artist - Song"`
+   resolved to an album and `"Artist - Album"` to a single track. The picker
+   now prefers the album only when the second part equals the album name;
+   otherwise it keeps the track. Album matching also honours the album-name
+   hint.
+2. **Accent-insensitive matching** (`resolver.py`) — queries like
+   `Beyonce - Cafe` now match `Beyoncé - Café` (ASCII fold + punctuation
+   normalisation).
+3. **`fix_metadata` wrong-song retag** (`scripts/fix_metadata.py`) — the
+   tagless-file path now passes the title hint to `best_track_match`.
+4. **Queue user scoping** (`queue_manager.py`, `bot.py`) —
+   `enqueue_unique` dedupes per user; `/purge` and `/status` (plus queue
+   position) are per user; purging also removes that user's
+   `failed_tracks` rows.
+5. **m3u8 path drift** (`track_utils.py`, `m3u8.py`) — playlists now write
+   the path that really exists (ours, or SpotiFLAC's sanitized fallback).
+6. **Crash retry** (`worker.py`) — a crashed subprocess is requeued with
+   backoff (bounded by the normal retry/age limits) instead of being marked
+   failed while the user is told it will retry.
+7. **`/fixmetadata --lyrics` placement** (`bot.py`) — accepted anywhere in
+   the arguments, not just as the first token.
+8. **User-folder collision** (`bot.py`) — users without a username get a
+   folder that includes their Telegram id, so two "Andrea"s no longer share
+   a library.
 
-## Medium
+## Not fixed (documented)
 
-5. `m3u8.py` — tracks found only under SpotiFLAC's sanitized path are listed
-   in the playlist with our (missing) path.
-6. `worker.py` — the crash path marks the item failed but tells the user
-   "will retry"; the item is never requeued.
-7. `bot.py` — `/fixmetadata --lyrics` is only recognised as the first token.
-8. `track_utils.py` — `partition_tracks()` treats any existing path (even a
-   0-byte/truncated file) as a completed download.
+- `partition_tracks()` is still existence-based: a 0-byte/truncated file at
+  the expected path counts as downloaded. A content/duration check is the
+  next candidate.
+- `failed_tracks` is still keyed by title, so two different songs sharing a
+  title can be skipped together.
+- SpotiFLAC's post-download validation is intentionally loose (preview/large
+  mismatch only); provider title/artist guards remain the real defence.
 
-## Low
+## Known external limitation (reported track `5Q1CqDubt01LzIsZUTDoWm`)
 
-9. `resolver.py` — accent-less queries do not match accented metadata.
-10. `resolver.py` — album matching ignores the album-name hint.
-11. `library.py`/`bot.py` — users without a username but with the same first
-    name share one library folder.
-12. `queue_manager.py` — `purge_all()` leaves orphaned `failed_tracks` rows.
+`No Flash` by Wemme Flow / Mr. Monkey is **only on Amazon Music** (Songlink
+resolves the ASIN, Deezer/Qobuz/Apple/Tidal do not have it). Qobuz's wrong
+text candidate is correctly rejected. Amazon's fallbacks currently fail in
+this environment:
 
-Post-download duration validation in SpotiFLAC is intentionally loose
-(preview/large-mismatch only); the provider title/artist guards remain the
-real defence and are not changed here.
+- community `amz-oss.spotbye.qzz.io` → 503
+- Antra `amazon.anandserver.cfd` → 401
+- MusicDL `dl.musicdl.me` → timeout
+- `amz.squid.wtf` → DNS failure
+- mono API → needs a Chromium-based browser (not installed)
+
+This is an upstream/source availability problem, not a spoty_loop matching
+bug.
