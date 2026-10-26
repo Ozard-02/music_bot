@@ -263,6 +263,26 @@ class TestBuildM3u8Lines:
         assert len(missing) == 2
         assert lines == ["#EXTM3U"]
 
+    def test_uses_spotiflac_path_when_only_it_exists(self, tmp_path):
+        music = tmp_path / "music"
+        cfg = {"output_dir": str(music), "first_artist_only": True, "filename_format": "{artist} - {title}"}
+        track = make_track(
+            title="Back in Black", first_artist="AC/DC", artists="AC/DC",
+            album="Back in Black", album_artist="AC/DC",
+        )
+        spoti_rel = spotiflac_track_relative_path(track, cfg)
+        spoti_path = music / spoti_rel
+        spoti_path.parent.mkdir(parents=True)
+        spoti_path.touch()
+
+        lines, count, missing = build_m3u8_lines([track], cfg)
+        assert count == 1
+        assert missing == []
+        # The path written must be the file that really exists
+        rel_lines = [line for line in lines if not line.startswith("#")]
+        assert rel_lines == [spoti_rel]
+        assert (music / rel_lines[0]).is_file()
+
     @patch("m3u8.Path.exists", return_value=True)
     def test_empty_track_list(self, mock_exists):
         cfg = {"output_dir": "/music", "first_artist_only": True, "filename_format": "{artist} - {title}"}

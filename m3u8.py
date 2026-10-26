@@ -21,7 +21,12 @@ from SpotiFLAC.client import SpotifyMetadataClient
 from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
 
 from config import load_config
-from track_utils import partition_tracks, sanitize, track_relative_path
+from track_utils import (
+    on_disk_relative_path,
+    partition_tracks,
+    sanitize,
+    track_relative_path,
+)
 
 
 def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str], int, list[tuple[str, str, str]]]:
@@ -29,8 +34,10 @@ def build_m3u8_lines(tracks: list[TrackMetadata], cfg: dict) -> tuple[list[str],
     lines = ["#EXTM3U"]
     count = 0
     for t in existing:
+        rel = on_disk_relative_path(t, cfg)
+        if not rel:
+            continue  # vanished between the partition check and now
         count += 1
-        rel = track_relative_path(t, cfg)
         lines.append(f"#EXTINF:{t.duration_seconds or 0:.0f},{t.first_artist} - {t.title}")
         lines.append(rel)
     missing_out = [(t.first_artist, t.title, track_relative_path(t, cfg)) for t in missing]
