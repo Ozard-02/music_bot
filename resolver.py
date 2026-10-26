@@ -5,10 +5,31 @@ The parent imports this module and only ever calls `parse_input`/`format_help`
 the download subprocess."""
 
 import re
+import unicodedata
 
 SPOTIFY_URL_RE = re.compile(
     r"^https?://open\.spotify\.com/(track|album|playlist|artist)/[A-Za-z0-9_-]{22}(\?.*)?$"
 )
+
+
+def _normalize_text(value: str) -> str:
+    """Lowercase, strip accents/punctuation, collapse whitespace."""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _title_matches(hint: str, candidate: str) -> bool:
+    hint_n = _normalize_text(hint)
+    cand_n = _normalize_text(candidate)
+    if not hint_n or not cand_n:
+        return False
+    if hint_n == cand_n:
+        return True
+    return min(len(hint_n), len(cand_n)) >= 4 and (
+        hint_n in cand_n or cand_n in hint_n
+    )
 
 
 def parse_input(text: str) -> tuple[str, str]:
@@ -63,10 +84,10 @@ async def resolve_search(
     albums = results.get("albums", [])
 
     best_track = best_track_match(tracks, a, b)
-    best_album = _best_album_match(albums, a)
+    best_album = _best_album_match(albums, a, b)
 
     if best_track and best_album:
-        return _pick_between_track_and_album(best_track, best_album, b, a)
+        return _pick_between_track_and_album(best_track, best_album, b)
     if best_album:
         return (best_album["external_url"], best_album["name"], "album")
     if best_track:
@@ -74,54 +95,60 @@ async def resolve_search(
     raise ValueError(f"No results found for '{query}'")
 
 
-def _pick_between_track_and_album(track, album, second_part: str, first_part: str) -> tuple[str, str, str]:
-    """Both a track and an album matched — decide which the user meant."""
-    track_album = getattr(track, "album", "") or ""
-    if second_part.lower() == track_album.lower():
+def _pick_between_track_and_album(track, album, second_part: str) -> tuple[str, str, str]:
+    """Both a track and an album matched — decide which the user meant.
+
+    A second part equal to the album name means "Album" (help: Artist — Album
+    downloads the album). Otherwise the track wins: a song query must never
+    download a random album just because the artist matches.
+    """
+    album_name = _normalize_text(album.get("name", ""))
+    if second_part and _normalize_text(second_part) == album_name:
+        return (album["external_url"], album["name"], "album")
+    if track:
         return (track.external_url, track.title, "track")
-    album_name = album.get("name", "") or ""
-    if second_part.lower() in album_name.lower():
-        return (album["external_url"], album["name"], "album")
-    album_artist = album.get("artists", "") or ""
-    if first_part.lower() in album_artist.lower():
-        return (album["external_url"], album["name"], "album")
-    return (track.external_url, track.title, "track")
+    return (album["external_url"], album["name"], "album")
 
 
 def best_track_match(tracks: list, artist_hint: str = "", title_hint: str = ""):
     """Return the search result that best matches the hints, else the first.
 
-    Artist and title are both scored: the artist match wins, but among tracks
-    by the same artist the one whose title matches the query wins too.  Before
-    this, a query like "Articolo 31 - Noi no" could resolve to any track by
-    that artist because only the artist hint was checked.
+    Artist and title are both scored, accent/punctuation-insensitive: the
+    artist match wins, but among tracks by the same artist the one whose title
+    matches the query wins too.
     """
-    artist = (artist_hint or "").strip().lower()
-    title = (title_hint or "").strip().lower()
+    artist = _normalize_text(artist_hint)
+    title = _normalize_text(title_hint)
     if not artist and not title:
         return tracks[0] if tracks else None
 
     best = None
     best_score = 0
     for t in tracks:
-        track_artist = (getattr(t, "artists", "") or "").lower()
-        track_title = (getattr(t, "title", "") or "").lower()
         score = 0
-        if artist and artist in track_artist:
+        if artist and artist in _normalize_text(getattr(t, "artists", "")):
             score += 2
-        if title and (
-            title == track_title
-            or (min(len(title), len(track_title)) >= 4
-                and (title in track_title or track_title in title))
-        ):
+        if title and _title_matches(title_hint, getattr(t, "title", "")):
             score += 1
         if score > best_score:
             best, best_score = t, score
     return best if best is not None else (tracks[0] if tracks else None)
 
 
-def _best_album_match(albums: list, artist_hint: str):
+def _best_album_match(albums: list, artist_hint: str, title_hint: str = ""):
+    """Pick the album matching the artist and, when given, the album name."""
+    artist = _normalize_text(artist_hint)
+    title = _normalize_text(title_hint)
+    best = None
+    best_score = -1
     for alb in albums:
-        if artist_hint.lower() in (alb.get("artists", "") or "").lower():
-            return alb
-    return albums[0] if albums else None
+        name = _normalize_text(alb.get("name", ""))
+        artists = _normalize_text(alb.get("artists", ""))
+        score = 0
+        if artist and (artist in artists or artist == name):
+            score += 2
+        if title and title == name:
+            score += 2
+        if score > best_score:
+            best, best_score = alb, score
+    return best if best is not None else (albums[0] if albums else None)
