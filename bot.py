@@ -122,6 +122,11 @@ def _user_cfg(qm: QueueManager, cfg: dict, user: dict) -> dict:
     return user_cfg(cfg, row["folder"])
 
 
+# Per-file lines in a command summary; beyond this only a count is shown
+# (keeps the message under Telegram's 4096-character limit).
+_MAX_LISTED_FILES = 15
+
+
 def _format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     hours, rem = divmod(seconds, 3600)
@@ -268,9 +273,12 @@ class Bot:
         msg = await self._client.send_message(chat_id, header)
         message_id = msg.get("message_id") if msg else None
 
-        def _edit(text: str) -> None:
+        # edit_message is a coroutine: it must be awaited, or no progress
+        # update and no failure notice ever reaches the chat (the message
+        # stayed on the "Running…" header forever).
+        async def _edit(text: str) -> None:
             if message_id:
-                self._client.edit_message(chat_id, message_id, text)
+                await self._client.edit_message(chat_id, message_id, text)
 
         spec = {**spec, "log_path": self._logger.handlers[0].baseFilename if self._logger.handlers else None}
 
@@ -278,7 +286,7 @@ class Bot:
             if event.get("event") != "progress":
                 return
             pct = f" \u00b7 {event.get('done', 0) * 100 // max(1, event.get('total', 1))}%" if event.get("total") else ""
-            _edit(
+            await _edit(
                 f"⏳ {header}\n  {event.get('done', 0)}/{event.get('total', 0)}{pct}\n"
                 f"  <code>{esc((event.get('title') or '')[:200])}</code>"
             )
@@ -292,13 +300,13 @@ class Bot:
             )
         except Exception as e:
             self._logger.exception("Command job error: %s", e)
-            _edit(f"❌ <b>Command error:</b> <code>{esc(e)}</code>")
+            await _edit(f"❌ <b>Command error:</b> <code>{esc(e)}</code>")
             return None, message_id
 
         if reason == "crash":
-            _edit("❌ <b>Command failed — check logs</b>")
+            await _edit("❌ <b>Command failed — check logs</b>")
         elif reason is not None:
-            _edit("❌ <b>Command stalled — killed after no progress for a long time</b>")
+            await _edit("❌ <b>Command stalled — killed after no progress for a long time</b>")
         return result, message_id
 
     async def _mkplaylist(self, chat_id: int, user: dict, args: str) -> None:
@@ -395,6 +403,14 @@ class Bot:
             folder = Path(" ".join(parts)).expanduser()
             if not folder.is_absolute():
                 folder = root / folder
+            # fix_metadata re-tags AND moves files: keep it inside this
+            # user's own library (no "../other_Music", no absolute paths
+            # into another user's folder or the rest of the disk).
+            if not folder.resolve().is_relative_to(root.resolve()):
+                await self._client.send_message(
+                    chat_id, f"❌ Folder must be inside your library: <code>{esc(root)}</code>"
+                )
+                return
             if not folder.is_dir():
                 await self._client.send_message(
                     chat_id, f"❌ Not a folder: <code>{esc(folder)}</code>"
@@ -416,12 +432,20 @@ class Bot:
             f"  Failed: {result['failed']}",
             f"  🎤 Lyrics: {'fetched' if lyrics else 'kept as-is'}",
         ]
-        if result.get("failed_files"):
-            lines.append("  ❌ <code>" + ", ".join(esc(f) for f in result["failed_files"]) + "</code>")
-        if result.get("moved_files"):
+        # Telegram rejects messages over 4096 chars: on a big library an
+        # uncapped file list made the final summary edit fail silently.
+        failed_files = result.get("failed_files") or []
+        if failed_files:
+            lines.append("  ❌ <code>" + ", ".join(esc(f) for f in failed_files[:_MAX_LISTED_FILES]) + "</code>")
+            if len(failed_files) > _MAX_LISTED_FILES:
+                lines.append(f"  … and {len(failed_files) - _MAX_LISTED_FILES} more failed (see logs)")
+        moved_files = result.get("moved_files") or []
+        if moved_files:
             lines.append("  📦 Moved to their album folder:")
-            for f in result["moved_files"]:
+            for f in moved_files[:_MAX_LISTED_FILES]:
                 lines.append(f"  <code>{esc(Path(f).name)} \u2192 {esc(Path(f).parent.name)}/</code>")
+            if len(moved_files) > _MAX_LISTED_FILES:
+                lines.append(f"  … and {len(moved_files) - _MAX_LISTED_FILES} more moved")
         if message_id:
             await self._client.edit_message(chat_id, message_id, "\n".join(lines))
 
