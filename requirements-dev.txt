@@ -1,0 +1,8 @@
+# Test-only setup: pip install -r requirements-dev.txt
+# Mirrors the Dockerfile (SpotiFLAC + pydoll are installed there, not via
+# requirements.txt) plus the pytest plugins the async tests need.
+-r requirements.txt
+SpotiFLAC==1.6.0
+pydoll-python
+pytest>=8
+pytest-asyncio>=0.23
