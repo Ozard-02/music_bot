@@ -25,6 +25,7 @@ music_bot_rewrite/
 ├── docker-compose.yml         # local dev (build .)
 ├── docker-compose.truenas.yml # TrueNAS (ghcr image)
 ├── requirements.txt           # subprocess deps (parent needs none)
+├── requirements-dev.txt       # test deps (SpotiFLAC as in Dockerfile + pytest plugins)
 ├── config.default.json
 ├── .env.example
 ├── .gitignore
