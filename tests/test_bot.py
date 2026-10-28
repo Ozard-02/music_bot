@@ -185,6 +185,58 @@ class TestHandlers:
         bot._run_command_job.assert_not_awaited()
         assert "Not a folder" in bot._client.send_message.call_args.args[1]
 
+    @pytest.mark.asyncio
+    async def test_fixmetadata_refuses_folders_outside_library(self, bot, tmp_path):
+        """fix_metadata moves files: never outside the user's own library."""
+        bot._cfg["output_dir"] = str(tmp_path)
+        other = tmp_path / "someone_Music"
+        other.mkdir()
+        bot._client.send_message = AsyncMock()
+        bot._run_command_job = AsyncMock()
+        for arg in ("../someone_Music", str(other)):
+            await bot._handle_update(_update(text=f"/fixmetadata {arg}"))
+            bot._run_command_job.assert_not_awaited()
+            assert "inside your library" in bot._client.send_message.call_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_fixmetadata_long_file_lists_are_capped(self, bot, tmp_path):
+        """A huge result must still fit one Telegram message (4096 chars)."""
+        bot._cfg["output_dir"] = str(tmp_path)
+        bot._client.send_message = AsyncMock(return_value={"message_id": 7})
+        bot._client.edit_message = AsyncMock()
+        moved = [f"/x/album{i}/artist - title {i}.flac" for i in range(500)]
+        bot._run_command_job = AsyncMock(return_value=(
+            {"folders": 500, "fixed": 500, "moved": 500, "failed": 0,
+             "failed_files": [], "moved_files": moved}, 7))
+        await bot._handle_update(_update(text="/fixmetadata"))
+        edited = bot._client.edit_message.call_args.args[2]
+        assert len(edited) < 4096
+        assert "more moved" in edited
+
+
+class TestCommandJob:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reason, expected", [
+        ("crash", "Command failed"),
+        ("stall", "Command stalled"),
+    ])
+    async def test_failure_is_edited_into_the_message(self, bot, monkeypatch, reason, expected):
+        """edit_message is a coroutine: the failure notice must be awaited."""
+        import bot as bot_mod
+
+        async def fake_stream_job(spec, **kw):
+            await kw["on_event"]({"event": "progress", "done": 1, "total": 2, "title": "a"})
+            return None, reason
+
+        monkeypatch.setattr(bot_mod, "stream_job", fake_stream_job)
+        bot._client.send_message = AsyncMock(return_value={"message_id": 7})
+        bot._client.edit_message = AsyncMock()
+        result, message_id = await bot._run_command_job(12345, {"type": "m3u8", "header": "h"})
+        assert result is None and message_id == 7
+        texts = [c.args[2] for c in bot._client.edit_message.await_args_list]
+        assert any("1/2" in t for t in texts)          # progress reached the chat
+        assert expected in texts[-1]                   # and so did the failure
+
 
 class TestEnqueue:
     @pytest.mark.asyncio
