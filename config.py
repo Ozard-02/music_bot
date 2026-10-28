@@ -53,7 +53,9 @@ def load_config(logger: logging.Logger) -> dict:
     if isinstance(services, str):
         services = [s.strip() for s in services.split(",")]
     return {
-        "output_dir": cfg.get("downloadPath", os.path.expanduser("~/Music")),
+        # expanduser: config.default.json ships "~/Music", which would
+        # otherwise create a literal "~" directory under the working dir.
+        "output_dir": os.path.expanduser(cfg.get("downloadPath") or "~/Music"),
         "filename_format": cfg.get("filenameTemplate", "{artist} - {title}"),
         "use_artist_subfolders": "{album_artist}" in folder_template,
         "use_album_subfolders": "{album}" in folder_template,
