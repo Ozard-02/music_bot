@@ -33,7 +33,11 @@ async def _job(spec: dict, logger: logging.Logger) -> DownloadResult:
     cfg = spec.get("cfg") or {}
     skip_titles = set(spec.get("skip_titles") or [])
 
-    async def _progress(done, total, title, provider=None):
+    # Plain function: downloader calls progress_cb synchronously. (An async
+    # def here was never awaited, so no progress line ever reached the
+    # parent: /status stayed on "downloading…" and long playlists hit the
+    # stall watchdog.)
+    def _progress(done, total, title, provider=None):
         _emit({
             "event": "progress",
             "done": done,

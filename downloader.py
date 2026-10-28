@@ -259,7 +259,9 @@ async def _download_tracks(
             if provider:
                 providers[provider] = providers.get(provider, 0) + 1
             if progress_cb:
-                await asyncio.to_thread(progress_cb, done_count, len(missing), track.title, provider)
+                # Called inline (cheap: one stdout line in the job process)
+                # so every protocol write stays on the event-loop thread.
+                progress_cb(done_count, len(missing), track.title, provider)
 
     await asyncio.gather(*[_dl(t) for t in missing], return_exceptions=True)
 
