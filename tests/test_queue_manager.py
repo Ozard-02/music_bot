@@ -244,6 +244,16 @@ class TestQueueManager:
         assert is_new is True
         assert item_id == 1
 
+    def test_enqueue_unique_is_committed(self, queue_manager: QueueManager, tmp_path):
+        """A fresh connection (= the bot after a restart) sees the item."""
+        import sqlite3
+        queue_manager.enqueue_unique("link", "url")
+        other = sqlite3.connect(str(tmp_path / "test_queue.db"))
+        try:
+            assert other.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 1
+        finally:
+            other.close()
+
     def test_enqueue_unique_detects_duplicate(self, queue_manager: QueueManager):
         qm = queue_manager
         id1, _ = qm.enqueue_unique("link", "url")

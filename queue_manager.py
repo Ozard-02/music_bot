@@ -94,19 +94,24 @@ class QueueManager:
         """
         with self._lock:
             conn = self._connect()
-            existing = conn.execute(
-                "SELECT id FROM queue WHERE input_type=? AND query=? AND user IS ? "
-                "AND status IN ('queued', 'running')",
-                (input_type, query, user),
-            ).fetchone()
-            if existing is not None:
-                return existing["id"], False
-            now = datetime.now(timezone.utc).isoformat()
-            cursor = conn.execute(
-                "INSERT INTO queue (input_type, query, created_at, user) VALUES (?, ?, ?, ?)",
-                (input_type, query, now, user),
-            )
-            return cursor.lastrowid, True
+            # `with conn` commits: without it the INSERT sat in an open
+            # implicit transaction until some later write happened to
+            # commit it, so a restart in between lost an item the user
+            # had already been told was queued.
+            with conn:
+                existing = conn.execute(
+                    "SELECT id FROM queue WHERE input_type=? AND query=? AND user IS ? "
+                    "AND status IN ('queued', 'running')",
+                    (input_type, query, user),
+                ).fetchone()
+                if existing is not None:
+                    return existing["id"], False
+                now = datetime.now(timezone.utc).isoformat()
+                cursor = conn.execute(
+                    "INSERT INTO queue (input_type, query, created_at, user) VALUES (?, ?, ?, ?)",
+                    (input_type, query, now, user),
+                )
+                return cursor.lastrowid, True
 
     def dequeue(self) -> dict | None:
         with self._lock:
