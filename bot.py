@@ -13,7 +13,7 @@ from pathlib import Path
 from config import STALL_TIMEOUT, setup_logger, load_config, esc
 from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from queue_manager import QueueManager
-from resolver import parse_input, format_help
+from resolver import parse_inputs, format_help
 from telegram_client import TelegramClient
 from track_utils import sanitize
 from worker import Worker, stream_job
@@ -597,31 +597,64 @@ class Bot:
         )
 
     async def _handle_text(self, chat_id: int, user: dict, text: str) -> None:
-        input_type, value = parse_input(text)
-        if input_type == "invalid":
+        entries = parse_inputs(text)
+        if not entries:
+            entries = [("invalid", text.strip())]
+        valid = [(t, v) for t, v in entries if t != "invalid"]
+        invalid = [v for t, v in entries if t == "invalid"]
+        if not valid:
             await self._client.send_message(chat_id, "❓ Didn't understand that.\n\n" + format_help())
             return
 
         _get_or_create_user(self._qm, user, self._cfg.get("quality", "LOSSLESS"))
-        item_id, is_new = await asyncio.to_thread(
-            self._qm.enqueue_unique, input_type, value, user["id"],
-        )
-        if not is_new:
+
+        queued: list[tuple[int, str]] = []
+        dupes: list[tuple[int, str]] = []
+        for input_type, value in valid:
+            item_id, is_new = await asyncio.to_thread(
+                self._qm.enqueue_unique, input_type, value, user["id"],
+            )
+            if is_new:
+                queued.append((item_id, value))
+                self._logger.info("Enqueued #%d: %s (%s)", item_id, value, input_type)
+            else:
+                dupes.append((item_id, value))
+
+        if queued:
+            self._wake_event.set()
+
+        if len(entries) == 1:
+            # Single entry: keep the personal per-item reply
+            item_id, value = (queued + dupes)[0]
+            if not queued:
+                await self._client.send_message(
+                    chat_id,
+                    f"⚠️ <b>Already queued as #{item_id}</b>\n  <code>{esc(value[:80])}</code>",
+                )
+                return
+            s = await asyncio.to_thread(self._qm.get_status, user["id"])
+            pos = s["queued"] + s["running"]
             await self._client.send_message(
                 chat_id,
-                f"⚠️ <b>Already queued as #{item_id}</b>\n  <code>{esc(value[:80])}</code>",
+                f"📥 <b>Queued #{item_id}</b>\n  Position: {pos}\n  <code>{esc(value[:80])}</code>",
             )
             return
 
-        self._wake_event.set()
-        self._logger.info("Enqueued #%d: %s (%s)", item_id, value, input_type)
-
-        s = await asyncio.to_thread(self._qm.get_status, user["id"])
-        pos = s["queued"] + s["running"]
-        await self._client.send_message(
-            chat_id,
-            f"📥 <b>Queued #{item_id}</b>\n  Position: {pos}\n  <code>{esc(value[:80])}</code>",
-        )
+        # A pasted list: one summary instead of a message storm.
+        lines = [f"📥 <b>Queued {len(queued)} item{'s' if len(queued) != 1 else ''}</b>"]
+        for item_id, value in queued[:_MAX_LISTED_FILES]:
+            lines.append(f"  #{item_id} <code>{esc(value[:60])}</code>")
+        if len(queued) > _MAX_LISTED_FILES:
+            lines.append(f"  … and {len(queued) - _MAX_LISTED_FILES} more")
+        if dupes:
+            lines.append(
+                f"  ⚠️ {len(dupes)} already queued (last: <code>{esc(dupes[-1][1][:60])}</code>)"
+            )
+        for value in invalid[:_MAX_LISTED_FILES]:
+            lines.append(f"  ❓ Unrecognised: <code>{esc(value[:60])}</code>")
+        if len(invalid) > _MAX_LISTED_FILES:
+            lines.append(f"  … and {len(invalid) - _MAX_LISTED_FILES} more unrecognised")
+        await self._client.send_message(chat_id, "\n".join(lines))
 
     async def _handle_update(self, update: dict) -> None:
         message = update.get("message")

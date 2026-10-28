@@ -18,7 +18,8 @@ download job** whose RSS is reclaimed on exit. See [ARCHITECTURE.md](ARCHITECTUR
 
 ## Features
 
-- Send a Spotify link (track, album, playlist) or search `artist - song` → queued and downloaded
+- Send a Spotify link (track, album, playlist) or search `artist - song` — any
+  dash kind works, one item per line, multiple lines queue them all
 - Queue commands: `/status`, `/quality`, `/purge`
 - Playlist builder: `/mkplaylist <url>` (m3u8 + cover)
 - Configurable provider order and quality

@@ -267,6 +267,39 @@ class TestEnqueue:
         assert bot._qm.get_status()["queued"] == 1
 
     @pytest.mark.asyncio
+    async def test_multiline_message_queues_each_line(self, bot):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(
+            _update(text="Artist - Song One\nArtist - Song Two")
+        )
+        status = bot._qm.get_status()
+        assert status["queued"] == 2
+        # one batch summary, not a message storm
+        bot._client.send_message.assert_awaited_once()
+        text = bot._client.send_message.call_args.args[1]
+        assert "Queued 2 items" in text
+
+    @pytest.mark.asyncio
+    async def test_multiline_with_link_and_search_and_invalid(self, bot):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(
+            _update(
+                text="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT\n"
+                     "Artist - Song\nnonsense line"
+            )
+        )
+        assert bot._qm.get_status()["queued"] == 2
+        text = bot._client.send_message.call_args.args[1]
+        assert "Unrecognised" in text
+
+    @pytest.mark.asyncio
+    async def test_multiline_all_invalid_shows_help(self, bot):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(_update(text="line one\nline two"))
+        assert "Didn't understand" in bot._client.send_message.call_args.args[1]
+        assert bot._qm.get_status()["queued"] == 0
+
+    @pytest.mark.asyncio
     async def test_invalid_text_shows_help(self, bot):
         bot._client.send_message = AsyncMock()
         await bot._handle_update(_update(text="random text"))

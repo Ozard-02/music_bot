@@ -71,11 +71,26 @@ single-process implementation's git history — don't reinvent.
 - [x] E2E: track `1ucxAsJ9oqhyVWBYQ7vzUA` → provider `deezer`, 297.6s, ISRC
       `ITA270200113` (Qobuz candidate correctly rejected)
 
-## Phase 7 — TrueNAS
+## Phase 7 — Lenient Telegram input parsing (DONE)
+- [x] `resolver.split_search()` — separator is any dash: en/em dashes always
+      separate, a plain hyphen only when not glued to words (AC-DC intact);
+      shared by `parse_input` and `resolve_search` (legacy ' - ' rows fine)
+- [x] `parse_inputs()` — one item per line: paste several artists/tracks at
+      once; links recognized inside prose; `bot._handle_text` queues each line
+      and replies with one batch summary (single line keeps the old reply)
+- [x] Link regex is extraction, not fullmatch: spotify: URIs, play.spotify.com,
+      URLs wrapped in text, ?si= share fragments, intl-<lang> segments
+- [x] Lenient name matching: token-based artist matching (Daft Punk feat.
+      Pharrell, Simon & Garfunkel) + difflib similarity fallback; unresolved
+      album names no longer fall back to albums[0]
+- [x] Tests: 344 passed (split_search, parse_inputs, URIs, lenient matching,
+      bot batch flow); docs synced
+
+## Phase 8 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes)
 - [ ] Push image, deploy, verify
 
-## Phase 8 — CI/CD
+## Phase 9 — CI/CD
 - [ ] GitHub Actions: pytest on push + build/push ghcr on main
 
 ## Deferred (explicit, not forgotten)

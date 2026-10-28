@@ -45,7 +45,7 @@ music_bot_rewrite/
 
 ### Link message
 ```
-bot.py ──handle_message──► resolver.parse_input(text)
+bot.py ──handle_message──► resolver.parse_inputs(text)   # one item per line
    ──► queue_manager.enqueue(url, user)
    ──► worker wakes (asyncio.Event)
    ──► worker.spawn("download_job.py"), write JSON spec to stdin

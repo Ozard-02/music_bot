@@ -71,8 +71,9 @@ fails and the next service runs (Deezer does an exact ISRC lookup).
  "skip_titles": ["x"], "want_m3u8": true}
 ```
 
-`type` is `"link"` (URL, album/playlist/track) or `"search"` (`artist - song`).
-Parent closes stdin after writing; the child reads one line, then runs.
+`type` is `"link"` (URL, spotify: URI, album/playlist/track) or `"search"`
+(`artist - song`, any dash kind). Parent closes stdin after writing; the child
+reads one line, then runs.
 
 **Events** — child writes JSON lines to **stdout** (one object per line):
 
