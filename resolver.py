@@ -7,8 +7,10 @@ the download subprocess."""
 import re
 import unicodedata
 
+# Optional intl-<lang>/ segment: the Spotify web player shares localized
+# links (open.spotify.com/intl-it/track/...); SpotiFLAC's parser accepts them.
 SPOTIFY_URL_RE = re.compile(
-    r"^https?://open\.spotify\.com/(track|album|playlist|artist)/[A-Za-z0-9_-]{22}(\?.*)?$"
+    r"^https?://open\.spotify\.com/(?:intl-[A-Za-z-]+/)?(track|album|playlist|artist)/[A-Za-z0-9_-]{22}(\?.*)?$"
 )
 
 

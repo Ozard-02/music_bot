@@ -24,6 +24,11 @@ class TestParseInput:
         url = "https://open.spotify.com/artist/4Z8W4fKeB5YxbusRsdQVPb"
         assert parse_input(url) == ("link", url)
 
+    def test_localized_web_link(self):
+        """Web-player shares carry an intl-<lang> segment."""
+        url = "https://open.spotify.com/intl-it/track/4cOdK2wGLETKBW3PvgPWqT?si=x"
+        assert parse_input(url) == ("link", url)
+
     def test_link_with_query_params(self):
         url = "https://open.spotify.com/track/abc123?si=deadbeef"
         assert parse_input(url)[0] == "invalid"
