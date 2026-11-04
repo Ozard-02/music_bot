@@ -177,6 +177,19 @@ class TestHandlers:
         assert spec["folder"].endswith("/Album")
 
     @pytest.mark.asyncio
+    async def test_fixmetadata_child_error_is_shown_not_keyerror(self, bot, tmp_path):
+        """A crashed child returns an error result without 'folders' — the
+        handler must report it instead of raising KeyError."""
+        bot._cfg["output_dir"] = str(tmp_path)
+        bot._client.send_message = AsyncMock(return_value={"message_id": 7})
+        bot._client.edit_message = AsyncMock()
+        bot._run_command_job = AsyncMock(return_value=({"error": "boom"}, 7))
+        await bot._handle_update(_update(text="/fixmetadata --lyrics"))
+        edited = bot._client.edit_message.call_args.args[2]
+        assert "Fix metadata failed" in edited
+        assert "boom" in edited
+
+    @pytest.mark.asyncio
     async def test_fixmetadata_missing_folder(self, bot, tmp_path):
         bot._cfg["output_dir"] = str(tmp_path)
         bot._client.send_message = AsyncMock()

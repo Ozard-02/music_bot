@@ -270,28 +270,53 @@ async def fix_library(
     logger: logging.Logger | None = None,
     lyrics: bool = False,
 ) -> dict:
-    """Walk `root` and re-tag every album folder (dir containing FLACs)."""
+    """Walk `root` and re-tag every album folder (dir containing FLACs).
+
+    Never raises: an unreadable folder or a failed folder is reported in the
+    result (`failed` / `error`) so the bot's command message never dies with
+    a KeyError on a missing result key.
+    """
     llog = logger or log
     root = Path(root)
-    folders = [d for d in [root, *root.rglob("*")] if d.is_dir()]
-    todo = [d for d in folders if any(p.suffix.lower() == ".flac" for p in d.iterdir())]
-
-    if not todo:
-        llog.info("No FLAC folders found under %s", root)
-        return {"folders": 0, "total": 0, "fixed": 0, "moved": 0,
-                "failed": 0, "skipped": 0, "would_fix": 0,
-                "details": [], "moved_files": [], "failed_files": []}
-
-    agg = {"folders": len(todo), "total": 0, "fixed": 0, "moved": 0,
+    agg = {"folders": 0, "total": 0, "fixed": 0, "moved": 0,
            "failed": 0, "skipped": 0, "would_fix": 0,
            "details": [], "moved_files": [], "failed_files": []}
 
+    try:
+        folders = [d for d in [root, *root.rglob("*")] if d.is_dir()]
+        todo = []
+        for d in folders:
+            try:
+                if any(p.suffix.lower() == ".flac" for p in d.iterdir()):
+                    todo.append(d)
+            except OSError as exc:
+                llog.warning("Skipping unreadable folder %s: %s", d, exc)
+    except Exception as exc:
+        llog.exception("Failed to scan %s", root)
+        agg["error"] = str(exc)
+        return agg
+
+    if not todo:
+        llog.info("No FLAC folders found under %s", root)
+        return agg
+
+    agg["folders"] = len(todo)
     for i, folder in enumerate(todo, start=1):
         if progress:
-            await progress(i, len(todo), f"Folder: {folder.relative_to(root)}")
-        sub = await fix_album_folder(
-            folder, apply=apply, progress=None, logger=llog, lyrics=lyrics
-        )
+            try:
+                await progress(i, len(todo), f"Folder: {folder.relative_to(root)}")
+            except Exception as exc:
+                llog.warning("Progress update failed: %s", exc)
+        try:
+            sub = await fix_album_folder(
+                folder, apply=apply, progress=None, logger=llog, lyrics=lyrics
+            )
+        except Exception as exc:
+            llog.exception("Folder %s failed", folder)
+            agg["failed"] += 1
+            agg["failed_files"].append(str(folder))
+            agg["details"].append(f"FAIL {folder} — {exc}")
+            continue
         for key in ("total", "fixed", "moved", "failed", "skipped", "would_fix"):
             agg[key] += sub[key]
         agg["details"].extend(sub["details"])
@@ -299,7 +324,10 @@ async def fix_library(
         agg["failed_files"].extend(sub["failed_files"])
 
     if progress:
-        await progress(len(todo), len(todo), "Done")
+        try:
+            await progress(len(todo), len(todo), "Done")
+        except Exception as exc:
+            llog.warning("Progress update failed: %s", exc)
     return agg
 
 

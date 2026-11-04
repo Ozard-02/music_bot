@@ -424,12 +424,19 @@ class Bot:
         })
         if result is None:
             return
+        if result.get("error"):
+            text = f"❌ <b>Fix metadata failed</b>\n  <code>{esc(result['error'])}</code>"
+            if message_id:
+                await self._client.edit_message(chat_id, message_id, text)
+            else:
+                await self._client.send_message(chat_id, text)
+            return
         lines = [
             "✅ <b>Fix metadata done</b>",
-            f"  Folders: {result['folders']}",
-            f"  Re-tagged: {result['fixed']}",
-            f"  Moved: {result['moved']}",
-            f"  Failed: {result['failed']}",
+            f"  Folders: {result.get('folders', 0)}",
+            f"  Re-tagged: {result.get('fixed', 0)}",
+            f"  Moved: {result.get('moved', 0)}",
+            f"  Failed: {result.get('failed', 0)}",
             f"  🎤 Lyrics: {'fetched' if lyrics else 'kept as-is'}",
         ]
         # Telegram rejects messages over 4096 chars: on a big library an

@@ -100,9 +100,20 @@ async def _command(spec: dict, logger: logging.Logger) -> dict:
         async def progress(current, total, text):
             _emit({"event": "progress", "done": current, "total": total, "title": text})
 
-        return await fix_library(
-            spec["folder"], apply=True, progress=progress, lyrics=bool(spec.get("lyrics")),
-        )
+        try:
+            return await fix_library(
+                spec["folder"], apply=True, progress=progress, lyrics=bool(spec.get("lyrics")),
+            )
+        except Exception as exc:
+            # fix_library() is defensive too, but keep the result shape valid
+            # even if it raises before returning: the bot indexes these keys.
+            logger.exception("fix_metadata failed")
+            return {
+                "error": str(exc),
+                "folders": 0, "total": 0, "fixed": 0, "moved": 0,
+                "failed": 0, "skipped": 0, "would_fix": 0,
+                "details": [], "moved_files": [], "failed_files": [],
+            }
 
     raise ValueError(f"unknown command type: {cmd}")
 
@@ -128,10 +139,13 @@ def main() -> int:
             _emit({"event": "result", "result": result})
             return 0
         result = asyncio.run(_job(spec, logger))
-    except Exception:
+    except Exception as exc:
         logger.exception("Job crashed")
-        _emit({"event": "result", "result": {"ok": 0, "skipped": 0, "failed": 1,
-               "failed_tracks": [("", "job_crash", "internal_error")], "total": 1}})
+        _emit({"event": "result", "result": {
+            "ok": 0, "skipped": 0, "failed": 1,
+            "failed_tracks": [("", "job_crash", "internal_error")], "total": 1,
+            "error": f"{type(exc).__name__}: {exc}",
+        }})
         return 1
 
     _emit({"event": "result", "result": result.to_dict()})

@@ -402,3 +402,27 @@ class TestFixLibrary:
         assert res["total"] == 3
         assert res["fixed"] == 3
         assert res["moved"] == 0
+
+    @pytest.mark.asyncio
+    async def test_folder_failure_does_not_abort_library(self, tmp_path, monkeypatch):
+        """One bad folder must not lose the aggregate result the bot reads."""
+        lib = tmp_path / "Albums"
+        for name in ("GOOD", "BAD"):
+            (lib / name).mkdir(parents=True)
+            (lib / name / "a.flac").write_bytes(b"fake")
+
+        async def _fake_fix(folder, **kwargs):
+            if folder.name == "BAD":
+                raise RuntimeError("boom")
+            return {"total": 1, "fixed": 1, "moved": 0, "failed": 0, "skipped": 0,
+                    "would_fix": 0, "details": [], "moved_files": [], "failed_files": []}
+
+        monkeypatch.setattr("scripts.fix_metadata.fix_album_folder", _fake_fix)
+
+        res = await fix_library(lib, apply=True)
+
+        assert res["folders"] == 2
+        assert res["fixed"] == 1
+        assert res["failed"] == 1
+        assert any("BAD" in f for f in res["failed_files"])
+        assert "error" not in res
