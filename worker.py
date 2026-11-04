@@ -127,11 +127,15 @@ async def stream_job(
     Returns (result, reason): reason is None iff a result event arrived;
     otherwise 'stall', 'timeout', or 'crash' (exit without a result).
     """
+    # Command results can be large (one `details` line per file); the default
+    # 64 KiB StreamReader limit raises LimitOverrunError on a big library.
+    # 64 MiB comfortably covers tens of thousands of tracks.
     proc = await asyncio.create_subprocess_exec(
         sys.executable, JOB_SCRIPT,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
+        limit=64 * 1024 * 1024,
     )
     proc.stdin.write((json.dumps(spec) + "\n").encode())
     await proc.stdin.drain()

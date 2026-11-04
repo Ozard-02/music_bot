@@ -426,3 +426,29 @@ class TestFixLibrary:
         assert res["failed"] == 1
         assert any("BAD" in f for f in res["failed_files"])
         assert "error" not in res
+
+    @pytest.mark.asyncio
+    async def test_aggregate_lists_are_capped_counts_stay_exact(self, tmp_path, monkeypatch):
+        """A whole-library scan must not build an unbounded result payload."""
+        lib = tmp_path / "Albums"
+        (lib / "GOOD").mkdir(parents=True)
+        (lib / "GOOD" / "a.flac").write_bytes(b"fake")
+
+        async def _fake_fix(folder, **kwargs):
+            return {
+                "total": 5, "fixed": 5, "moved": 0, "failed": 0, "skipped": 0,
+                "would_fix": 0,
+                "details": [f"OK {i}" for i in range(5)],
+                "moved_files": [f"moved {i}" for i in range(5)],
+                "failed_files": [f"failed {i}" for i in range(5)],
+            }
+
+        monkeypatch.setattr("scripts.fix_metadata.fix_album_folder", _fake_fix)
+        monkeypatch.setattr("scripts.fix_metadata._MAX_AGG_LIST", 3)
+
+        res = await fix_library(lib, apply=True)
+
+        assert res["fixed"] == 5
+        assert res["details"] == ["OK 2", "OK 3", "OK 4"]
+        assert res["moved_files"] == ["moved 2", "moved 3", "moved 4"]
+        assert res["failed_files"] == ["failed 2", "failed 3", "failed 4"]

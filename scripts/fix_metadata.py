@@ -40,6 +40,10 @@ log = logging.getLogger("fix_metadata")
 # Provider order = priority. Apple first, then Deezer, then SoundCloud.
 ENRICH_PROVIDERS = ["apple", "deezer", "soundcloud"]
 
+# Aggregate result lists are only used for CLI/human output; counts stay
+# exact. Cap them so a whole-library rescan cannot build an unbounded payload.
+_MAX_AGG_LIST = 10_000
+
 
 def _guess_metadata(filepath: str | Path) -> tuple[str, str] | None:
     """Guess (artist, title) from a '<Artist> - <Title>.flac' filename."""
@@ -322,6 +326,9 @@ async def fix_library(
         agg["details"].extend(sub["details"])
         agg["moved_files"].extend(sub["moved_files"])
         agg["failed_files"].extend(sub["failed_files"])
+        for key in ("details", "moved_files", "failed_files"):
+            if len(agg[key]) > _MAX_AGG_LIST:
+                del agg[key][:-_MAX_AGG_LIST]
 
     if progress:
         try:

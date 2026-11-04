@@ -55,6 +55,19 @@ async def test_happy_path_streams_events_and_result(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_result_line_beyond_default_stream_limit(tmp_path, monkeypatch):
+    """A whole-library /fixmetadata result can exceed asyncio's default
+    64 KiB per-line StreamReader limit; stream_job must read it whole."""
+    body = (
+        "print(json.dumps({'event': 'result', "
+        "'result': {'blob': 'x' * 200000}}), flush=True)"
+    )
+    result, reason, _ = await _collect({}, tmp_path, monkeypatch, body)
+    assert reason is None
+    assert len(result["blob"]) == 200000
+
+
+@pytest.mark.asyncio
 async def test_bad_json_line_is_skipped(tmp_path, monkeypatch):
     body = (
         "print('garbage', flush=True)\n"
