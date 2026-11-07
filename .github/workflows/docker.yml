@@ -17,9 +17,12 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          # GITHUB_TOKEN never expires; a long-lived GHCR_TOKEN secret is the
-          # usual cause of "build works until the token expires" CI failures.
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # A PAT with write:packages is required to (re)create the package
+          # after it was deleted. GITHUB_TOKEN cannot bootstrap a previously
+          # deleted package name (GHCR returns permission_denied: write_package).
+          # Once the package exists and is linked to this repo, GITHUB_TOKEN
+          # can be used for subsequent pushes.
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - uses: docker/setup-buildx-action@v3
 
