@@ -22,7 +22,11 @@ def esc(value) -> str:
 # Download engine
 DEFAULT_SERVICES = ["qobuz", "deezer", "amazon"]
 MAX_CONCURRENT = 2
-PER_TRACK_TIMEOUT = 100
+PER_TRACK_TIMEOUT = 180  # whole-track budget across every provider + retry
+# Per-request network timeout inside each provider.  SpotiFLAC reuses
+# timeout_s for both; with one value a hung Qobuz stream ate the whole track
+# budget and the Deezer fallback never ran (spotiflac_patch._patch_provider_timeout).
+PROVIDER_IO_TIMEOUT = 30
 PER_TRACK_RETRIES = 3
 
 # Queue
@@ -34,6 +38,11 @@ STALL_TIMEOUT = 1800         # 30min — a job that makes no per-track progress 
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
 RETRY_BACKOFF_BASE = 5    # seconds, doubles each retry
 MAX_RETRY_BACKOFF = 3600  # 1h cap
+# Spotify answers 406/429 when it rate-limits our IP. Every retry builds a
+# fresh metadata client (2+ hits on open.spotify.com), so per-item backoff
+# alone keeps hammering it. On this error the worker pauses the whole queue.
+SPOTIFY_BLOCKED_ERROR = "spotify_blocked"
+SPOTIFY_BLOCK_PAUSE = 1800  # 30min
 SCRIPT_MAX_CONCURRENT = 5  # default for utility scripts
 
 

@@ -1,8 +1,8 @@
 """Neutralize SpotiFLAC's noisy/leaky internals (monkey-patches).
 
 Kept in one module so the hacks are easy to find and review.  Importing this
-module runs `install_console_silencing()`, `_patch_qobuz_lock()`,
-`_patch_community_dead()`, `_patch_musicbrainz()`, `_patch_track_provider()`,
+module runs `_skip_github_version_check()`, `install_console_silencing()`, `_patch_qobuz_lock()`,
+`_patch_community_dead()`, `_patch_provider_timeout()`, `_patch_musicbrainz()`, `_patch_track_provider()`,
 `_patch_provider_matching()` and `disable_progress_manager()` once —
 downloader.py relies on that side-effect (regression-tested in
 tests/test_downloader.py).
@@ -28,6 +28,44 @@ _CONSOLE_PRINTS = (
     "print_summary",
     "print_official_source",
 )
+
+
+def _skip_github_version_check() -> None:
+    """Stop SpotiFLAC from calling the GitHub API on every import.
+
+    core/signed_session_desktop.py runs `APP_VERSION = fetch_latest_version()`
+    at import time: a blocking requests.get to api.github.com (the repo is gone,
+    so it 404s and logs a warning) in every download subprocess.  APP_VERSION
+    only feeds the community-session signature, which `_patch_community_dead()`
+    disables anyway, so "" (what the 404 yields) is the correct value.
+
+    Must run before anything imports SpotiFLAC.  The GitHub URL is answered by
+    a stub for the duration of that one import; every other request goes
+    through untouched.
+    """
+    if "SpotiFLAC.core.signed_session_desktop" in sys.modules:
+        return
+    import requests
+
+    class _NoRelease:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {}
+
+    real_get = requests.get
+
+    def _get(url, *a, **kw):
+        if str(url).startswith("https://api.github.com/"):
+            return _NoRelease()
+        return real_get(url, *a, **kw)
+
+    requests.get = _get
+    try:
+        import SpotiFLAC.core.signed_session_desktop  # noqa: F401
+    finally:
+        requests.get = real_get
 
 
 def install_console_silencing() -> None:
@@ -152,6 +190,36 @@ def _patch_community_dead() -> None:
         for _name in ("ensure_community_session", "get_community_url"):
             if hasattr(_mod, _name):
                 setattr(_mod, _name, _dead_session if _name == "ensure_community_session" else endpoints.get_community_url)
+
+
+def _patch_provider_timeout() -> None:
+    """Cap each provider's network timeout below the per-track budget.
+
+    SpotiFLAC passes DownloadOptions.timeout_s both to asyncio.wait_for around
+    the whole track AND to every provider's httpx client.  With one value, a
+    Qobuz stream that hangs (httpx.ReadTimeout after timeout_s) exhausts the
+    track budget at the same instant, so the fallback providers never run —
+    production 2026-11-07: every track failed at exactly 100s while a manual
+    run (default 30s provider timeout) fell back to Deezer and succeeded.
+    httpx timeouts are per-operation (inactivity), so 30s does not limit how
+    long a healthy FLAC stream may take.
+    """
+    import dataclasses
+
+    import SpotiFLAC.downloader as sf_downloader
+    from config import PROVIDER_IO_TIMEOUT
+
+    if getattr(sf_downloader._build_provider, "_spoty_loop_patched", False):
+        return
+    _orig = sf_downloader._build_provider
+
+    def _build_provider(name, opts):
+        if opts.timeout_s and opts.timeout_s > PROVIDER_IO_TIMEOUT:
+            opts = dataclasses.replace(opts, timeout_s=PROVIDER_IO_TIMEOUT)
+        return _orig(name, opts)
+
+    _build_provider._spoty_loop_patched = True
+    sf_downloader._build_provider = _build_provider
 
 
 _track_providers: dict[str, str] = {}
@@ -554,9 +622,11 @@ def silence_spotiflac_loggers() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+_skip_github_version_check()
 install_console_silencing()
 _patch_qobuz_lock()
 _patch_community_dead()
+_patch_provider_timeout()
 _patch_musicbrainz()
 _patch_track_provider()
 _patch_provider_matching()

@@ -102,4 +102,5 @@ stderr carries logs. A crash (nonzero exit, no `result`) is a failed job.
 4. stream stdout lines; update queue progress + Telegram message
 5. watchdog: no line in `stall_timeout` → `proc.kill()`
 6. on `result` (or crash): mark queue row, trim idle, backoff
+7. `spotify_blocked` failure → pause the whole queue for `SPOTIFY_BLOCK_PAUSE`
 </content>

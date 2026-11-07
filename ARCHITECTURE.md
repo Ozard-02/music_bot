@@ -42,7 +42,7 @@ imported. Idle RSS is a hard requirement (see AGENTS.md), so we split:
 |--------|------|
 | `download_job.py` | Entry point: reads one JSON spec from stdin, runs the job, emits JSON-lines |
 | `downloader.py` | Download engine (`run_url`): resolution, partition, parallel download, rename, cover |
-| `spotiflac_patch.py` | Import-time monkey-patches (console silencing, community-dead, MB no-op, provider tracking, provider matching guards) |
+| `spotiflac_patch.py` | Import-time monkey-patches (GitHub version-check skip, console silencing, community-dead, provider IO timeout cap, MB no-op, provider tracking, provider matching guards) |
 | `m3u8.py` | Playlist m3u8 + cover generation (auto-build happens here, not in parent) |
 | `flac_utils.py` | FLAC tag read/write, cover embed/dedupe (httpx/mutagen/pillow live here) |
 
@@ -118,6 +118,11 @@ so overlap protection moves to **`fcntl.flock` lockfiles**:
   urllib client shook hands on every API call, ~1700/day from polling alone).
 - Worker: `asyncio.Event` — wakes instantly when the bot enqueues, otherwise
   sleeps with idle backoff 5s -> 10 -> 20 -> 40 -> 80 -> 160 -> 300s cap.
+- Spotify block: a 406/429 from `*.spotify.com` is tagged `spotify_blocked`
+  by the job; the worker then stops dequeuing for `SPOTIFY_BLOCK_PAUSE`
+  (30min) instead of letting every item retry against a rate-limited IP.
+- Download subprocesses skip SpotiFLAC's import-time GitHub version check
+  (one useless HTTPS request per job).
 - QueueManager: one persistent SQLite connection, no polling.
 - `gc.freeze()` after startup: permanent objects are never rescanned.
 - Idle cost is one long-poll request + zero DB polls. Near-zero CPU.

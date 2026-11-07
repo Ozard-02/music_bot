@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from downloader import _rename_after_download, run_url
+from downloader import _rename_after_download, is_spotify_block, run_url
 from SpotiFLAC.core.models import TrackMetadata
 from track_utils import partition_tracks, spotiflac_track_relative_path, track_relative_path
 
@@ -227,6 +227,26 @@ class TestRunUrl:
 
         assert result.failed == 1
         assert calls == [("", self.TRACK_URL, "metadata_error")]
+
+    @pytest.mark.asyncio
+    async def test_spotify_406_is_tagged_blocked(self, config, logger):
+        """A 406 from open.spotify.com is an IP block, not a bad track: tag it
+        so the worker pauses the whole queue instead of hammering Spotify."""
+        with (
+            patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
+            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+        ):
+            mock_parse.return_value = {"type": "track", "id": "abc123"}
+            client = AsyncMock()
+            client.get_track_metadata = AsyncMock(side_effect=RuntimeError(
+                "Client error '406 Not Acceptable' for url 'https://open.spotify.com'",
+            ))
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+            mock_cls.return_value.__aexit__ = AsyncMock()
+
+            result = await run_url(self.TRACK_URL, config, logger)
+
+        assert result.failed_tracks == [("", self.TRACK_URL, "spotify_blocked")]
 
     @pytest.mark.asyncio
     async def test_album_all_exist(self, tmp_path):
@@ -1036,3 +1056,14 @@ class TestPartitionTracksNaming:
         existing, given_up, missing = partition_tracks([t], self._cfg(tmp_path))
         assert existing == []
         assert missing == [t]
+
+
+@pytest.mark.parametrize("text, blocked", [
+    ("Client error '406 Not Acceptable' for url 'https://open.spotify.com'", True),
+    ("Client error '429 Too Many Requests' for url 'https://api-partner.spotify.com/pathfinder/v2/query'", True),
+    ("Client error '404 Not Found' for url 'https://open.spotify.com/api/token'", False),
+    ("Client error '429 Too Many Requests' for url 'https://api.deezer.com/search'", False),
+    ("boom", False),
+])
+def test_is_spotify_block(text, blocked):
+    assert is_spotify_block(RuntimeError(text)) is blocked

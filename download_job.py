@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 
 import spotiflac_patch  # noqa: F401  (import-time side-effects)
-from config import setup_logger
-from downloader import DownloadResult, run_url
+from config import SPOTIFY_BLOCKED_ERROR, setup_logger
+from downloader import DownloadResult, is_spotify_block, run_url
 
 
 def _emit(event: dict) -> None:
@@ -170,9 +170,10 @@ def main() -> int:
         result = asyncio.run(_job(spec, logger))
     except Exception as exc:
         logger.exception("Job crashed")
+        err = SPOTIFY_BLOCKED_ERROR if is_spotify_block(exc) else "internal_error"
         _emit({"event": "result", "result": {
             "ok": 0, "skipped": 0, "failed": 1,
-            "failed_tracks": [("", "job_crash", "internal_error")], "total": 1,
+            "failed_tracks": [("", "job_crash", err)], "total": 1,
             "error": f"{type(exc).__name__}: {exc}",
         }})
         return 1

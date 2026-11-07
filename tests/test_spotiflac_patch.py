@@ -386,3 +386,25 @@ async def test_qobuz_text_guard_accepts_correct_candidate(monkeypatch):
     assert await qobuz.QobuzProvider._search_by_text_async(
         None, "Noi no", "Articolo 31",
     ) is correct
+
+
+def test_github_version_check_skipped():
+    """No api.github.com call at import; APP_VERSION is what the 404 gave."""
+    import requests
+    import SpotiFLAC.core.signed_session_desktop as ssd
+
+    assert ssd.APP_VERSION == ""
+    assert requests.get.__module__ == "requests.api"
+
+
+def test_provider_timeout_capped_below_track_budget():
+    """Providers get PROVIDER_IO_TIMEOUT; the track budget stays timeout_s."""
+    from SpotiFLAC.downloader import DownloadOptions, _build_provider
+    from config import PER_TRACK_TIMEOUT, PROVIDER_IO_TIMEOUT
+
+    assert PROVIDER_IO_TIMEOUT < PER_TRACK_TIMEOUT
+    opts = DownloadOptions(output_dir="/tmp", timeout_s=PER_TRACK_TIMEOUT)
+    provider = _build_provider("deezer", opts)
+    assert provider is not None
+    assert provider._async_http._timeout == PROVIDER_IO_TIMEOUT
+    assert opts.timeout_s == PER_TRACK_TIMEOUT

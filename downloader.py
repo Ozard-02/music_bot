@@ -10,11 +10,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
+from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES, SPOTIFY_BLOCKED_ERROR
 from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
 from spotiflac_patch import _AsyncLockAdapter, pop_track_provider
 from track_utils import (
@@ -53,6 +54,18 @@ class DownloadResult:
         )
 
 
+_SPOTIFY_BLOCK_RE = re.compile(r"\b(406|429)\b")
+
+
+def is_spotify_block(exc: BaseException) -> bool:
+    """True when Spotify refused us with 406/429 (IP rate-limit/block).
+
+    SpotiFLAC lets httpx.HTTPStatusError through unchanged, e.g.
+    "Client error '406 Not Acceptable' for url 'https://open.spotify.com'"."""
+    text = str(exc)
+    return "spotify.com" in text and bool(_SPOTIFY_BLOCK_RE.search(text))
+
+
 async def run_url(
     url: str,
     cfg: dict,
@@ -87,11 +100,12 @@ async def run_url(
                 if track is None:
                     raise TypeError("get_track_metadata returned None")
                 tracks = [track]
-            except Exception:
+            except Exception as exc:
                 logger.exception("Track metadata failed for %s", url)
+                err = SPOTIFY_BLOCKED_ERROR if is_spotify_block(exc) else "metadata_error"
                 if failure_cb:
-                    failure_cb("", url, "metadata_error")
-                return DownloadResult(failed=1, failed_tracks=[("", url, "metadata_error")], total=1)
+                    failure_cb("", url, err)
+                return DownloadResult(failed=1, failed_tracks=[("", url, err)], total=1)
         else:
             _, tracks = await client.get_playlist(url)
         return await _download_tracks(client, tracks, cfg, logger, skip_titles, progress_cb, failure_cb)

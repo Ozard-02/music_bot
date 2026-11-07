@@ -86,6 +86,23 @@ single-process implementation's git history — don't reinvent.
 - [x] Tests: 344 passed (split_search, parse_inputs, URIs, lenient matching,
       bot batch flow); docs synced
 
+## Phase 7b — Spotify rate-limit handling (DONE)
+- [x] 2026-11-07: TrueNAS got 406 from open.spotify.com for every link
+      (metadata_error); cleared by itself — IP rate-limit, not a code bug.
+      Embed-page fallback rejected (no ISRC → unsafe provider matching).
+- [x] `downloader.is_spotify_block()` tags 406/429 from spotify.com as
+      `spotify_blocked` (track path + job crash path)
+- [x] Worker pauses the whole queue for `SPOTIFY_BLOCK_PAUSE` (30min) and
+      requeues the item with at least that delay
+- [x] `spotiflac_patch._skip_github_version_check()` — no api.github.com
+      request per download subprocess
+- [x] Real cause of the "keeps failing" after the block cleared: SpotiFLAC
+      uses `timeout_s` for both the per-track budget and each provider's httpx
+      timeout. A hung Qobuz stream ate the full 100s, Deezer never ran.
+      `_patch_provider_timeout()` caps providers at `PROVIDER_IO_TIMEOUT` (30s);
+      `PER_TRACK_TIMEOUT` raised 100 → 180s so fallbacks fit in the budget.
+- [x] Tests: 393 passed
+
 ## Phase 8 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes)
 - [ ] Push image, deploy, verify

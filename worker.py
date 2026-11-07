@@ -24,6 +24,8 @@ from config import (
     STALL_TIMEOUT,
     RETRY_BACKOFF_BASE,
     MAX_RETRY_BACKOFF,
+    SPOTIFY_BLOCKED_ERROR,
+    SPOTIFY_BLOCK_PAUSE,
     esc,
 )
 from queue_manager import QueueManager
@@ -238,10 +240,15 @@ class Worker:
         self._shutdown = False
         self._tasks: set[asyncio.Task] = set()
         self._active: dict[int, int] = {}
+        self._paused_until = 0.0  # monotonic; set when Spotify blocks us
 
     async def run(self):
         self._logger.info("Worker started (max_parallel=%d)", self._max_parallel)
         while not self._shutdown:
+            paused = self._paused_until - time.monotonic()
+            if paused > 0:
+                await self._sleep_or_wake(paused)
+                continue
             slot = False
             try:
                 await self._sem.acquire()
@@ -265,12 +272,23 @@ class Worker:
                 if slot:
                     self._sem.release()
 
-            try:
-                await asyncio.wait_for(self._wake_event.wait(), timeout=self._poll)
-            except asyncio.TimeoutError:
-                pass
-            else:
-                self._wake_event.clear()
+            await self._sleep_or_wake(self._poll)
+
+    async def _sleep_or_wake(self, timeout: float) -> None:
+        try:
+            await asyncio.wait_for(self._wake_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            self._wake_event.clear()
+
+    def _pause_for_spotify_block(self) -> None:
+        """Stop dequeuing for SPOTIFY_BLOCK_PAUSE: retrying while Spotify
+        rate-limits our IP only extends the block."""
+        self._paused_until = time.monotonic() + SPOTIFY_BLOCK_PAUSE
+        self._logger.warning(
+            "Spotify blocked us (406/429) — pausing queue for %ds", SPOTIFY_BLOCK_PAUSE,
+        )
 
     async def _run_with_sem(self, item: dict):
         task = asyncio.current_task()
@@ -467,6 +485,12 @@ class Worker:
         )
         decision = decide_failure(item, result, gave_up)
         retries = item.get("retries", 0)
+        blocked = any(
+            len(t) > 2 and t[2] == SPOTIFY_BLOCKED_ERROR
+            for t in result.get("failed_tracks", [])
+        )
+        if blocked:
+            self._pause_for_spotify_block()
 
         if decision.action == "fail":
             await asyncio.to_thread(self._queue.mark_failed, item["id"], decision.detail)
@@ -481,11 +505,13 @@ class Worker:
             await self._mark_done_and_notify(item, display, result, decision.detail, chat)
             return
 
-        delay = decision.detail
+        delay = max(decision.detail, SPOTIFY_BLOCK_PAUSE) if blocked else decision.detail
         await asyncio.to_thread(self._queue.requeue, item["id"], delay)
         when = f"retry in {delay}s" if delay > 0 else "retrying now"
         msg = (
             f"🔄 <b>{esc(display)}</b>\n  {_result_summary(result)}\n"
             f"  🔄 Re-queued (#{item['id']}, retry {retries + 1}/{MAX_QUEUE_RETRIES}, {when})"
         )
+        if blocked:
+            msg += f"\n  🛑 Spotify is rate-limiting us — queue paused for {SPOTIFY_BLOCK_PAUSE // 60} min"
         await self._safe_notify(msg, chat)

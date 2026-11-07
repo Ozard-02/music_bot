@@ -1,12 +1,13 @@
 """Tests for worker.py — Worker._process (subprocess-based)."""
 
 import asyncio
+import time
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES, RETRY_BACKOFF_BASE
+from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES, RETRY_BACKOFF_BASE, SPOTIFY_BLOCK_PAUSE
 from worker import Worker, decide_failure, is_permanent_failure
 
 
@@ -302,6 +303,58 @@ class TestWorkerProcess:
 
         msg = bot.call_args[0][0]
         assert "24h" in msg or "gave up" in msg.lower()
+
+
+class TestSpotifyBlockPause:
+    """A Spotify 406/429 pauses the whole queue instead of retrying per item."""
+
+    @pytest.mark.asyncio
+    async def test_blocked_failure_pauses_queue_and_delays_retry(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        with patch("worker.Worker._run_job", return_value=(_ok_result(
+            failed=1,
+            failed_tracks=[("", "https://open.spotify.com/track/abc", "spotify_blocked")],
+            total=1,
+        ), "X")):
+            await worker._process(item)
+
+        assert worker._paused_until > time.monotonic() + SPOTIFY_BLOCK_PAUSE - 5
+        row = qm.get_item(item["id"])
+        assert row["status"] == "queued"
+        retry_at = datetime.fromisoformat(row["retry_at"])
+        assert (retry_at - datetime.now(timezone.utc)).total_seconds() > SPOTIFY_BLOCK_PAUSE - 5
+        assert "rate-limiting" in bot.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_ordinary_failure_does_not_pause(self, worker, bot):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        item = qm.dequeue()
+
+        with patch("worker.Worker._run_job", return_value=(_ok_result(
+            failed=1, failed_tracks=[("id1", "A", "metadata_error")], total=1,
+        ), "X")):
+            await worker._process(item)
+
+        assert worker._paused_until == 0.0
+
+    @pytest.mark.asyncio
+    async def test_paused_worker_does_not_dequeue(self, worker):
+        qm = worker._queue
+        qm.enqueue_unique("link", "https://open.spotify.com/track/abc")
+        worker._paused_until = time.monotonic() + 60
+
+        task = asyncio.create_task(worker.run())
+        await asyncio.sleep(0.05)
+        worker._wake_event.set()  # a new /add must not break the pause
+        await asyncio.sleep(0.05)
+        await worker.shutdown()
+        await task
+
+        assert qm.get_status()["queued"] == 1
 
 
 class TestNotificationSafety:
