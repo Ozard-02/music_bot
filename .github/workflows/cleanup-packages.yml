@@ -11,12 +11,16 @@ jobs:
     permissions:
       packages: write
     steps:
-      - name: Delete old untagged images
+      - name: Delete old images
         uses: actions/delete-package-versions@v5
+        # Known edge case: if every version gets removed, GHCR deletes the
+        # package too and the action then fails with "Package not found".
+        # That is harmless (the next image push recreates it).
+        continue-on-error: true
         with:
           package-name: music_loop
           package-type: container
+          # Keep the 10 newest versions (including the tagged `latest`).
+          # Unlike delete-only-untagged-versions, this can never delete every
+          # version by accident.
           min-versions-to-keep: 10
-          # Every push reuses the `latest` tag, so old builds are untagged.
-          # Keep the 10 newest versions; delete the rest.
-          delete-only-untagged-versions: true
