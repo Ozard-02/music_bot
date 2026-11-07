@@ -6,7 +6,24 @@ on:
     tags: ["v*.*.*"]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -48,3 +65,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
