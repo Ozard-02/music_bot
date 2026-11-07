@@ -16,7 +16,7 @@ from track_utils import partition_tracks, spotiflac_track_relative_path, track_r
 
 def _touch(path: Path, mtime: float | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"")
+    path.write_bytes(b"f")
     if mtime is not None:
         os.utime(path, (mtime, mtime))
 
@@ -118,7 +118,7 @@ def _make_client(track_return=None, playlist_return=None,
         if t is not None and cfg is not None:
             p = Path(cfg["output_dir"]) / spotiflac_track_relative_path(t, cfg)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.touch()
+            p.write_bytes(b"f")
         return []
 
     client.download_track = AsyncMock(side_effect=_download_track)
@@ -166,7 +166,7 @@ class TestRunUrl:
         track = _mock_track("abc123", "Test Track", first_artist="Artist",
                             album_artist="AlbumArtist", album="Album")
         (tmp_path / "AlbumArtist" / "Album").mkdir(parents=True)
-        (tmp_path / "AlbumArtist" / "Album" / "Artist - Test Track.flac").touch()
+        (tmp_path / "AlbumArtist" / "Album" / "Artist - Test Track.flac").write_bytes(b"f")
 
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
@@ -222,11 +222,11 @@ class TestRunUrl:
             calls = []
             result = await run_url(
                 self.TRACK_URL, config, logger,
-                failure_cb=lambda title, err: calls.append((title, err)),
+                failure_cb=lambda track_id, title, err: calls.append((track_id, title, err)),
             )
 
         assert result.failed == 1
-        assert calls == [(self.TRACK_URL, "metadata_error")]
+        assert calls == [("", self.TRACK_URL, "metadata_error")]
 
     @pytest.mark.asyncio
     async def test_album_all_exist(self, tmp_path):
@@ -246,9 +246,9 @@ class TestRunUrl:
         t2 = _mock_track("t2", "Song B", first_artist="ArtistB",
                           album_artist="BB", album="BB")
         (tmp_path / "AA" / "AA").mkdir(parents=True)
-        (tmp_path / "AA" / "AA" / "ArtistA - Song A.flac").touch()
+        (tmp_path / "AA" / "AA" / "ArtistA - Song A.flac").write_bytes(b"f")
         (tmp_path / "BB" / "BB").mkdir(parents=True)
-        (tmp_path / "BB" / "BB" / "ArtistB - Song B.flac").touch()
+        (tmp_path / "BB" / "BB" / "ArtistB - Song B.flac").write_bytes(b"f")
 
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
@@ -317,7 +317,7 @@ class TestRunUrl:
 
         # create t1 on disk to simulate "already exists"
         (tmp_path / "AA" / "AA").mkdir(parents=True)
-        (tmp_path / "AA" / "AA" / "ArtistA - Song A.flac").touch()
+        (tmp_path / "AA" / "AA" / "ArtistA - Song A.flac").write_bytes(b"f")
 
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
@@ -451,11 +451,11 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+            result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda track_id, title, err: calls.append((track_id, title, err)))
 
         assert result.failed == 1
         assert result.failed_tracks == [("t2", "Bad Song", "download_failed")]
-        assert calls == [("Bad Song", "download_failed")]
+        assert calls == [("t2", "Bad Song", "download_failed")]
 
     @pytest.mark.asyncio
     async def test_failure_cb_tuple_shape_defensive(self, config, logger):
@@ -478,11 +478,11 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+            result = await run_url(self.ALBUM_URL, config, logger, failure_cb=lambda track_id, title, err: calls.append((track_id, title, err)))
 
         assert result.failed == 1
         assert result.failed_tracks == [("t2", "Bad Song", "download_failed")]
-        assert calls == [("Bad Song", "Qobuz 500")]
+        assert calls == [("t2", "Bad Song", "Qobuz 500")]
 
     @pytest.mark.asyncio
     async def test_failure_cb_called_on_exception(self, config, logger):
@@ -498,11 +498,11 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+            result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda track_id, title, err: calls.append((track_id, title, err)))
 
         assert result.failed == 1
         assert len(calls) == 1
-        assert calls[0][0] == "Test Track"
+        assert calls[0][1] == "Test Track"
 
     @pytest.mark.asyncio
     async def test_failure_cb_not_called_on_success(self, config, logger):
@@ -517,7 +517,7 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda title, err: calls.append((title, err)))
+            result = await run_url(self.TRACK_URL, config, logger, failure_cb=lambda track_id, title, err: calls.append((track_id, title, err)))
 
         assert result.ok == 1
         assert calls == []
@@ -563,11 +563,11 @@ class TestRunUrl:
             mock_cls.return_value.__aexit__ = AsyncMock()
 
             result = await run_url(self.TRACK_URL, config, logger,
-                                   failure_cb=lambda title, err: calls.append((title, err)))
+                                   failure_cb=lambda track_id, title, err: calls.append((track_id, title, err)))
 
         assert result.ok == 0
         assert result.failed == 1
-        assert calls == [("Test Track", "no_file_after_download")]
+        assert calls == [("abc123", "Test Track", "no_file_after_download")]
 
     @pytest.mark.asyncio
     async def test_overlapping_parallel_jobs_download_each_track_once(self, tmp_path, logger):
@@ -596,7 +596,7 @@ class TestRunUrl:
             await release.wait()
             p = Path(cfg["output_dir"]) / spotiflac_track_relative_path(t, cfg)
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.touch()
+            p.write_bytes(b"f")
             return []
 
         client = AsyncMock()
@@ -727,7 +727,7 @@ class TestRunUrl:
         async def _download(_url):
             # download_track creates the file on disk
             flac_path.parent.mkdir(parents=True, exist_ok=True)
-            flac_path.write_bytes(b"")
+            flac_path.write_bytes(b"f")
             return []
 
         with (
@@ -766,7 +766,7 @@ class TestRunUrl:
         )
         spoti_path = tmp_path / spotiflac_track_relative_path(track, cfg)
         spoti_path.parent.mkdir(parents=True, exist_ok=True)
-        spoti_path.write_bytes(b"")
+        spoti_path.write_bytes(b"f")
 
         with patch("downloader.read_lrc", new=lambda p: "[00:01.00]hello"):
             _write_lyrics_sidecar(track, cfg, logging.getLogger("test"))

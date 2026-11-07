@@ -428,6 +428,34 @@ class TestFixLibrary:
         assert "error" not in res
 
     @pytest.mark.asyncio
+    async def test_folders_run_in_parallel_with_bounded_concurrency(self, tmp_path, monkeypatch):
+        lib = tmp_path / "Albums"
+        for i in range(4):
+            (lib / f"A{i}").mkdir(parents=True)
+            (lib / f"A{i}" / "a.flac").write_bytes(b"fake")
+
+        active = 0
+        peak = 0
+
+        async def _fake_fix(folder, **kwargs):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+            return {"total": 1, "fixed": 1, "moved": 0, "failed": 0, "skipped": 0,
+                    "would_fix": 0, "details": [], "moved_files": [], "failed_files": []}
+
+        monkeypatch.setattr("scripts.fix_metadata.fix_album_folder", _fake_fix)
+        monkeypatch.setattr("scripts.fix_metadata.reset_progress_manager", lambda: None)
+
+        res = await fix_library(lib, apply=True, max_folders=2)
+
+        assert res["folders"] == 4
+        assert res["fixed"] == 4
+        assert peak == 2  # parallel, but never above max_folders
+
+    @pytest.mark.asyncio
     async def test_aggregate_lists_are_capped_counts_stay_exact(self, tmp_path, monkeypatch):
         """A whole-library scan must not build an unbounded result payload."""
         lib = tmp_path / "Albums"

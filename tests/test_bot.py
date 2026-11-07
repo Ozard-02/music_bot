@@ -110,6 +110,27 @@ class TestHandlers:
         assert bot._qm.get_status()["queued"] == 0
 
     @pytest.mark.asyncio
+    async def test_retry_requeues_failed_item(self, bot):
+        bot._client.send_message = AsyncMock()
+        item_id, _ = bot._qm.enqueue_unique("link", "https://open.spotify.com/track/abc", 12345)
+        bot._qm.dequeue()
+        bot._qm.mark_failed(item_id, "boom")
+
+        await bot._handle_update(_update(text=f"/retry {item_id}"))
+
+        item = bot._qm.get_item(item_id)
+        assert item["status"] == "queued"
+        assert item["retries"] == 0
+        assert item["error"] is None
+        _assert_sent(bot, "Re-queued")
+
+    @pytest.mark.asyncio
+    async def test_retry_usage(self, bot):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(_update(text="/retry"))
+        _assert_sent(bot, "Usage")
+
+    @pytest.mark.asyncio
     async def test_mkplaylist_usage_when_no_args(self, bot):
         bot._client.send_message = AsyncMock()
         bot._run_command_job = AsyncMock()
@@ -149,6 +170,30 @@ class TestHandlers:
         edited = bot._client.edit_message.call_args.args[2]
         assert "Playlist failed" in edited
         assert "boom" in edited
+
+    @pytest.mark.asyncio
+    async def test_synclyrics_builds_command(self, bot, tmp_path):
+        folder = tmp_path / "espo_Music" / "Album"
+        folder.mkdir(parents=True)
+        bot._cfg["output_dir"] = str(tmp_path)
+        bot._client.send_message = AsyncMock(return_value={"message_id": 7})
+        bot._client.edit_message = AsyncMock()
+        result = {
+            "total": 3, "fixed": 2, "sidecars": 2, "kept": 1,
+            "no_lyrics": 0, "skipped": 0, "failed": 1, "would_fix": 0,
+            "details": [], "failed_files": ["bad.flac"],
+        }
+        bot._run_command_job = AsyncMock(return_value=(result, 7))
+
+        await bot._handle_update(_update(text="/synclyrics Album --force"))
+
+        spec = bot._run_command_job.call_args.args[1]
+        assert spec["type"] == "sync_lyrics"
+        assert spec["force"] is True
+        assert spec["folder"].endswith("/Album")
+        edited = bot._client.edit_message.call_args.args[2]
+        assert "Lyrics sync done" in edited
+        assert "Fetched: 2" in edited
 
     @pytest.mark.asyncio
     async def test_rmplaylist_never_deletes_non_flac_entries(self, bot, tmp_path):

@@ -170,10 +170,14 @@ class Bot:
             await self._client.send_message(
                 chat_id, f"🗑️ <b>Purged {count} item{'s' if count != 1 else ''}</b>"
             )
+        elif command == "retry":
+            await self._retry(chat_id, user, args)
         elif command == "mkplaylist":
             await self._mkplaylist(chat_id, user, args)
         elif command == "fixmetadata":
             await self._fixmetadata(chat_id, user, args)
+        elif command == "synclyrics":
+            await self._synclyrics(chat_id, user, args)
         elif command == "rmplaylist":
             await self._rmplaylist(chat_id, user, args)
 
@@ -199,6 +203,12 @@ class Bot:
             f"  ✅ Done: {s['done']}",
             f"  ❌ Failed: {s['failed']}",
         ]
+
+        next_retry = await asyncio.to_thread(self._qm.get_next_retry_at, uid)
+        if next_retry:
+            wait = (next_retry - datetime.now(timezone.utc)).total_seconds()
+            if wait > 0:
+                lines.append(f"  ⏱ Next retry in: {_format_duration(wait)}")
 
         if running:
             now = datetime.now(timezone.utc)
@@ -232,6 +242,10 @@ class Bot:
                 )
                 label = esc(h["query"][:60]) + _who(h)
                 lines.append(f"  #{h['id']} {icon} <b>{label}</b>")
+                if h["status"] == "failed" and h.get("error"):
+                    lines.append(f"    <code>{esc(h['error'][:160])}</code>")
+                elif h["status"] == "done" and h.get("result_failed"):
+                    lines.append(f"    🧊 {h['result_failed']} gave up")
         await self._client.send_message(chat_id, "\n".join(lines))
 
     async def _quality(self, chat_id: int, user: dict, args: str) -> None:
@@ -262,6 +276,29 @@ class Bot:
             f"✅ <b>Quality set to</b> <code>{esc(value)}</code>\n  Applies to new downloads only.",
         )
 
+    async def _retry(self, chat_id: int, user: dict, args: str) -> None:
+        raw = args.strip().lstrip("#")
+        if not raw.isdigit():
+            await self._client.send_message(
+                chat_id,
+                "🔄 <b>Usage:</b> /retry &lt;item_id&gt;\n"
+                "  Re-queues one failed item and resets its retry counter.",
+            )
+            return
+        item_id = int(raw)
+        ok = await asyncio.to_thread(self._qm.retry_item, item_id, user["id"])
+        if not ok:
+            await self._client.send_message(
+                chat_id,
+                f"❌ <b>Cannot retry #{item_id}</b>\n"
+                "  Not found, not yours, or currently running.",
+            )
+            return
+        self._wake_event.set()
+        await self._client.send_message(
+            chat_id, f"🔄 <b>Re-queued #{item_id}</b>\n  Retry counter reset."
+        )
+
     async def _run_command_job(self, chat_id: int, spec: dict) -> tuple[dict | None, int | None]:
         """Run a one-shot command (m3u8 / fix_metadata) via stream_job —
         the same IPC loop downloads use — streaming progress into a single
@@ -282,12 +319,22 @@ class Bot:
 
         spec = {**spec, "log_path": self._logger.handlers[0].baseFilename if self._logger.handlers else None}
 
+        last_edit = 0.0
+
         async def on_event(event: dict):
+            nonlocal last_edit
             if event.get("event") != "progress":
                 return
-            pct = f" \u00b7 {event.get('done', 0) * 100 // max(1, event.get('total', 1))}%" if event.get("total") else ""
+            now = time.monotonic()
+            done = event.get("done", 0)
+            total = event.get("total", 0)
+            # Telegram rate-limits edits; one update every 2s is plenty.
+            if now - last_edit < 2.0 and done < total:
+                return
+            last_edit = now
+            pct = f" \u00b7 {done * 100 // max(1, total)}%" if total else ""
             await _edit(
-                f"⏳ {header}\n  {event.get('done', 0)}/{event.get('total', 0)}{pct}\n"
+                f"⏳ {header}\n  {done}/{total}{pct}\n"
                 f"  <code>{esc((event.get('title') or '')[:200])}</code>"
             )
 
@@ -426,7 +473,8 @@ class Bot:
 
         mode = "fetch lyrics" if lyrics else "keep lyrics as-is"
         result, message_id = await self._run_command_job(chat_id, {
-            "type": "fix_metadata", "folder": str(folder), "lyrics": lyrics, "cfg": ucfg,
+            "type": "fix_metadata", "folder": str(folder), "lyrics": lyrics,
+            "providers": ucfg.get("lyrics_providers") or [], "cfg": ucfg,
             "header": f"🔧 <b>Fix metadata</b>\n  Scanning <code>{esc(folder)}</code>\u2026\n  🎤 {mode}",
         })
         if result is None:
@@ -460,6 +508,63 @@ class Bot:
                 lines.append(f"  <code>{esc(Path(f).name)} \u2192 {esc(Path(f).parent.name)}/</code>")
             if len(moved_files) > _MAX_LISTED_FILES:
                 lines.append(f"  … and {len(moved_files) - _MAX_LISTED_FILES} more moved")
+        if message_id:
+            await self._client.edit_message(chat_id, message_id, "\n".join(lines))
+
+    async def _synclyrics(self, chat_id: int, user: dict, args: str) -> None:
+        """Fetch/refresh lyrics only — never re-tags or moves files."""
+        ucfg = _user_cfg(self._qm, self._cfg, user)
+        root = Path(ucfg["output_dir"])
+        force = any(p.lower() == "--force" for p in args.split())
+        parts = [p for p in args.split() if p.lower() != "--force"]
+
+        if not parts:
+            folder = root
+        else:
+            folder = Path(" ".join(parts)).expanduser()
+            if not folder.is_absolute():
+                folder = root / folder
+            if not folder.resolve().is_relative_to(root.resolve()):
+                await self._client.send_message(
+                    chat_id, f"❌ Folder must be inside your library: <code>{esc(root)}</code>"
+                )
+                return
+            if not folder.is_dir():
+                await self._client.send_message(
+                    chat_id, f"❌ Not a folder: <code>{esc(folder)}</code>"
+                )
+                return
+
+        mode = "re-fetch all" if force else "only missing"
+        result, message_id = await self._run_command_job(chat_id, {
+            "type": "sync_lyrics", "folder": str(folder), "force": force,
+            "providers": ucfg.get("lyrics_providers") or [], "cfg": ucfg,
+            "header": f"🎤 <b>Sync lyrics</b>\n  Scanning <code>{esc(folder)}</code>…\n  Mode: {mode}",
+        })
+        if result is None:
+            return
+        if result.get("error"):
+            text = f"❌ <b>Sync lyrics failed</b>\n  <code>{esc(result['error'])}</code>"
+            if message_id:
+                await self._client.edit_message(chat_id, message_id, text)
+            else:
+                await self._client.send_message(chat_id, text)
+            return
+        lines = [
+            "✅ <b>Lyrics sync done</b>",
+            f"  Files: {result.get('total', 0)}",
+            f"  Fetched: {result.get('fixed', 0)}",
+            f"  .lrc sidecars: {result.get('sidecars', 0)}",
+            f"  Kept: {result.get('kept', 0)}",
+            f"  No lyrics found: {result.get('no_lyrics', 0)}",
+            f"  Skipped: {result.get('skipped', 0)}",
+            f"  Failed: {result.get('failed', 0)}",
+        ]
+        failed_files = result.get("failed_files") or []
+        if failed_files:
+            lines.append("  ❌ <code>" + ", ".join(esc(f) for f in failed_files[:_MAX_LISTED_FILES]) + "</code>")
+            if len(failed_files) > _MAX_LISTED_FILES:
+                lines.append(f"  … and {len(failed_files) - _MAX_LISTED_FILES} more failed (see logs)")
         if message_id:
             await self._client.edit_message(chat_id, message_id, "\n".join(lines))
 

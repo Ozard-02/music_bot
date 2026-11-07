@@ -66,20 +66,27 @@ def spotiflac_track_relative_path(track: TrackMetadata, cfg: dict) -> str:
     return str(Path(*parts) / filename) if parts else filename
 
 
-def on_disk_relative_path(track: TrackMetadata, cfg: dict) -> str | None:
+def on_disk_relative_path(
+    track: TrackMetadata, cfg: dict, min_bytes: int = 1
+) -> str | None:
     """Return the relative path of the file on disk, whichever naming exists.
 
     Our path wins; SpotiFLAC's sanitized path is the fallback for older
     downloads or failed renames (e.g. AC/DC -> AC_DC).  None when neither file
-    exists.
+    exists.  Files smaller than `min_bytes` (default 1) count as missing, so a
+    0-byte placeholder is re-downloaded instead of skipped forever.
     """
     root = Path(cfg["output_dir"])
     for rel in (
         track_relative_path(track, cfg),
         spotiflac_track_relative_path(track, cfg),
     ):
-        if (root / rel).exists():
-            return rel
+        path = root / rel
+        try:
+            if path.is_file() and path.stat().st_size >= min_bytes:
+                return rel
+        except OSError:
+            continue
     return None
 
 
@@ -107,7 +114,7 @@ def partition_tracks(
     for t in unique:
         if on_disk_relative_path(t, cfg):
             existing.append(t)
-        elif t.title in skip:
+        elif t.id in skip or t.title in skip:
             given_up.append(t)
         else:
             missing.append(t)

@@ -17,6 +17,11 @@ class QueueManager:
         if self._conn is None:
             self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
+            # WAL lets readers (status/history) run alongside the worker's
+            # writes without blocking each other.
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
 
     def _init_db(self):
@@ -80,11 +85,43 @@ class QueueManager:
                 conn.execute("ALTER TABLE queue ADD COLUMN user INTEGER")
             except sqlite3.OperationalError:
                 pass
+            try:
+                conn.execute("ALTER TABLE failed_tracks ADD COLUMN track_id TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute(
+                    "ALTER TABLE failed_tracks ADD COLUMN permanent INTEGER DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass
 
             # Reset items stranded in 'running' from a killed process
             conn.execute(
                 "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
             )
+
+        self.prune_history(30)
+
+    def prune_history(self, days: int = 30) -> int:
+        """Drop completed/failed rows older than `days` to keep queue.db small."""
+        with self._lock:
+            conn = self._connect()
+            with conn:
+                cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+                cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
+                conn.execute(
+                    "DELETE FROM failed_tracks WHERE item_id IN "
+                    "(SELECT id FROM queue WHERE status IN ('done','failed') "
+                    "AND completed_at IS NOT NULL AND completed_at < ?)",
+                    (cutoff_iso,),
+                )
+                cursor = conn.execute(
+                    "DELETE FROM queue WHERE status IN ('done','failed') "
+                    "AND completed_at IS NOT NULL AND completed_at < ?",
+                    (cutoff_iso,),
+                )
+                return cursor.rowcount
 
     def enqueue_unique(self, input_type: str, query: str, user: int | None = None) -> tuple[int, bool]:
         """Atomically check for existing + insert under a single lock.
@@ -160,17 +197,46 @@ class QueueManager:
                         (item_id,),
                     )
 
-    def get_next_retry_at(self) -> datetime | None:
-        """Return the earliest retry_at of all queued items, or None."""
+    def get_next_retry_at(self, user_id: int | None = None) -> datetime | None:
+        """Return the earliest retry_at of queued items, or None."""
         with self._lock:
             conn = self._connect()
-            cursor = conn.execute(
-                "SELECT MIN(retry_at) FROM queue WHERE status='queued' AND retry_at IS NOT NULL"
-            )
+            if user_id is None:
+                cursor = conn.execute(
+                    "SELECT MIN(retry_at) FROM queue WHERE status='queued' "
+                    "AND retry_at IS NOT NULL"
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT MIN(retry_at) FROM queue WHERE status='queued' "
+                    "AND retry_at IS NOT NULL AND user IS ?",
+                    (user_id,),
+                )
             row = cursor.fetchone()
         if row and row[0]:
             return datetime.fromisoformat(row[0])
         return None
+
+    def retry_item(self, item_id: int, user_id: int | None = None) -> bool:
+        """Manually requeue one item, resetting retries/backoff/error."""
+        with self._lock:
+            conn = self._connect()
+            with conn:
+                if user_id is None:
+                    cursor = conn.execute(
+                        "UPDATE queue SET status='queued', retries=0, retry_at=NULL, "
+                        "error=NULL, progress=NULL, started_at=NULL, completed_at=NULL "
+                        "WHERE id=? AND status != 'running'",
+                        (item_id,),
+                    )
+                else:
+                    cursor = conn.execute(
+                        "UPDATE queue SET status='queued', retries=0, retry_at=NULL, "
+                        "error=NULL, progress=NULL, started_at=NULL, completed_at=NULL "
+                        "WHERE id=? AND status != 'running' AND user IS ?",
+                        (item_id, user_id),
+                    )
+                return cursor.rowcount > 0
 
     def mark_done(self, item_id: int, ok: int, skipped: int, failed: int):
         with self._lock:
@@ -242,15 +308,23 @@ class QueueManager:
                 )
             return [dict(row) for row in cursor.fetchall()]
 
-    def log_failed_track(self, item_id: int, track_title: str, error: str | None = None):
+    def log_failed_track(
+        self,
+        item_id: int,
+        track_title: str,
+        error: str | None = None,
+        track_id: str | None = None,
+        permanent: bool = False,
+    ):
         with self._lock:
             conn = self._connect()
             with conn:
                 now = datetime.now(timezone.utc).isoformat()
                 conn.execute(
-                    "INSERT INTO failed_tracks (item_id, track_title, error, failed_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (item_id, track_title, error, now),
+                    "INSERT INTO failed_tracks "
+                    "(item_id, track_title, error, track_id, permanent, failed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (item_id, track_title, error, track_id, 1 if permanent else 0, now),
                 )
 
     def get_failed_tracks(self, item_id: int | None = None, limit: int = 50) -> list[dict]:
@@ -269,15 +343,23 @@ class QueueManager:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_give_up_titles(self, item_id: int, threshold: int) -> set[str]:
-        """Titles that have failed >= threshold times for this item."""
+        """Tracks that should not be retried for this item.
+
+        Returns track IDs when known (new rows) and titles for legacy rows, so
+        two different songs sharing a title no longer give up together.
+        Permanent failures are returned immediately; the rest after `threshold`
+        attempts.
+        """
         with self._lock:
             conn = self._connect()
             cursor = conn.execute(
-                "SELECT track_title, COUNT(*) AS n FROM failed_tracks "
-                "WHERE item_id=? GROUP BY track_title HAVING n >= ?",
+                "SELECT COALESCE(NULLIF(track_id, ''), track_title) AS key, "
+                "COUNT(*) AS n, SUM(COALESCE(permanent, 0)) AS perm "
+                "FROM failed_tracks WHERE item_id=? GROUP BY key "
+                "HAVING perm > 0 OR n >= ?",
                 (item_id, threshold),
             )
-            return {row["track_title"] for row in cursor.fetchall()}
+            return {row["key"] for row in cursor.fetchall()}
 
     def purge_all(self, user_id: int | None = None) -> int:
         """Delete queued/done/failed rows (all users, or one user when given)."""

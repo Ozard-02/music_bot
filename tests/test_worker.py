@@ -7,7 +7,31 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES, RETRY_BACKOFF_BASE
-from worker import Worker, decide_failure
+from worker import Worker, decide_failure, is_permanent_failure
+
+
+class TestPermanentFailure:
+    @pytest.mark.parametrize("error", [
+        "No matching track on Deezer (ISRC lookup and text search both failed).",
+        "Track not found (ISRC: X, Title: Y)",
+        "No results found for 'Artist - Song'",
+        "Stream not available",
+        "Not a playlist URL: ...",
+        "All providers failed — qobuz: Track not found; deezer: no matching track",
+    ])
+    def test_permanent_markers(self, error):
+        assert is_permanent_failure(error)
+
+    @pytest.mark.parametrize("error", [
+        None,
+        "",
+        "metadata_error",
+        "Download timed out after 100s",
+        "Connection reset by peer",
+        "no_file_after_download",
+    ])
+    def test_transient_or_unknown(self, error):
+        assert not is_permanent_failure(error)
 
 
 class TestDecideFailure:

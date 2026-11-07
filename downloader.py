@@ -20,7 +20,6 @@ from spotiflac_patch import _AsyncLockAdapter, pop_track_provider
 from track_utils import (
     on_disk_relative_path,
     partition_tracks,
-    prune_empty_parents,
     spotiflac_track_relative_path,
     track_relative_path,
 )
@@ -76,6 +75,7 @@ async def run_url(
         use_album_subfolders=cfg["use_album_subfolders"],
         first_artist_only=cfg["first_artist_only"],
         embed_lyrics=cfg["embed_lyrics"],
+        lyrics_providers=cfg.get("lyrics_providers") or None,
         enrich_providers=["apple", "deezer", "soundcloud"],
         track_max_retries=PER_TRACK_RETRIES,
         timeout_s=PER_TRACK_TIMEOUT,
@@ -90,7 +90,7 @@ async def run_url(
             except Exception:
                 logger.exception("Track metadata failed for %s", url)
                 if failure_cb:
-                    failure_cb(url, "metadata_error")
+                    failure_cb("", url, "metadata_error")
                 return DownloadResult(failed=1, failed_tracks=[("", url, "metadata_error")], total=1)
         else:
             _, tracks = await client.get_playlist(url)
@@ -190,7 +190,9 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: fl
         orig_path.parent.mkdir(parents=True, exist_ok=True)
         spoti_path.rename(orig_path)
         logger.info("Renamed %s -> %s", spoti_rel, orig_rel)
-        prune_empty_parents(spoti_path, Path(cfg["output_dir"]))
+        # Do NOT prune SpotiFLAC's now-empty artist/album dirs here: another
+        # concurrent download may still be writing into the same folder. The
+        # empty dirs are harmless; maintenance/scripts prune them later.
     except Exception as exc:
         logger.warning("Rename %s -> %s failed: %s", spoti_rel, orig_rel, exc)
 
@@ -247,7 +249,7 @@ async def _download_tracks(
                                 title, err = f[1], f[3] or "download_failed"
                             else:
                                 title, err = f.title, "download_failed"
-                            failure_cb(title, err)
+                            failure_cb(track.id, title, err)
                 else:
                     await asyncio.to_thread(_rename_after_download, track, cfg, logger, started)
                     await _fix_cover(track, cfg, logger)
@@ -256,7 +258,7 @@ async def _download_tracks(
             except Exception as exc:
                 failed_list.append(track)
                 if failure_cb:
-                    failure_cb(track.title, str(exc))
+                    failure_cb(track.id, track.title, str(exc))
             finally:
                 if lock_fd is not None:
                     try:
@@ -288,7 +290,7 @@ async def _download_tracks(
             failed_ids.add(t.id)
             logger.warning("Reconcile: no file on disk after download: %s", t.title)
             if failure_cb:
-                failure_cb(t.title, "no_file_after_download")
+                failure_cb(t.id, t.title, "no_file_after_download")
 
     failed = len(failed_list)
     ok = len(missing) - failed - len(skipped_inflight)

@@ -221,6 +221,31 @@ class TestQueueManager:
         assert qm.get_give_up_titles(item["id"], threshold=10) == set()
         assert qm.get_give_up_titles(999, threshold=10) == set()
 
+    def test_retry_item_resets_state_and_is_user_scoped(self, queue_manager: QueueManager):
+        qm = queue_manager
+        qm.enqueue_unique("link", "url", user=1)
+        item = qm.dequeue()
+        qm.mark_failed(item["id"], "boom")
+
+        assert qm.retry_item(item["id"], user_id=2) is False
+        assert qm.retry_item(item["id"], user_id=1) is True
+        row = qm.get_item(item["id"])
+        assert row["status"] == "queued"
+        assert row["retries"] == 0
+        assert row["error"] is None
+
+    def test_permanent_failure_gives_up_immediately_and_uses_track_id(
+        self, queue_manager: QueueManager,
+    ):
+        qm = queue_manager
+        qm.enqueue_unique("link", "url")
+        item = qm.dequeue()
+        # Same title, different IDs: only the permanent one gives up.
+        qm.log_failed_track(item["id"], "Same Title", "No matching track", track_id="id1", permanent=True)
+        qm.log_failed_track(item["id"], "Same Title", "Deezer 404", track_id="id2")
+
+        assert qm.get_give_up_titles(item["id"], threshold=10) == {"id1"}
+
     def test_log_failed_track_without_error(self, queue_manager: QueueManager):
         qm = queue_manager
         qm.enqueue_unique("link", "url")

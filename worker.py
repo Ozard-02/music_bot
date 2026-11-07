@@ -51,6 +51,28 @@ def backoff_delay(retries: int, floor: int = 0) -> int:
     return max(floor, min(MAX_RETRY_BACKOFF, RETRY_BACKOFF_BASE * (2 ** retries)))
 
 
+# Errors that will not change on retry: the track is not in any configured
+# provider, or the input itself is invalid. Retrying these 15 times just
+# floods the queue and Telegram.
+_PERMANENT_ERROR_MARKERS = (
+    "no matching track",
+    "track not found",
+    "no results found",
+    "not available",
+    "unavailable",
+    "not a playlist",
+    "invalid spotify",
+)
+
+
+def is_permanent_failure(error: str | None) -> bool:
+    """True when retrying the same track cannot plausibly succeed."""
+    if not error:
+        return False
+    text = str(error).lower()
+    return any(marker in text for marker in _PERMANENT_ERROR_MARKERS)
+
+
 @dataclass(frozen=True)
 class FailureDecision:
     """Outcome for a failed item: action + detail (error, count, or delay)."""
@@ -353,8 +375,14 @@ class Worker:
                     status += f" · via {event['provider']}"
                 await asyncio.to_thread(self._queue.set_progress, item["id"], status)
             elif kind == "failure":
+                error = event.get("error")
                 await asyncio.to_thread(
-                    self._queue.log_failed_track, item["id"], event.get("title", ""), event.get("error"),
+                    self._queue.log_failed_track,
+                    item["id"],
+                    event.get("title", ""),
+                    error,
+                    event.get("track_id"),
+                    is_permanent_failure(error),
                 )
             elif kind == "resolved":
                 display = event.get("display") or display

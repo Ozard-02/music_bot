@@ -46,8 +46,13 @@ async def _job(spec: dict, logger: logging.Logger) -> DownloadResult:
             "provider": provider,
         })
 
-    def _failure(title, err):
-        _emit({"event": "failure", "title": title, "error": err})
+    def _failure(track_id, title, err):
+        _emit({
+            "event": "failure",
+            "track_id": track_id,
+            "title": title,
+            "error": err,
+        })
 
     if spec.get("type") == "search":
         from SpotiFLAC import AsyncSpotiFLAC
@@ -102,7 +107,9 @@ async def _command(spec: dict, logger: logging.Logger) -> dict:
 
         try:
             return await fix_library(
-                spec["folder"], apply=True, progress=progress, lyrics=bool(spec.get("lyrics")),
+                spec["folder"], apply=True, progress=progress,
+                lyrics=bool(spec.get("lyrics")),
+                lyrics_providers=spec.get("providers") or None,
             )
         except Exception as exc:
             # fix_library() is defensive too, but keep the result shape valid
@@ -115,10 +122,32 @@ async def _command(spec: dict, logger: logging.Logger) -> dict:
                 "details": [], "moved_files": [], "failed_files": [],
             }
 
+    if cmd == "sync_lyrics":
+        from scripts.sync_lyrics import sync_lyrics
+
+        async def progress(current, total, text):
+            _emit({"event": "progress", "done": current, "total": total, "title": text})
+
+        try:
+            return await sync_lyrics(
+                spec["folder"],
+                apply=True,
+                progress=progress,
+                providers=spec.get("providers") or None,
+                force=bool(spec.get("force")),
+            )
+        except Exception as exc:
+            logger.exception("sync_lyrics failed")
+            return {
+                "error": str(exc), "total": 0, "fixed": 0, "sidecars": 0,
+                "kept": 0, "no_lyrics": 0, "skipped": 0, "failed": 0,
+                "would_fix": 0, "details": [], "failed_files": [],
+            }
+
     raise ValueError(f"unknown command type: {cmd}")
 
 
-_COMMANDS = {"m3u8", "fix_metadata"}
+_COMMANDS = {"m3u8", "fix_metadata", "sync_lyrics"}
 
 
 def main() -> int:

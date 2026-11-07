@@ -64,10 +64,10 @@ bot.py ──► queue_manager.enqueue(query, user)
 bot.py ──► queue_manager.stats(user) ──► sendMessage
 ```
 
-### /mkplaylist and /fixmetadata (one-shot subprocess commands)
+### /mkplaylist, /fixmetadata and /synclyrics (one-shot subprocess commands)
 ```
-bot.py ──► _run_command_job(spec) ──► worker.stream_job (type=m3u8|fix_metadata)
-   ──► child: build_m3u8 / fix_library
+bot.py ──► _run_command_job(spec) ──► worker.stream_job (type=m3u8|fix_metadata|sync_lyrics)
+   ──► child: build_m3u8 / fix_library / sync_lyrics
    ──► progress / result JSON-lines on stdout ──► bot edits one Telegram message
 ```
 

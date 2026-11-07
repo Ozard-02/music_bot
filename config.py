@@ -61,6 +61,7 @@ def load_config(logger: logging.Logger) -> dict:
         "use_album_subfolders": "{album}" in folder_template,
         "first_artist_only": cfg.get("useFirstArtistOnly", True),
         "embed_lyrics": cfg.get("embedLyrics", True),
+        "lyrics_providers": cfg.get("lyricsProviders") or [],
         "quality": cfg.get("tidalQuality", "LOSSLESS"),
         "services": services,
         "max_download_timeout": int(cfg.get("maxDownloadTimeout", MAX_DOWNLOAD_TIMEOUT)),

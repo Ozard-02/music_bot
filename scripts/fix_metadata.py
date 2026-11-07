@@ -132,6 +132,7 @@ async def fix_album_folder(
     progress=None,
     logger: logging.Logger | None = None,
     lyrics: bool = False,
+    lyrics_providers: list[str] | None = None,
 ) -> dict:
     """Re-tag every FLAC directly inside `folder`."""
     llog = logger or log
@@ -144,8 +145,6 @@ async def fix_album_folder(
 
     from SpotiFLAC.client import SpotifyMetadataClient
     from SpotiFLAC.core.tagger import embed_metadata_async, EmbedOptions
-
-    reset_progress_manager()
 
     majority_album = _majority([_read_existing(f)["album"] for f in flacs])
     if apply:
@@ -201,6 +200,7 @@ async def fix_album_folder(
                             enrich=True,
                             enrich_providers=list(ENRICH_PROVIDERS),
                             embed_lyrics=lyrics,
+                            lyrics_providers=list(lyrics_providers or []),
                             cover_url=track.cover_url or "",
                         ),
                         cover_data=cover_data,
@@ -273,6 +273,8 @@ async def fix_library(
     progress=None,
     logger: logging.Logger | None = None,
     lyrics: bool = False,
+    lyrics_providers: list[str] | None = None,
+    max_folders: int = 2,
 ) -> dict:
     """Walk `root` and re-tag every album folder (dir containing FLACs).
 
@@ -305,30 +307,56 @@ async def fix_library(
         return agg
 
     agg["folders"] = len(todo)
-    for i, folder in enumerate(todo, start=1):
-        if progress:
+    reset_progress_manager()  # once, before any concurrent folder starts
+
+    sem = asyncio.Semaphore(max(1, max_folders))
+    agg_lock = asyncio.Lock()
+    completed = 0
+
+    async def process_folder(folder: Path) -> None:
+        nonlocal completed
+        async with sem:
+            if progress:
+                try:
+                    await progress(0, len(todo), f"Folder: {folder.relative_to(root)}")
+                except Exception as exc:
+                    llog.warning("Progress update failed: %s", exc)
             try:
-                await progress(i, len(todo), f"Folder: {folder.relative_to(root)}")
+                sub = await fix_album_folder(
+                    folder, apply=apply, progress=None, logger=llog,
+                    lyrics=lyrics, lyrics_providers=lyrics_providers,
+                )
             except Exception as exc:
-                llog.warning("Progress update failed: %s", exc)
-        try:
-            sub = await fix_album_folder(
-                folder, apply=apply, progress=None, logger=llog, lyrics=lyrics
-            )
-        except Exception as exc:
-            llog.exception("Folder %s failed", folder)
-            agg["failed"] += 1
-            agg["failed_files"].append(str(folder))
-            agg["details"].append(f"FAIL {folder} — {exc}")
-            continue
-        for key in ("total", "fixed", "moved", "failed", "skipped", "would_fix"):
-            agg[key] += sub[key]
-        agg["details"].extend(sub["details"])
-        agg["moved_files"].extend(sub["moved_files"])
-        agg["failed_files"].extend(sub["failed_files"])
-        for key in ("details", "moved_files", "failed_files"):
-            if len(agg[key]) > _MAX_AGG_LIST:
-                del agg[key][:-_MAX_AGG_LIST]
+                llog.exception("Folder %s failed", folder)
+                sub = {
+                    "total": 0, "fixed": 0, "moved": 0, "failed": 1,
+                    "skipped": 0, "would_fix": 0, "details": [],
+                    "moved_files": [], "failed_files": [str(folder)],
+                }
+                async with agg_lock:
+                    agg["failed"] += 1
+                    agg["failed_files"].append(str(folder))
+                    agg["details"].append(f"FAIL {folder} — {exc}")
+            else:
+                async with agg_lock:
+                    for key in ("total", "fixed", "moved", "failed", "skipped", "would_fix"):
+                        agg[key] += sub[key]
+                    agg["details"].extend(sub["details"])
+                    agg["moved_files"].extend(sub["moved_files"])
+                    agg["failed_files"].extend(sub["failed_files"])
+                    for key in ("details", "moved_files", "failed_files"):
+                        if len(agg[key]) > _MAX_AGG_LIST:
+                            del agg[key][:-_MAX_AGG_LIST]
+            async with agg_lock:
+                completed += 1
+                done = completed
+            if progress:
+                try:
+                    await progress(done, len(todo), f"Folder: {folder.relative_to(root)}")
+                except Exception as exc:
+                    llog.warning("Progress update failed: %s", exc)
+
+    await asyncio.gather(*[process_folder(f) for f in todo])
 
     if progress:
         try:
@@ -351,6 +379,10 @@ async def _main() -> None:
         "--lyrics", action="store_true",
         help="Also fetch and embed lyrics (slow). Default keeps existing lyrics as-is.",
     )
+    parser.add_argument(
+        "--parallel", type=int, default=2, metavar="N",
+        help="Album folders processed concurrently (default: 2).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -364,7 +396,10 @@ async def _main() -> None:
     mode = "APPLY" if args.apply else "DRY-RUN"
     log.info("=== fix_metadata %s: %s ===", mode, target)
 
-    res = await fix_library(target, apply=args.apply, logger=log, lyrics=args.lyrics)
+    res = await fix_library(
+        target, apply=args.apply, logger=log, lyrics=args.lyrics,
+        max_folders=args.parallel,
+    )
 
     log.info("")
     log.info("=== Results ===")

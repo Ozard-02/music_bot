@@ -213,13 +213,20 @@ class TestSpotiFlacPathParity:
 
 
 class TestBuildM3u8Lines:
-    @patch("m3u8.Path.exists", return_value=True)
-    def test_all_tracks_exist(self, mock_exists):
-        cfg = {"output_dir": "/music", "first_artist_only": True, "filename_format": "{artist} - {title}"}
+    def test_all_tracks_exist(self, tmp_path):
+        music = tmp_path / "music"
+        cfg = {"output_dir": str(music), "first_artist_only": True, "filename_format": "{artist} - {title}"}
         tracks = [
             make_track(track_id="1", title="Song A", first_artist="Artist A", album="Album", album_artist="Artist A", duration_seconds=200),
             make_track(track_id="2", title="Song B", first_artist="Artist B", album="Album", album_artist="Artist B", duration_seconds=150),
         ]
+        for rel in (
+            "Artist A/Album/Artist A - Song A.flac",
+            "Artist B/Album/Artist B - Song B.flac",
+        ):
+            p = music / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"f")
         lines, count, missing = build_m3u8_lines(tracks, cfg)
         assert count == 2
         assert len(missing) == 0
@@ -229,14 +236,21 @@ class TestBuildM3u8Lines:
         assert "#EXTINF:150,Artist B - Song B" in lines
         assert "Artist B/Album/Artist B - Song B.flac" in lines
 
-    @patch("m3u8.Path.exists", return_value=True)
-    def test_dedup_by_track_id(self, mock_exists):
-        cfg = {"output_dir": "/music", "first_artist_only": True, "filename_format": "{artist} - {title}"}
+    def test_dedup_by_track_id(self, tmp_path):
+        music = tmp_path / "music"
+        cfg = {"output_dir": str(music), "first_artist_only": True, "filename_format": "{artist} - {title}"}
         tracks = [
             make_track(track_id="1", title="Song A", first_artist="Artist A", album="Album", album_artist="Artist A"),
             make_track(track_id="1", title="Song A", first_artist="Artist A", album="Album", album_artist="Artist A"),
             make_track(track_id="2", title="Song B", first_artist="Artist B", album="Album", album_artist="Artist B"),
         ]
+        for rel in (
+            "Artist A/Album/Artist A - Song A.flac",
+            "Artist B/Album/Artist B - Song B.flac",
+        ):
+            p = music / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"f")
         lines, count, missing = build_m3u8_lines(tracks, cfg)
         assert count == 2
         assert len(missing) == 0
@@ -252,7 +266,7 @@ class TestBuildM3u8Lines:
         # Only create Song A on disk
         track_a = music / "Artist A" / "Album X" / "Artist A - Song A.flac"
         track_a.parent.mkdir(parents=True)
-        track_a.touch()
+        track_a.write_bytes(b"f")
 
         lines, count, missing = build_m3u8_lines(tracks, cfg)
         assert count == 1
@@ -280,7 +294,7 @@ class TestBuildM3u8Lines:
         spoti_rel = spotiflac_track_relative_path(track, cfg)
         spoti_path = music / spoti_rel
         spoti_path.parent.mkdir(parents=True)
-        spoti_path.touch()
+        spoti_path.write_bytes(b"f")
 
         lines, count, missing = build_m3u8_lines([track], cfg)
         assert count == 1
@@ -372,7 +386,7 @@ class TestBuildM3u8Async:
         music = tmp_path / "music"
         track_path = music / "Artist" / "Album" / "Artist - Song.flac"
         track_path.parent.mkdir(parents=True)
-        track_path.touch()
+        track_path.write_bytes(b"f")
 
         cfg = {"output_dir": str(music), "first_artist_only": True, "filename_format": "{artist} - {title}"}
 
