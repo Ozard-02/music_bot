@@ -30,3 +30,5 @@ jobs:
         with:
           push: true
           tags: ghcr.io/ozard-02/music_loop:latest
+          build-args: |
+            BUILD_COMMIT=${{ github.sha }}

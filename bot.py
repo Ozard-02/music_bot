@@ -725,6 +725,7 @@ def main() -> None:
         sys.exit(1)
 
     logger = setup_logger()
+    logger.info("SpotiLoop build: %s", os.environ.get("BUILD_COMMIT", "dev"))
     cfg = load_config(logger)
 
     lock = SingleInstanceLock(QUEUE_DB.with_name(QUEUE_DB.name + ".lock"), logger)

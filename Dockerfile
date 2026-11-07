@@ -1,5 +1,10 @@
 FROM python:3.14-slim
 
+# Build identity, passed by CI so the startup log shows which commit is
+# actually running (makes "is the fix deployed?" obvious).
+ARG BUILD_COMMIT=dev
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+
 # Cap glibc malloc arenas: threaded Python (to_thread + subprocesses) otherwise
 # spawns an arena per thread and RSS balloons. 2 is plenty for our workload.
 ENV MALLOC_ARENA_MAX=2
