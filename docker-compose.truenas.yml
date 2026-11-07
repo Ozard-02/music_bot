@@ -1,6 +1,7 @@
 services:
   spoty-loop:
-    image: ghcr.io/ozard-02/music_loop:latest
+    # Pin a release tag (or an immutable sha-<commit> tag) instead of latest.
+    image: ghcr.io/ozard-02/music_loop:1.0.0
     container_name: spoty-loop
     env_file: .env
     environment:

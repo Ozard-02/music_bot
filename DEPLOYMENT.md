@@ -19,7 +19,7 @@ docker compose logs -f music-bot
 docker-compose -f docker-compose.truenas.yml up -d
 ```
 
-- Uses the ghcr image (`ghcr.io/ozard-02/music_loop:latest`), not a local build.
+- Uses a **pinned** ghcr tag (e.g. `:1.0.0` or `:sha-ee4b508`), not `latest`.
 - Volumes point at `/mnt/pool/navidrome/Music` (shared with Navidrome) and
   `/mnt/pool/VM/spotiflac` (SpotiFLAC config/credentials).
 
@@ -27,7 +27,17 @@ docker-compose -f docker-compose.truenas.yml up -d
 
 GitHub Actions on `main`:
 - `pytest` (host or container) on push
-- build + push `ghcr.io/ozard-02/music_loop:latest` on merge to `main`
+- build + push an immutable `:sha-<commit>` tag on every merge to `main`
+- build + push semver tags (`1.2.3`, `1.2`) and move `latest` only when a
+  `v*.*.*` Git tag is pushed
+
+Release:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+# then pin docker-compose.truenas.yml to :1.2.3 and redeploy
+```
 
 The parent is stdlib-only, so the CI test job does not need the full SpotiFLAC
 install for parent tests; subprocess tests need SpotiFLAC (installed via the

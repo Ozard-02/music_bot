@@ -3,6 +3,7 @@ name: Build & Push Docker Image
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
 
 jobs:
   build:
@@ -26,9 +27,24 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/ozard-02/music_loop
+          tags: |
+            # Immutable per-commit tag for every main build.
+            type=sha,format=short,prefix=sha-
+            # Semver tags from Git tags like v1.2.3.
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # `latest` only on release tags, never on plain main pushes.
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
       - uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ghcr.io/ozard-02/music_loop:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_COMMIT=${{ github.sha }}
