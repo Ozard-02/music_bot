@@ -292,6 +292,81 @@ async def test_deezer_text_guard_rejects_wrong_candidate(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_deezer_exact_search_falls_back_to_plain_query(monkeypatch):
+    """Deezer's track:"…" artist:"…" query returns 0 for some valid tracks;
+    the guard must retry with a plain query instead of giving up."""
+    from SpotiFLAC.providers import deezer
+
+    deezer.DeezerProvider._spoty_loop_match_patched = False
+    correct = {
+        "title": "All I Do Is Sit Inside My House All Day",
+        "artist": {"name": "Josh A"},
+        "duration": 135,
+    }
+
+    async def _no_exact_match(self, title, artist):
+        return None
+
+    async def _plain_match(self, title, artist):
+        return correct
+
+    monkeypatch.setattr(
+        deezer.DeezerProvider, "_search_track_text_async", _no_exact_match,
+    )
+    monkeypatch.setattr(
+        spotiflac_patch, "_deezer_plain_text_search", _plain_match,
+    )
+    spotiflac_patch._patch_provider_matching()
+
+    result = await deezer.DeezerProvider._search_track_text_async(
+        None, "All I Do Is Sit Inside My House All Day", "Josh A",
+    )
+    assert result is correct
+
+
+@pytest.mark.asyncio
+async def test_deezer_plain_text_search_scores_and_fetches(monkeypatch):
+    class _FakeProvider:
+        async def _get_json_cached_async(self, url):
+            assert "All+I+Do" in url or "All%20I%20Do" in url
+            return {"data": [
+                {"id": 1, "title": "Something Else", "artist": {"name": "Other"}},
+                {"id": 460797552,
+                 "title": "All I Do Is Sit Inside My House All Day",
+                 "artist": {"name": "Josh A"}},
+            ]}
+
+        async def _get_json_async(self, url):
+            assert url.endswith("/460797552")
+            return {"id": 460797552, "isrc": "TCADM1804980"}
+
+    res = await spotiflac_patch._deezer_plain_text_search(
+        _FakeProvider(),
+        "All I Do Is Sit Inside My House All Day",
+        "Josh A",
+    )
+    assert res == {"id": 460797552, "isrc": "TCADM1804980"}
+
+
+@pytest.mark.asyncio
+async def test_deezer_plain_text_search_rejects_low_score():
+    class _FakeProvider:
+        async def _get_json_cached_async(self, url):
+            return {"data": [
+                {"id": 2, "title": "Completely Different", "artist": {"name": "Nobody"}},
+            ]}
+
+        async def _get_json_async(self, url):  # pragma: no cover - not reached
+            raise AssertionError("should not fetch a low-score candidate")
+
+    assert await spotiflac_patch._deezer_plain_text_search(
+        _FakeProvider(),
+        "All I Do Is Sit Inside My House All Day",
+        "Josh A",
+    ) is None
+
+
+@pytest.mark.asyncio
 async def test_qobuz_text_guard_accepts_correct_candidate(monkeypatch):
     from SpotiFLAC.providers import qobuz
 

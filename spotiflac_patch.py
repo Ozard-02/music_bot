@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 import unicodedata
+import urllib.parse
 
 _CONSOLE_PRINTS = (
     "print_source_banner",
@@ -329,6 +330,50 @@ def _reject(
     )
 
 
+async def _deezer_plain_text_search(provider, title: str, artist: str) -> dict | None:
+    """Fallback for Deezer's exact-field search.
+
+    SpotiFLAC queries ``track:"<title>" artist:"<artist>"``; Deezer returns
+    zero results for some valid tracks (e.g. Josh A — "All I Do Is Sit Inside
+    My House All Day"), even though a plain text query finds them exactly.
+    Mirror SpotiFLAC's own scoring/threshold on the plain query.
+    """
+    first_artist = str(artist or "").split(",", maxsplit=1)[0].strip()
+    query = f"{title} {first_artist}".strip()
+    if not query:
+        return None
+
+    url = f"https://api.deezer.com/search?q={urllib.parse.quote(query)}&limit=10"
+    try:
+        data = await provider._get_json_cached_async(url)
+    except Exception:
+        return None
+
+    title_l = str(title or "").lower()
+    artist_l = first_artist.lower()
+    best = None
+    best_score = 0.0
+    for track in (data or {}).get("data", []):
+        score = (
+            difflib.SequenceMatcher(
+                None, title_l, str(track.get("title", "")).lower()
+            ).ratio() * 70
+            + difflib.SequenceMatcher(
+                None, artist_l, str(track.get("artist", {}).get("name", "")).lower()
+            ).ratio() * 30
+        )
+        if score > best_score:
+            best, best_score = track, score
+
+    track_id = best.get("id") if best else None
+    if not track_id or best_score < 55:
+        return None
+    try:
+        return await provider._get_json_async(f"https://api.deezer.com/track/{track_id}")
+    except Exception:
+        return None
+
+
 def _patch_provider_matching() -> None:
     """Reject fuzzy-search candidates that are not the requested track."""
     try:
@@ -386,6 +431,10 @@ def _patch_provider_matching() -> None:
 
         async def _deezer_text_guarded(self, title, artist):
             track = await _orig_deezer_text(self, title, artist)
+            if not track:
+                # Exact-field query found nothing; retry the plain query
+                # before giving up (Deezer quirks on some valid tracks).
+                track = await _deezer_plain_text_search(self, title, artist)
             if not track:
                 return None
             ok, reason = _track_matches(track, title, artist)
