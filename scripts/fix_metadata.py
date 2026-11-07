@@ -251,7 +251,7 @@ async def fix_album_folder(
                 res["details"].append(f"FAIL {fpath.name} — {exc}")
                 llog.warning("  FAIL %s — %s", fpath.name, exc)
 
-        done = res["fixed"] + res["failed"] + res["skipped"]
+        done = res["fixed"] + res["failed"] + res["skipped"] + res["would_fix"]
         if progress and total:
             await progress(done, total, fpath.name)
 

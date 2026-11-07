@@ -162,11 +162,12 @@ class QueueManager:
 
     def get_next_retry_at(self) -> datetime | None:
         """Return the earliest retry_at of all queued items, or None."""
-        conn = self._connect()
-        cursor = conn.execute(
-            "SELECT MIN(retry_at) FROM queue WHERE status='queued' AND retry_at IS NOT NULL"
-        )
-        row = cursor.fetchone()
+        with self._lock:
+            conn = self._connect()
+            cursor = conn.execute(
+                "SELECT MIN(retry_at) FROM queue WHERE status='queued' AND retry_at IS NOT NULL"
+            )
+            row = cursor.fetchone()
         if row and row[0]:
             return datetime.fromisoformat(row[0])
         return None
@@ -202,22 +203,23 @@ class QueueManager:
                 )
 
     def get_status(self, user_id: int | None = None) -> dict:
-        conn = self._connect()
-        where = "1=1"
-        params: list = []
-        if user_id is not None:
-            where += " AND user IS ?"
-            params.append(user_id)
-        cur = conn.execute(
-            f"SELECT status, COUNT(*) FROM queue WHERE {where} GROUP BY status",
-            params,
-        )
-        counts = dict(cur.fetchall())
-        cur = conn.execute(
-            f"SELECT id FROM queue WHERE {where} AND status='queued' ORDER BY id LIMIT 1",
-            params,
-        )
-        row = cur.fetchone()
+        with self._lock:
+            conn = self._connect()
+            where = "1=1"
+            params: list = []
+            if user_id is not None:
+                where += " AND user IS ?"
+                params.append(user_id)
+            cur = conn.execute(
+                f"SELECT status, COUNT(*) FROM queue WHERE {where} GROUP BY status",
+                params,
+            )
+            counts = dict(cur.fetchall())
+            cur = conn.execute(
+                f"SELECT id FROM queue WHERE {where} AND status='queued' ORDER BY id LIMIT 1",
+                params,
+            )
+            row = cur.fetchone()
         return {
             "queued": counts.get("queued", 0),
             "running": counts.get("running", 0),
@@ -227,17 +229,18 @@ class QueueManager:
         }
 
     def get_running(self, user_id: int | None = None) -> list[dict]:
-        conn = self._connect()
-        if user_id is None:
-            cursor = conn.execute(
-                "SELECT * FROM queue WHERE status='running' ORDER BY id"
-            )
-        else:
-            cursor = conn.execute(
-                "SELECT * FROM queue WHERE status='running' AND user IS ? ORDER BY id",
-                (user_id,),
-            )
-        return [dict(row) for row in cursor.fetchall()]
+        with self._lock:
+            conn = self._connect()
+            if user_id is None:
+                cursor = conn.execute(
+                    "SELECT * FROM queue WHERE status='running' ORDER BY id"
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM queue WHERE status='running' AND user IS ? ORDER BY id",
+                    (user_id,),
+                )
+            return [dict(row) for row in cursor.fetchall()]
 
     def log_failed_track(self, item_id: int, track_title: str, error: str | None = None):
         with self._lock:
@@ -251,28 +254,30 @@ class QueueManager:
                 )
 
     def get_failed_tracks(self, item_id: int | None = None, limit: int = 50) -> list[dict]:
-        conn = self._connect()
-        if item_id:
-            cursor = conn.execute(
-                "SELECT * FROM failed_tracks WHERE item_id=? ORDER BY id DESC LIMIT ?",
-                (item_id, limit),
-            )
-        else:
-            cursor = conn.execute(
-                "SELECT * FROM failed_tracks ORDER BY id DESC LIMIT ?",
-                (limit,),
-            )
-        return [dict(row) for row in cursor.fetchall()]
+        with self._lock:
+            conn = self._connect()
+            if item_id:
+                cursor = conn.execute(
+                    "SELECT * FROM failed_tracks WHERE item_id=? ORDER BY id DESC LIMIT ?",
+                    (item_id, limit),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM failed_tracks ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                )
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_give_up_titles(self, item_id: int, threshold: int) -> set[str]:
         """Titles that have failed >= threshold times for this item."""
-        conn = self._connect()
-        cursor = conn.execute(
-            "SELECT track_title, COUNT(*) AS n FROM failed_tracks "
-            "WHERE item_id=? GROUP BY track_title HAVING n >= ?",
-            (item_id, threshold),
-        )
-        return {row["track_title"] for row in cursor.fetchall()}
+        with self._lock:
+            conn = self._connect()
+            cursor = conn.execute(
+                "SELECT track_title, COUNT(*) AS n FROM failed_tracks "
+                "WHERE item_id=? GROUP BY track_title HAVING n >= ?",
+                (item_id, threshold),
+            )
+            return {row["track_title"] for row in cursor.fetchall()}
 
     def purge_all(self, user_id: int | None = None) -> int:
         """Delete queued/done/failed rows (all users, or one user when given)."""
@@ -294,18 +299,19 @@ class QueueManager:
                 return cursor.rowcount
 
     def get_history(self, limit: int = 10, user_id: int | None = None) -> list[dict]:
-        conn = self._connect()
-        if user_id is None:
-            cursor = conn.execute(
-                "SELECT * FROM queue ORDER BY id DESC LIMIT ?",
-                (limit,),
-            )
-        else:
-            cursor = conn.execute(
-                "SELECT * FROM queue WHERE user IS ? ORDER BY id DESC LIMIT ?",
-                (user_id, limit),
-            )
-        return [dict(row) for row in cursor.fetchall()]
+        with self._lock:
+            conn = self._connect()
+            if user_id is None:
+                cursor = conn.execute(
+                    "SELECT * FROM queue ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM queue WHERE user IS ? ORDER BY id DESC LIMIT ?",
+                    (user_id, limit),
+                )
+            return [dict(row) for row in cursor.fetchall()]
 
     def upsert_user(self, telegram_user_id: int, username: str, folder: str, quality: str):
         """Insert the user row, or refresh username/quality. The folder is
@@ -324,18 +330,20 @@ class QueueManager:
                 )
 
     def get_user(self, telegram_user_id: int) -> dict | None:
-        conn = self._connect()
-        cursor = conn.execute(
-            "SELECT * FROM users WHERE telegram_user_id=?",
-            (telegram_user_id,),
-        )
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        with self._lock:
+            conn = self._connect()
+            cursor = conn.execute(
+                "SELECT * FROM users WHERE telegram_user_id=?",
+                (telegram_user_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def get_users(self) -> list[dict]:
-        conn = self._connect()
-        cursor = conn.execute("SELECT * FROM users ORDER BY telegram_user_id")
-        return [dict(row) for row in cursor.fetchall()]
+        with self._lock:
+            conn = self._connect()
+            cursor = conn.execute("SELECT * FROM users ORDER BY telegram_user_id")
+            return [dict(row) for row in cursor.fetchall()]
 
     def set_user_quality(self, telegram_user_id: int, quality: str):
         with self._lock:

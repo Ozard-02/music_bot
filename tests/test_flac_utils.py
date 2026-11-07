@@ -189,6 +189,16 @@ class TestReadLrc:
         from flac_utils import read_lrc
         assert read_lrc(tmp_path / "missing.flac") is None
 
+    @pytest.mark.parametrize("lrc", [
+        "[01:23]hello",
+        "[01:23:45.678]hello",
+        "[1:23:45.6]hello",
+    ])
+    def test_accepts_lrc_timestamp_variants(self, tmp_path, monkeypatch, lrc):
+        monkeypatch.setattr("flac_utils.FLAC", lambda p: _FakeAudio({"LYRICS": lrc}))
+        from flac_utils import read_lrc
+        assert read_lrc(tmp_path / "x.flac") == lrc
+
 
 class TestWriteLrcSidecar:
     def test_writes_sidecar(self, tmp_path):

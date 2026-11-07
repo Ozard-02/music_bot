@@ -377,16 +377,23 @@ class Bot:
         })
         if result is None:
             return
+        if result.get("error"):
+            text = f"❌ <b>Playlist failed</b>\n  <code>{esc(result['error'])}</code>"
+            if message_id:
+                await self._client.edit_message(chat_id, message_id, text)
+            else:
+                await self._client.send_message(chat_id, text)
+            return
         missing = result.get("missing_count", 0)
         lines = [
-            f"✅ <b>Playlist: {esc(result['playlist_name'])}</b>",
-            f"  {result['exist_on_disk']}/{result['total_tracks']} tracks on disk",
+            f"✅ <b>Playlist: {esc(result.get('playlist_name', ''))}</b>",
+            f"  {result.get('exist_on_disk', 0)}/{result.get('total_tracks', 0)} tracks on disk",
         ]
         if missing:
-            lines.append(f"  ❌ {missing} missing \u2014 see <code>{esc(result['missing_log_path'])}</code>")
+            lines.append(f"  ❌ {missing} missing \u2014 see <code>{esc(result.get('missing_log_path') or '')}</code>")
         if result.get("cover_path"):
             lines.append("  🖼️ Cover saved")
-        lines.append(f"  📄 <code>{esc(result['path'])}</code>")
+        lines.append(f"  📄 <code>{esc(result.get('path', ''))}</code>")
         if message_id:
             await self._client.edit_message(chat_id, message_id, "\n".join(lines))
 
@@ -504,7 +511,7 @@ class Bot:
                 except Exception:
                     not_found += 1
                     continue
-                if not p.is_file():
+                if not p.is_file() or p.suffix.lower() != ".flac":
                     not_found += 1
                     continue
                 try:

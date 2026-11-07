@@ -156,6 +156,12 @@ async def stream_job(
             except asyncio.TimeoutError:
                 reason = "stall" if time.monotonic() - last_event >= stall_timeout else "timeout"
                 break
+            except ValueError as exc:
+                # StreamReader raises LimitOverrunError (a ValueError) when a
+                # single protocol line exceeds the configured limit.
+                logger.error("Job emitted an over-long protocol line: %s", exc)
+                reason = "crash"
+                break
             if not line:
                 break  # EOF
             try:

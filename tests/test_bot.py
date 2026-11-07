@@ -137,6 +137,41 @@ class TestHandlers:
         assert "Mix" in edited and "4/5 tracks" in edited and "Cover saved" in edited
 
     @pytest.mark.asyncio
+    async def test_mkplaylist_child_error_is_shown(self, bot):
+        """A crashed m3u8 child returns an error result without the normal
+        keys — report it instead of raising KeyError."""
+        bot._client.send_message = AsyncMock(return_value={"message_id": 7})
+        bot._client.edit_message = AsyncMock()
+        bot._run_command_job = AsyncMock(return_value=({"error": "boom"}, 7))
+        await bot._handle_update(_update(
+            text="/mkplaylist https://open.spotify.com/playlist/abc"
+        ))
+        edited = bot._client.edit_message.call_args.args[2]
+        assert "Playlist failed" in edited
+        assert "boom" in edited
+
+    @pytest.mark.asyncio
+    async def test_rmplaylist_never_deletes_non_flac_entries(self, bot, tmp_path):
+        bot._cfg["output_dir"] = str(tmp_path)
+        root = tmp_path / "espo_Music"
+        (root / "Album").mkdir(parents=True)
+        flac = root / "Album" / "Artist - Song.flac"
+        cover = root / "Album" / "cover.jpg"
+        flac.write_bytes(b"f")
+        cover.write_bytes(b"img")
+        (root / "Trash.m3u8").write_text(
+            "#EXTM3U\nAlbum/Artist - Song.flac\nAlbum/cover.jpg\n",
+            encoding="utf-8",
+        )
+        bot._client.send_message = AsyncMock()
+
+        await bot._handle_update(_update(text="/rmplaylist Trash"))
+
+        assert not flac.exists()
+        assert cover.exists()  # an edited playlist must not delete art
+        assert (root / "Trash.m3u8").read_text(encoding="utf-8") == "#EXTM3U\n"
+
+    @pytest.mark.asyncio
     async def test_fixmetadata_whole_library(self, bot, tmp_path):
         bot._cfg["output_dir"] = str(tmp_path)
         bot._client.send_message = AsyncMock(return_value={"message_id": 7})

@@ -17,7 +17,13 @@ from pathlib import Path
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES
 from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
 from spotiflac_patch import _AsyncLockAdapter, pop_track_provider
-from track_utils import partition_tracks, prune_empty_parents, spotiflac_track_relative_path, track_relative_path
+from track_utils import (
+    on_disk_relative_path,
+    partition_tracks,
+    prune_empty_parents,
+    spotiflac_track_relative_path,
+    track_relative_path,
+)
 
 
 @dataclass(frozen=True)
@@ -92,10 +98,10 @@ async def run_url(
 
 
 async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
-    rel = track_relative_path(track, cfg)
-    fpath = Path(cfg["output_dir"]) / rel
-    if not fpath.exists():
+    rel = on_disk_relative_path(track, cfg)
+    if not rel:
         return
+    fpath = Path(cfg["output_dir"]) / rel
 
     try:
         data = await resolve_cover_data(track)
@@ -109,10 +115,10 @@ async def _fix_cover(track, cfg: dict, logger: logging.Logger) -> None:
 
 def _write_lyrics_sidecar(track, cfg: dict, logger: logging.Logger) -> None:
     """Write a .lrc sidecar from lyrics already embedded by SpotiFLAC."""
-    rel = track_relative_path(track, cfg)
-    fpath = Path(cfg["output_dir"]) / rel
-    if not fpath.exists():
+    rel = on_disk_relative_path(track, cfg)
+    if not rel:
         return
+    fpath = Path(cfg["output_dir"]) / rel
     try:
         lrc = read_lrc(fpath)
         if lrc:
@@ -139,13 +145,16 @@ def _try_lock_track(track_id: str, cfg: dict) -> object | None:
     """Return an open locked fd, or None if another job holds the lock."""
     import fcntl
 
+    fd = os.open(_inflight_lockfile(track_id, cfg), os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        fd = os.open(_inflight_lockfile(track_id, cfg), os.O_CREAT | os.O_RDWR, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return fd
     except BlockingIOError:
         os.close(fd)
         return None
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: float | None = None):

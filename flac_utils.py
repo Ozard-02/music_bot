@@ -17,8 +17,8 @@ _TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
 
 _SPOTIFY_COVER_UPGRADE = re.compile(r"(ab67616d0000)1e02")
 
-# Matches an LRC timestamped line, e.g. [01:23.45] or [01:23:45]
-_LRC_TS_RE = re.compile(r"\[\d{1,2}:\d{2}[.:]\d{2,3}\]")
+# Matches an LRC timestamped line: [mm:ss], [mm:ss.xx], or [hh:mm:ss.xx]
+_LRC_TS_RE = re.compile(r"\[(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
 
 
 def upgrade_apple_cover(url: str, size: str = "3000x3000") -> str:

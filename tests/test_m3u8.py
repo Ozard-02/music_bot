@@ -64,6 +64,13 @@ class TestSanitize:
     def test_preserves_special_chars(self):
         assert sanitize('Song? <Nice>', fallback='unknown') == 'Song? <Nice>'
 
+    def test_removes_control_characters(self):
+        assert sanitize('Line\nBreak\tTrack', fallback='unknown') == 'LineBreakTrack'
+
+    def test_dot_components_use_fallback(self):
+        assert sanitize('.', fallback='unknown') == 'unknown'
+        assert sanitize('..', fallback='unknown') == 'unknown'
+
 
 class TestTrackRelativePath:
     def test_basic(self):

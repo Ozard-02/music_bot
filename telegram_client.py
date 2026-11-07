@@ -56,7 +56,13 @@ class TelegramClient:
                 resp = conn.getresponse()
                 data = resp.read()
                 status = resp.status
-                payload = json.loads(data) if status == 200 else None  # error bodies aren't JSON
+                if status == 200:
+                    try:
+                        payload = json.loads(data)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        payload = None  # proxy/HTML error page with a 200
+                else:
+                    payload = None
                 break
             except (OSError, http.client.HTTPException) as e:
                 conn = self._conns[slot]

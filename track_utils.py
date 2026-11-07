@@ -15,8 +15,14 @@ _SPOTIFLAC_FOLDER_RE = re.compile(r'[<>:"/\\|?*]')
 def sanitize(text: str, fallback: str = "Unknown") -> str:
     if not text:
         return fallback
-    cleaned = re.sub(r"/", "\u2215", text)
+    # Strip control characters (newlines/tabs in tags) before they can become
+    # awkward filenames, and keep path separators out of a single component.
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", str(text))
+    cleaned = re.sub(r"/", "\u2215", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # "." / ".." are valid strings but not safe path components.
+    if cleaned in (".", ".."):
+        return fallback
     return cleaned or fallback
 
 
@@ -130,8 +136,16 @@ def get_jpeg_dimensions(data: bytes) -> tuple[int, int]:
 
 
 def prune_empty_parents(path: Path, root: Path) -> None:
-    """Remove empty ancestor directories of `path` up to (but excluding) `root`."""
+    """Remove empty ancestor directories of `path` up to (but excluding) `root`.
+
+    Refuses to walk outside `root`: a stale/wrong relative path must never
+    prune empty directories elsewhere on the filesystem.
+    """
     parent = path.parent
+    try:
+        parent.relative_to(root)
+    except ValueError:
+        return
     while parent != root:
         try:
             parent.rmdir()

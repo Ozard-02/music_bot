@@ -748,6 +748,31 @@ class TestRunUrl:
         assert lrc_path.exists()
         assert "[01:23.45]hello" in lrc_path.read_text(encoding="utf-8")
 
+    def test_lyrics_sidecar_uses_spotiflac_fallback_path(self, tmp_path):
+        """If the rename to our path failed, the file lives at SpotiFLAC's
+        sanitized path; the sidecar must be written next to that file."""
+        from downloader import _write_lyrics_sidecar
+
+        cfg = {
+            "output_dir": str(tmp_path),
+            "filename_format": "{artist} - {title}",
+            "use_artist_subfolders": True,
+            "use_album_subfolders": True,
+            "first_artist_only": True,
+        }
+        track = _mock_track(
+            "abc123", "Song", first_artist="AC/DC",
+            artists="AC/DC", album_artist="AA", album="Album",
+        )
+        spoti_path = tmp_path / spotiflac_track_relative_path(track, cfg)
+        spoti_path.parent.mkdir(parents=True, exist_ok=True)
+        spoti_path.write_bytes(b"")
+
+        with patch("downloader.read_lrc", new=lambda p: "[00:01.00]hello"):
+            _write_lyrics_sidecar(track, cfg, logging.getLogger("test"))
+
+        assert spoti_path.with_suffix(".lrc").exists()
+
 
 class TestConsoleInterception:
     """SpotiFLAC's install_console_interception() pollutes the root logger:
