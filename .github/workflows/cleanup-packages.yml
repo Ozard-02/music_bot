@@ -1,0 +1,22 @@
+name: Cleanup old container versions
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"  # every Sunday at 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Delete old untagged images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: music_loop
+          package-type: container
+          min-versions-to-keep: 10
+          # Every push reuses the `latest` tag, so old builds are untagged.
+          # Keep the 10 newest versions; delete the rest.
+          delete-only-untagged-versions: true
