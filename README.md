@@ -37,7 +37,7 @@ download job** whose RSS is reclaimed on exit. See [ARCHITECTURE.md](ARCHITECTUR
 | `/mkplaylist <url> [name]` | Generate m3u8 from Spotify playlist (name defaults to Spotify title) |
 | `/mkplaylist <name>` | Create empty `name.m3u8` (no url) |
 | `/fixmetadata [folder]` | Re-tag all FLACs in a folder inside your library (fixes split albums in Navidrome) |
-| `/synclyrics [folder] [--force]` | Fetch missing lyrics + `.lrc` sidecars only (no re-tag, no moves) |
+| `/synclyrics [folder] [--force]` | Fetch missing/unsynced lyrics + `.lrc` sidecars only (no re-tag, no moves) |
 | `/rmplaylist [name]` | Delete every track in `name.m3u8` (default `Trash`) + prune empty folders |
 
 ## Quick start (local Docker)

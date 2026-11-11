@@ -165,6 +165,11 @@ def embed_cover(fpath: str | Path, data: bytes) -> None:
     audio.save()
 
 
+def has_lrc_timestamps(text: str) -> bool:
+    """Return True when `text` contains at least one LRC timestamp."""
+    return bool(text and _LRC_TS_RE.search(text))
+
+
 def read_lrc(fpath: str | Path) -> str | None:
     """Return timestamped (LRC) lyrics from a file's LYRICS/UNSYNCEDLYRICS tag.
 
@@ -181,7 +186,7 @@ def read_lrc(fpath: str | Path) -> str | None:
         return None
     for tag in ("LYRICS", "UNSYNCEDLYRICS"):
         val = audio.get(tag, [""])[0] if audio.get(tag) else ""
-        if val and val.strip() and _LRC_TS_RE.search(val):
+        if val and val.strip() and has_lrc_timestamps(val):
             return val.strip()
     return None
 

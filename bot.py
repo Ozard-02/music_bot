@@ -535,7 +535,7 @@ class Bot:
                 )
                 return
 
-        mode = "re-fetch all" if force else "only missing"
+        mode = "re-fetch all" if force else "missing or unsynced"
         result, message_id = await self._run_command_job(chat_id, {
             "type": "sync_lyrics", "folder": str(folder), "force": force,
             "providers": ucfg.get("lyrics_providers") or [], "cfg": ucfg,

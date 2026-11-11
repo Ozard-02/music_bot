@@ -103,6 +103,13 @@ single-process implementation's git history — don't reinvent.
       `PER_TRACK_TIMEOUT` raised 100 → 180s so fallbacks fit in the budget.
 - [x] Tests: 393 passed
 
+## Phase 7c — Lyrics maintenance (DONE)
+- [x] `/synclyrics` (was: keep any existing lyrics) now upgrades embedded
+      unsynced lyrics when the provider chain returns a timestamped version;
+      plain replacements never overwrite existing lyrics. `--force` unchanged.
+- [x] `flac_utils.has_lrc_timestamps()` shared by `read_lrc` and sync_lyrics
+- [x] Tests: 396 passed
+
 ## Phase 8 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes)
 - [ ] Push image, deploy, verify

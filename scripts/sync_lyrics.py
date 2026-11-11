@@ -3,7 +3,8 @@
 
 Unlike /fixmetadata --lyrics, this never changes tags other than LYRICS and
 never moves files. It:
-  * keeps existing lyrics unless --force,
+  * keeps existing synced lyrics unless --force,
+  * tries to upgrade existing unsynced lyrics (never downgrading them),
   * backfills a .lrc sidecar from already-embedded timestamped lyrics,
   * fetches missing lyrics through SpotiFLAC's provider chain otherwise.
 
@@ -23,7 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutagen.flac import FLAC
 
 from config import SCRIPT_MAX_CONCURRENT
-from flac_utils import get_spotify_id_from_file, iter_flacs, read_lrc, write_lrc_sidecar
+from flac_utils import (
+    get_spotify_id_from_file,
+    has_lrc_timestamps,
+    iter_flacs,
+    read_lrc,
+    write_lrc_sidecar,
+)
 from scripts.fix_metadata import _read_lyrics
 
 log = logging.getLogger("sync_lyrics")
@@ -80,28 +87,43 @@ async def sync_lyrics(
         async with sem:
             try:
                 existing = _read_lyrics(fpath)
+                lrc = read_lrc(fpath) if existing else None
                 if existing and not force:
-                    lrc = read_lrc(fpath)
-                    if apply and lrc:
-                        write_lrc_sidecar(fpath, lrc)
-                        res["sidecars"] += 1
-                        res["details"].append(f"LRC  {fpath.name}")
-                    else:
-                        res["kept"] += 1
-                        res["details"].append(f"KEEP {fpath.name}")
-                    return
+                    if lrc:
+                        if apply:
+                            write_lrc_sidecar(fpath, lrc)
+                            res["sidecars"] += 1
+                            res["details"].append(f"LRC  {fpath.name}")
+                        else:
+                            res["kept"] += 1
+                            res["details"].append(f"KEEP {fpath.name}")
+                        return
+                    # Existing lyrics are unsynced: fall through and try to
+                    # replace them with a timestamped version.
 
                 sid = get_spotify_id_from_file(fpath)
                 if not sid:
-                    res["skipped"] += 1
-                    res["details"].append(f"SKIP {fpath.name} — no Spotify ID")
+                    if existing:
+                        res["kept"] += 1
+                        res["details"].append(
+                            f"KEEP {fpath.name} — unsynced, no Spotify ID"
+                        )
+                    else:
+                        res["skipped"] += 1
+                        res["details"].append(f"SKIP {fpath.name} — no Spotify ID")
                     return
 
                 track = await spotify.get_track_async(sid)
                 if not track:
-                    res["failed"] += 1
-                    res["failed_files"].append(fpath.name)
-                    res["details"].append(f"FAIL {fpath.name} — no track metadata")
+                    if existing:
+                        res["kept"] += 1
+                        res["details"].append(
+                            f"KEEP {fpath.name} — unsynced, no track metadata"
+                        )
+                    else:
+                        res["failed"] += 1
+                        res["failed_files"].append(fpath.name)
+                        res["details"].append(f"FAIL {fpath.name} — no track metadata")
                     return
 
                 lyrics, provider = await fetch_lyrics_async(
@@ -114,8 +136,22 @@ async def sync_lyrics(
                     providers=providers or None,
                 )
                 if not lyrics:
-                    res["no_lyrics"] += 1
-                    res["details"].append(f"NONE {fpath.name}")
+                    if existing:
+                        res["kept"] += 1
+                        res["details"].append(
+                            f"KEEP {fpath.name} — unsynced, no replacement found"
+                        )
+                    else:
+                        res["no_lyrics"] += 1
+                        res["details"].append(f"NONE {fpath.name}")
+                    return
+
+                if existing and not force and not has_lrc_timestamps(lyrics):
+                    # Don't replace unsynced lyrics with equally unsynced ones.
+                    res["kept"] += 1
+                    res["details"].append(
+                        f"KEEP {fpath.name} — unsynced, {provider} returned plain lyrics"
+                    )
                     return
 
                 if not apply:
