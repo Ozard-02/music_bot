@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 3 * * 0"  # every Sunday at 03:00 UTC
   workflow_dispatch:
+    inputs:
+      min-versions-to-keep:
+        description: "Newest versions to keep (use 4 once to drop the pre-rewrite images)"
+        required: false
+        default: "10"
 
 jobs:
   cleanup:
@@ -20,7 +25,6 @@ jobs:
         with:
           package-name: music_loop
           package-type: container
-          # Keep the 10 newest versions (including the tagged `latest`).
-          # Unlike delete-only-untagged-versions, this can never delete every
-          # version by accident.
-          min-versions-to-keep: 10
+          # Scheduled runs keep 10. Manual runs can use 4 once to remove the
+          # two pre-rewrite images (the three clean ones + the new main build).
+          min-versions-to-keep: ${{ github.event.inputs.min-versions-to-keep || 10 }}
