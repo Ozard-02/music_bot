@@ -110,11 +110,30 @@ single-process implementation's git history — don't reinvent.
 - [x] `flac_utils.has_lrc_timestamps()` shared by `read_lrc` and sync_lyrics
 - [x] Tests: 396 passed
 
-## Phase 8 — TrueNAS
+## Phase 8 — HTTP API for the Laila Spotify tab (DONE)
+
+Approved exception to the parent's stdlib-only rule: `api.py` is a separate
+stdlib-only process; SpotiFLAC stays in the short-lived `search_job.py`
+subprocess. Shared queue DB via WAL.
+
+- [x] `search_job.py` — stdin `{query, limit}` -> stdout one JSON object;
+      `sync_extensions=False`, no GitHub check, block detection (406/429).
+- [x] `api.py` — `health`, `search`, `queue`, `cover` endpoints; Bearer token;
+      CORS allowlist; search cache + single-flight; canonical Spotify links.
+- [x] Cover proxy: strict `*.scdn.co` / `*.spotifycdn.com` allowlist, no
+      redirects, size cap, in-memory LRU.
+- [x] `QueueManager` busy timeout for the second process.
+- [x] `.env.example`, README, DEPLOYMENT, ARCHITECTURE, STRUCTURE updated.
+- [x] `docker-compose.yml` + `docker-compose.truenas.yml`: second service.
+- [x] Tests: auth, search cache, queue dedupe/invalid, cover allowlist, CORS;
+      full suite green (435 passed).
+- [x] Commit (2190d5d); push/deploy pending.
+
+## Phase 9 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes)
 - [ ] Push image, deploy, verify
 
-## Phase 9 — CI/CD
+## Phase 10 — CI/CD
 - [ ] GitHub Actions: pytest on push + build/push ghcr on main
 
 ## Deferred (explicit, not forgotten)

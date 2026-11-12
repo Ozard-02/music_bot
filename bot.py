@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import STALL_TIMEOUT, setup_logger, load_config, esc
+from config import STALL_TIMEOUT, load_env, setup_logger, load_config, esc
 from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from queue_manager import QueueManager
 from resolver import parse_inputs, format_help
@@ -19,20 +19,7 @@ from track_utils import sanitize
 from worker import Worker, stream_job
 
 
-def _load_env(path: str | Path):
-    """Simple .env loader — no dependency needed."""
-    path = Path(path)
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        os.environ.setdefault(key.strip(), val.strip())
-
-
-_load_env(Path(__file__).parent / ".env")
+load_env(Path(__file__).parent / ".env")
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 

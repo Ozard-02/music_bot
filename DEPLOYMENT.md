@@ -3,15 +3,20 @@
 ## Local Docker (dev)
 
 ```bash
-cp .env.example .env          # token + allowed user IDs
+cp .env.example .env          # token + allowed user IDs + API_TOKEN
 docker compose up -d --build
 docker compose logs -f music-bot
+docker compose logs -f api
 ```
 
 - Builds from `./Dockerfile` (SpotiFLAC 1.6.0 + pydoll lib, no chromium).
 - `.:/app` bind-mount: edit code and `docker compose restart` to apply.
 - Music + SpotiFLAC config live in the mounted volumes
   (`~/Music`, `~/.spotiflac`) — downloads survive container rebuilds.
+- Two services share the image and the `queue.db` volume (WAL):
+  `music-bot` (Telegram) and `api` (HTTP for Laila) on port `8099`.
+- The API refuses to start without `API_TOKEN`. Put it behind LAN/Tailscale;
+  never publish the port to the internet.
 
 ## TrueNAS
 
@@ -22,6 +27,8 @@ docker-compose -f docker-compose.truenas.yml up -d
 - Uses a **pinned** ghcr tag (e.g. `:1.0.0` or `:sha-ee4b508`), not `latest`.
 - Volumes point at `/mnt/pool/navidrome/Music` (shared with Navidrome) and
   `/mnt/pool/VM/spotiflac` (SpotiFLAC config/credentials).
+- The same image runs the API with `command: ["python", "api.py"]`; both
+  services mount `/mnt/pool/VM/spotiflac` so they share `queue.db`.
 
 ## CI/CD
 

@@ -11,3 +11,19 @@ services:
       - ~/.spotiflac:/root/.spotiflac
       - .:/app
     restart: unless-stopped
+
+  api:
+    build: .
+    container_name: spoty-loop-api
+    command: ["python", "api.py"]
+    env_file: .env
+    environment:
+      - QUEUE_DB_PATH=/root/.spotiflac/queue.db
+      - MALLOC_ARENA_MAX=2
+    volumes:
+      - ~/Music:/root/Music
+      - ~/.spotiflac:/root/.spotiflac
+      - .:/app
+    ports:
+      - "8099:8099"
+    restart: unless-stopped

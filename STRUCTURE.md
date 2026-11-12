@@ -2,16 +2,18 @@
 
 ```
 music_bot_rewrite/
-├── bot.py               # Telegram dispatch + handlers + main loop (parent)
-├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (parent)
-├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (parent)
-├── queue_manager.py     # SQLite queue (parent; stdlib-only)
-├── resolver.py          # input parsing + search resolution (parent; no SpotiFLAC)
-├── config.py            # constants, config.json, logger (parent; silence inlined)
-├── library.py           # per-user library paths (parent)
-├── track_utils.py       # sanitize/path helpers (parent; TrackMetadata TYPE_CHECKING)
+├── bot.py               # Telegram dispatch + handlers + main loop (front end)
+├── api.py               # HTTP API for Laila: search/queue/cover (front end)
+├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (front end)
+├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (front end)
+├── queue_manager.py     # SQLite queue (front ends; stdlib-only, WAL + busy timeout)
+├── resolver.py          # input parsing + search resolution (front ends; no SpotiFLAC)
+├── config.py            # constants, config.json, .env loader, logger (front ends)
+├── library.py           # per-user library paths (front ends)
+├── track_utils.py       # sanitize/path helpers (front ends; TrackMetadata TYPE_CHECKING)
 │
 ├── download_job.py      # subprocess entry point: stdin spec → JSON-lines events
+├── search_job.py        # subprocess entry point: stdin search spec → one JSON result
 ├── downloader.py        # download engine: run_url, partition, rename, cover (subprocess)
 ├── spotiflac_patch.py   # import-time SpotiFLAC monkey-patches + match guards (subprocess)
 ├── m3u8.py              # playlist m3u8 + cover (subprocess)
@@ -34,12 +36,14 @@ music_bot_rewrite/
 
 ## Import rules (hard)
 
-- **Parent modules** may import: stdlib only, plus sibling parent modules.
-  Never `from SpotiFLAC import ...`, never httpx, never telegram.
-- **Subprocess modules** may import SpotiFLAC + its deps; they are never
-  imported by the parent.
-- `config.py` must NOT import `spotiflac_patch` — the 5-line silence loop is
-  inlined so the parent's import graph never touches SpotiFLAC.
+- **Front-end modules** (`bot.py`, `api.py` and their imports) may import:
+  stdlib only, plus sibling front-end modules. Never `from SpotiFLAC import ...`,
+  never httpx, never telegram.
+- **Subprocess modules** (`download_job.py`, `search_job.py`, `downloader.py`,
+  `flac_utils.py`, …) may import SpotiFLAC + its deps; they are never imported
+  by a front end.
+- `config.py` must NOT import `spotiflac_patch` — the silence loop is inlined
+  so the front-end import graph never touches SpotiFLAC.
 
 ## Data flow
 
@@ -57,6 +61,14 @@ bot.py ──handle_message──► resolver.parse_inputs(text)   # one item pe
 ```
 bot.py ──► queue_manager.enqueue(query, user)
    ──► subprocess job with type="search": resolves via SpotiFLAC, downloads
+```
+
+### Laila search tab (HTTP API)
+```
+Laila ──GET /api/search──► api.py ──cache?──► search_job.py (SpotiFLAC)
+   ◄── tracks/albums/playlists + /api/cover proxy URLs ──┘
+Laila ──POST /api/queue──► api.py ──► queue_manager.enqueue_unique("link", url, API_QUEUE_USER)
+   ──► existing worker picks it up like a Telegram link
 ```
 
 ### /status

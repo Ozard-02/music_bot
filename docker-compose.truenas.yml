@@ -1,7 +1,8 @@
 services:
   spoty-loop:
     # Pin a release tag (or an immutable sha-<commit> tag) instead of latest.
-    image: ghcr.io/ozard-02/music_loop:1.0.0
+    # The API service needs a tag that includes api.py/search_job.py.
+    image: ghcr.io/ozard-02/music_loop:${SPOTY_LOOP_TAG:-1.0.0}
     container_name: spoty-loop
     env_file: .env
     environment:
@@ -10,4 +11,19 @@ services:
     volumes:
       - /mnt/pool/navidrome/Music:/root/Music
       - /mnt/pool/VM/spotiflac:/root/.spotiflac
+    restart: unless-stopped
+
+  spoty-loop-api:
+    image: ghcr.io/ozard-02/music_loop:${SPOTY_LOOP_TAG:-1.0.0}
+    container_name: spoty-loop-api
+    command: ["python", "api.py"]
+    env_file: .env
+    environment:
+      - QUEUE_DB_PATH=/root/.spotiflac/queue.db
+      - MALLOC_ARENA_MAX=2
+    volumes:
+      - /mnt/pool/navidrome/Music:/root/Music
+      - /mnt/pool/VM/spotiflac:/root/.spotiflac
+    ports:
+      - "8099:8099"
     restart: unless-stopped

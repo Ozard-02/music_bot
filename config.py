@@ -19,6 +19,23 @@ def esc(value) -> str:
     return html.escape(str(value), quote=False)
 
 
+def load_env(path: str | Path) -> None:
+    """Load a simple KEY=VALUE .env file without adding a dependency.
+
+    Existing environment variables win (`setdefault`), so Docker/compose
+    values are not overwritten by the file.
+    """
+    path = Path(path)
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        os.environ.setdefault(key.strip(), val.strip())
+
+
 # Download engine
 DEFAULT_SERVICES = ["qobuz", "deezer", "amazon"]
 MAX_CONCURRENT = 2

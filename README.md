@@ -6,7 +6,7 @@ Telegram bot that turns Spotify links into FLAC files via SpotiFLAC
 (Qobuz/Deezer/Amazon lossless providers).
 
 ```
-Telegram msg → SQLite queue → worker → subprocess(download_job) → SpotiFLAC → FLAC on disk
+Telegram msg / Laila HTTP API → SQLite queue → worker → subprocess(download_job) → SpotiFLAC → FLAC on disk
 ```
 
 ## Why this rewrite
@@ -59,6 +59,38 @@ docker compose up -d --build
 *One of the two must be set.
 
 Provider order, quality, and download options go in `~/.spotiflac/config.json`.
+
+## HTTP API (Laila search tab)
+
+`api.py` is an optional stdlib-only HTTP service on top of the same queue. It
+powers a Spotify search tab in Laila: type a title, pick one result, queue it
+for download. Searches run in a short-lived `search_job.py` subprocess, so the
+API process never imports SpotiFLAC.
+
+```bash
+# .env: API_TOKEN=...  (required)
+python api.py
+```
+
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `GET /api/health` | Bearer | Connectivity/token check |
+| `GET /api/search?q=...&limit=20` | Bearer | Spotify tracks/albums/playlists |
+| `POST /api/queue` | Bearer | Queue canonical Spotify links |
+| `GET /api/cover?u=...` | none | Spotify CDN image proxy (allowlist) |
+
+```bash
+curl -H "Authorization: Bearer $API_TOKEN" \
+  "http://localhost:8099/api/search?q=one%20more%20time"
+```
+
+- Search results are Spotify's own order (no best-match resolver): the caller
+  picks. `queued`/`duplicates`/`invalid` come back from `/api/queue`.
+- Links are canonicalized (`?si=...` removed) so the same track dedupes.
+- The cover endpoint is open but only fetches `*.scdn.co` / `*.spotifycdn.com`
+  images, with a size cap and no redirects, so `<img>` works without a token.
+- Keep it on LAN/Tailscale. Do not expose this port to the public internet.
+- Web clients need an exact origin in `API_CORS_ORIGINS`.
 
 ## Docs
 

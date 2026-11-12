@@ -22,6 +22,9 @@ class QueueManager:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
+            # The API process shares this DB with the bot/worker; wait instead
+            # of failing instantly on a writer lock.
+            self._conn.execute("PRAGMA busy_timeout=5000")
         return self._conn
 
     def _init_db(self):

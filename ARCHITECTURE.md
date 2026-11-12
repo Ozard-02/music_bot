@@ -1,13 +1,18 @@
 # Architecture
 
-The bot is a **two-tier process split**: a lean, stdlib-only parent that never
-imports SpotiFLAC, and a short-lived subprocess per download job that does.
+The system is a **lean front ends + short-lived workers** split: the Telegram
+bot and the HTTP API are both stdlib-only processes, and every job that needs
+SpotiFLAC runs in its own subprocess.
 
 ```
-Telegram ──► parent (stdlib only) ──spawn──► download_job.py (SpotiFLAC) ──► FLAC on disk
-                │                                  ^
-                │ SQLite queue                     | JSON-lines on stdout
-                └──────────────────────────────────┘
+Telegram ──► bot.py (stdlib) ──────────────┐
+                                          ├─► SQLite queue (WAL)
+Laila ─────► api.py (stdlib) ──search─────┘         │
+                 │                                  ▼
+                 └─spawn─► search_job.py      worker.py ─spawn─► download_job.py
+                           (SpotiFLAC)                          (SpotiFLAC)
+                                │                                   │
+                                └─► JSON results                    └─► FLAC on disk
 ```
 
 ## Why two processes
@@ -17,30 +22,34 @@ after removing the browser stack it dropped to ~89MiB. The floor for one
 process is ~46MiB (telegram + httpx stack) plus SpotiFLAC's ~57MiB once
 imported. Idle RSS is a hard requirement (see AGENTS.md), so we split:
 
-- **Parent** imports stdlib only: `asyncio`, `json`, `urllib`, `sqlite3`,
-  `fcntl`, `logging`, `pathlib`. Idle target **~15-20MiB**.
-- **Subprocess** (`download_job.py`) imports SpotiFLAC + patches. Spawned per
-  job, exits when the job ends, so its peak RSS is **reclaimed** — no
-  lingering threads, no `_trim_rss` needed for the heavy part.
+- **Front ends** (`bot.py`, `api.py`) import stdlib only: `asyncio`, `json`,
+  `urllib`, `sqlite3`, `http.server`, `fcntl`, `logging`, `pathlib`. Bot idle
+  target **~15-20MiB**; the API idles in the same ballpark.
+- **Subprocesses** (`download_job.py`, `search_job.py`) import SpotiFLAC +
+  patches. Spawned per job, they exit when the job ends, so peak RSS is
+  **reclaimed** — no lingering threads, no `_trim_rss` needed for the heavy
+  part.
 
 ## Process split (what runs where)
 
-### Parent (stdlib only)
+### Front ends (stdlib only)
 | Module | Role |
 |--------|------|
 | `telegram_client.py` | Raw Telegram Bot API client on `http.client` with two persistent keep-alive connections (one for the long-poll, one locked-shared for sends) |
 | `bot.py` | Message dispatch, command handlers, allowlist, main loop |
-| `queue_manager.py` | SQLite queue (`queue`, `users`, `failed_tracks`) |
+| `api.py` | HTTP API for Laila: health/search/queue/cover, Bearer auth, CORS allowlist, search cache + single-flight |
+| `queue_manager.py` | SQLite queue (`queue`, `users`, `failed_tracks`); WAL + busy timeout for two processes |
 | `worker.py` | Job orchestration; owns `stream_job()`, the shared spawn/stream/watchdog IPC loop used by both downloads and one-shot commands |
-| `config.py` | Constants, config.json loading, logger setup (`silence_spotiflac_loggers` inlined) |
+| `config.py` | Constants, config.json loading, `.env` loading, logger setup (`silence_spotiflac_loggers` inlined) |
 | `resolver.py` | Input parsing + search resolution (`parse_spotify_url`); no SpotiFLAC import in the parent |
 | `library.py` | Library paths (user folders, per-user output dir) |
 | `track_utils.py` | Filename/path sanitization; `TrackMetadata` imported `TYPE_CHECKING` only |
 
-### Subprocess (SpotiFLAC; spawned per job)
+### Subprocesses (SpotiFLAC; spawned per job)
 | Module | Role |
 |--------|------|
 | `download_job.py` | Entry point: reads one JSON spec from stdin, runs the job, emits JSON-lines |
+| `search_job.py` | Entry point: reads one JSON search spec, emits one JSON result object |
 | `downloader.py` | Download engine (`run_url`): resolution, partition, parallel download, rename, cover |
 | `spotiflac_patch.py` | Import-time monkey-patches (GitHub version-check skip, console silencing, community-dead, provider IO timeout cap, MB no-op, provider tracking, provider matching guards) |
 | `m3u8.py` | Playlist m3u8 + cover generation (auto-build happens here, not in parent) |
@@ -92,6 +101,40 @@ The parent treats `result` as the job's end. A nonzero child exit without a
 - **stdin = job spec** (one line).
 
 This is why `setup_logger` in the child must keep its StreamHandler on stderr.
+
+## Search IPC (HTTP API)
+
+`api.py` spawns `search_job.py` for every cache miss:
+
+- **stdin**: one JSON line `{"query": "...", "limit": 20}`.
+- **stdout**: exactly one JSON object:
+  `{"ok": true, "tracks": [...], "albums": [...], "playlists": [...]}`, or
+  `{"ok": false, "kind": "spotify_blocked", "error": "..."}`.
+- **stderr**: logs only. The API captures them and never forwards them.
+- The child sets `sync_extensions=False` and uses `spotiflac_patch` (no GitHub
+  version check). It wraps the metadata client's `query` so a swallowed
+  Spotify 406/429 is reported as `spotify_blocked` instead of "no results".
+- The API caches results for `SEARCH_CACHE_TTL` (default 60s) and serializes
+  cache misses, so typing does not fan out into parallel Spotify requests.
+
+## HTTP API
+
+| Endpoint | Auth | Notes |
+|----------|------|-------|
+| `GET /api/health` | Bearer | Token/connectivity check |
+| `GET /api/search?q=&limit=` | Bearer | Tracks/albums/playlists in Spotify's order |
+| `POST /api/queue` | Bearer | Canonical `track/album/playlist` links, dedupes |
+| `GET /api/cover?u=` | none | Spotify CDN image proxy |
+
+- Queue writes share `queue.db` with the bot through WAL; `busy_timeout=5000`
+  makes the two processes wait instead of failing on a writer lock.
+- `API_QUEUE_USER` (default: first Telegram allowlist id) decides whose
+  folder/quality API downloads use.
+- Covers are restricted to `*.scdn.co` / `*.spotifycdn.com`, fetched without
+  following redirects, capped at 5MiB, and kept in a small in-memory LRU.
+  The endpoint has no auth so `<img>`/expo-image can load it; never expose the
+  API port publicly.
+- CORS only echoes origins listed in `API_CORS_ORIGINS`.
 
 ## Stall watchdog
 
