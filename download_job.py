@@ -82,7 +82,7 @@ async def _maybe_m3u8(spec: dict, logger: logging.Logger) -> None:
     if url and parse_spotify_url(url).get("type") == "playlist":
         try:
             result = await build_m3u8(url, cfg=spec.get("cfg") or {})
-            _emit({"event": "m3u8", "result": result})
+            logger.info("Auto m3u8: %s", result.get("path"))
         except Exception as e:
             logger.warning("Auto m3u8 failed for %s: %s", url, e)
 

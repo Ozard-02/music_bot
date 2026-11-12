@@ -614,14 +614,6 @@ def reset_progress_manager():
     ProgressManager._worker_task = None
 
 
-def silence_spotiflac_loggers() -> None:
-    for name in list(logging.root.manager.loggerDict):
-        if name.startswith("SpotiFLAC"):
-            logging.getLogger(name).setLevel(logging.CRITICAL)
-    for noisy in ("httpx", "httpcore", "nodriver"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
-
-
 _skip_github_version_check()
 install_console_silencing()
 _patch_qobuz_lock()

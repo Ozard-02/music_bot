@@ -29,10 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mutagen.flac import FLAC
 
-from config import SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
+from config import SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT, silence_spotiflac_loggers
 from flac_utils import embed_cover, get_spotify_id_from_file, read_lrc, resolve_cover_data, write_lrc_sidecar
 from resolver import best_track_match
-from spotiflac_patch import reset_progress_manager, silence_spotiflac_loggers
+from spotiflac_patch import reset_progress_manager
 from track_utils import sanitize
 
 log = logging.getLogger("fix_metadata")

@@ -16,9 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import load_config
+from config import load_config, silence_spotiflac_loggers
 from maintenance import rescan_library
-from spotiflac_patch import silence_spotiflac_loggers
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("fix_covers")

@@ -244,7 +244,6 @@ class Worker:
         self._max_parallel = max_parallel
         self._shutdown = False
         self._tasks: set[asyncio.Task] = set()
-        self._active: dict[int, int] = {}
         self._paused_until = 0.0  # monotonic; set when Spotify blocks us
 
     async def run(self):
@@ -297,18 +296,10 @@ class Worker:
 
     async def _run_with_sem(self, item: dict):
         task = asyncio.current_task()
-        item_id = item["id"]
-        if item_id in self._active:
-            self._logger.info("#%d: already in flight, deferring", item_id)
-            await asyncio.to_thread(self._queue.requeue, item_id, 1800)
-            self._sem.release()
-            return
-        self._active[item_id] = item.get("retries", 0)
         self._tasks.add(task)
         try:
             await self._process(item)
         finally:
-            self._active.pop(item_id, None)
             self._tasks.discard(task)
             self._sem.release()
             self._wake_event.set()
@@ -369,7 +360,13 @@ class Worker:
                 return  # timed out / stalled — handled by _run_job
             result, display = outcome
             if result.get("failed") == 0:
-                await self._handle_no_failures(item, display, result, chat)
+                await self._mark_done_and_notify(
+                    item,
+                    display,
+                    result,
+                    len(result.get("gave_up_tracks", [])),
+                    chat,
+                )
             else:
                 await self._handle_failure(item, display, result, chat)
 
@@ -470,9 +467,6 @@ class Worker:
             chat,
         )
         return None
-
-    async def _handle_no_failures(self, item: dict, display: str, result: dict, chat: int | None):
-        await self._mark_done_and_notify(item, display, result, len(result.get("gave_up_tracks", [])), chat)
 
     async def _mark_done_and_notify(self, item: dict, display: str, result: dict, given_up: int, chat: int | None):
         await asyncio.to_thread(
