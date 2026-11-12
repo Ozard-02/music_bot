@@ -9,13 +9,15 @@ spoty_loop/
 ├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (front end)
 ├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (front end)
 ├── queue_manager.py     # SQLite queue (front ends; stdlib-only, WAL + busy timeout)
-├── resolver.py          # input parsing + search resolution (front ends; no SpotiFLAC)
+├── resolver.py          # input parsing only (front end; no SpotiFLAC/difflib)
 ├── config.py            # constants, config.json, .env loader, logger (front ends)
 ├── library.py           # per-user library paths (front ends)
+├── playlists.py         # local .m3u8 create/empty helpers (front end; stdlib)
 ├── track_utils.py       # sanitize/path helpers (front ends; TrackMetadata TYPE_CHECKING)
 │
 ├── download_job.py      # subprocess entry point: stdin spec → JSON-lines events
 ├── search_job.py        # subprocess entry point: stdin search spec → one JSON result
+├── resolver_match.py    # fuzzy name matching + resolve_search (subprocess only)
 ├── downloader.py        # download engine: run_url, partition, rename, cover (subprocess)
 ├── spotiflac_patch.py   # import-time SpotiFLAC monkey-patches + match guards (subprocess)
 ├── m3u8.py              # playlist m3u8 + cover (subprocess)

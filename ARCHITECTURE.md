@@ -46,8 +46,9 @@ target predates this stack; the hard rule is still "well under the old 89MiB".
 | `queue_manager.py` | SQLite queue (`queue`, `users`, `failed_tracks`); WAL + busy timeout for two processes |
 | `worker.py` | Job orchestration; owns `stream_job()`, the shared spawn/stream/watchdog IPC loop used by both downloads and one-shot commands |
 | `config.py` | Constants, config.json loading, `.env` loading, logger setup (`silence_spotiflac_loggers` inlined) |
-| `resolver.py` | Input parsing + search resolution (`parse_spotify_url`); no SpotiFLAC import in the parent |
+| `resolver.py` | Input parsing only (`parse_inputs`/`format_help`); no SpotiFLAC/difflib in the parent |
 | `library.py` | Library paths (user folders, per-user output dir) |
+| `playlists.py` | Local `.m3u8` create/empty helpers; no Telegram or SpotiFLAC imports |
 | `track_utils.py` | Filename/path sanitization; `TrackMetadata` imported `TYPE_CHECKING` only |
 
 ### Subprocesses (SpotiFLAC; spawned per job)
@@ -55,6 +56,7 @@ target predates this stack; the hard rule is still "well under the old 89MiB".
 |--------|------|
 | `download_job.py` | Entry point: reads one JSON spec from stdin, runs the job, emits JSON-lines |
 | `search_job.py` | Entry point: reads one JSON search spec, emits one JSON result object |
+| `resolver_match.py` | Fuzzy artist/title matching + `resolve_search` (imports difflib/unicodedata) |
 | `downloader.py` | Download engine (`run_url`): resolution, partition, parallel download, rename, cover |
 | `spotiflac_patch.py` | Import-time monkey-patches (GitHub version-check skip, console silencing, community-dead, provider IO timeout cap, MB no-op, provider tracking, provider matching guards) |
 | `m3u8.py` | Playlist m3u8 + cover generation (auto-build happens here, not in parent) |
@@ -203,7 +205,8 @@ so overlap protection moves to **`fcntl.flock` lockfiles**:
 Measured after Phase 11 (host, import chain + QueueManager + Bot):
 interpreter ~12.3MiB + logging ~3.3MiB + asyncio ~6.1MiB + sqlite ~1.5MiB +
 http.client/ssl ~1.4MiB + app code — **parent idle ~29MiB**. `urllib.request`
-is no longer in the graph (Spotify credentials use `http.client`).
+is no longer in the graph (Spotify credentials use `http.client`), and
+`difflib`/`unicodedata` live in `resolver_match.py` (subprocess only).
 `MALLOC_ARENA_MAX=2` (Dockerfile/compose) trims glibc arena overhead under
 threads.
 

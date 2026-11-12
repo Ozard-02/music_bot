@@ -179,6 +179,19 @@ subprocess. Shared queue DB via WAL.
 - [x] Architecture guard test: the parent never imports SpotiFLAC/httpx/
       telegram/mutagen/PIL/urllib.request.
 
+## Phase 12 — Order/tidy pass (DONE)
+
+- [x] `playlists.py`: `/mkplaylist` empty creation and `/rmplaylist` filesystem
+      logic extracted from `bot.py`, with direct tests.
+- [x] Shared `_command_folder()` / `_command_error()` helpers; allowlist
+      parsing moved to `config.allowed_user_ids()`.
+- [x] Removed dead paths: async in-flight lock, `DownloadResult.from_dict`,
+      duplicate log silencer, m3u8 event, `Worker._active`, `_handle_no_failures`.
+- [x] `file_log_path()` replaces `logger.handlers[0]`; `prune_history()` runs
+      at bot startup, not in every `QueueManager`.
+- [x] `resolver_match.py`: `difflib`/`unicodedata` stay out of the parent.
+- [x] Host parent idle ~28.7 MiB; test suite green.
+
 ## Deferred (explicit, not forgotten)
 - `/fixmetadata` and `/mkplaylist` are subprocess-triggered commands (port the
   scripts behind a subprocess call); not part of the core download path.

@@ -31,9 +31,9 @@ Audit performed against `561c6bc`; fixes below are on `main` after that commit.
 
 ## Not fixed (documented)
 
-- `partition_tracks()` is still existence-based: a 0-byte/truncated file at
-  the expected path counts as downloaded. A content/duration check is the
-  next candidate.
+- `partition_tracks()` treats any non-empty file as downloaded: 0-byte
+  placeholders are already missing (`min_bytes=1`), but a truncated non-empty
+  file still counts. A content/duration check is the next candidate.
 - ~~`failed_tracks` is still keyed by title~~ — fixed: `get_give_up_titles`
   keys by `track_id` and falls back to the title only for legacy rows.
 - SpotiFLAC's post-download validation is intentionally loose (preview/large
