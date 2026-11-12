@@ -539,8 +539,10 @@ def test_start_api_thread_single_container_mode(monkeypatch, tmp_path, spotify_e
     monkeypatch.delenv("TELEGRAM_ALLOWED_USER_IDS", raising=False)
     monkeypatch.delenv("API_QUEUE_USER", raising=False)
 
-    server = start_api_thread(logging.getLogger("test.api"))
+    queue = QueueManager(str(tmp_path / "thread-queue.db"))
+    server = start_api_thread(logging.getLogger("test.api"), queue=queue)
     assert server is not None
+    assert server.app.queue is queue
     assert server.app.queue_user == 123456789
     try:
         port = server.server_address[1]

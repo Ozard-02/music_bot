@@ -646,14 +646,20 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _read_json(self) -> dict:
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
+            self.close_connection = True
             raise ApiError(411, "length_required", "Content-Length is required")
         try:
             length = int(raw_length)
         except ValueError:
+            self.close_connection = True
             raise ApiError(400, "invalid_request", "Invalid Content-Length")
         if length <= 0:
+            self.close_connection = True
             raise ApiError(400, "invalid_request", "Empty body")
         if length > MAX_BODY:
+            # The body is still on the socket: keeping the connection alive
+            # would parse it as the next request.
+            self.close_connection = True
             raise ApiError(413, "payload_too_large", "Body is too large")
         raw = self.rfile.read(length)
         try:
@@ -747,8 +753,14 @@ class ApiRuntime:
     spotify_auth: SpotifyAuth
 
 
-def build_runtime(logger: logging.Logger) -> ApiRuntime | None:
-    """Build the API from the current environment; None when disabled/invalid."""
+def build_runtime(
+    logger: logging.Logger, queue: QueueManager | None = None
+) -> ApiRuntime | None:
+    """Build the API from the current environment; None when disabled/invalid.
+
+    `queue` lets RUN_API mode reuse the bot's connection instead of opening a
+    second one on the same SQLite file.
+    """
     token = os.environ.get("API_TOKEN", "").strip()
     if not token:
         logger.error("API_TOKEN is required; refusing to start the HTTP API")
@@ -775,13 +787,16 @@ def build_runtime(logger: logging.Logger) -> ApiRuntime | None:
         if part.strip()
     )
     queue_path = os.environ.get("QUEUE_DB_PATH", str(ROOT / "queue.db"))
+    if queue is None:
+        queue = QueueManager(queue_path)
+    queue_path = queue.path
     spotify_auth = SpotifyAuth(
         credentials_path=os.environ.get("SPOTIFY_CREDENTIALS_PATH") or None
     )
 
     app = ApiApp(
         token=token,
-        queue=QueueManager(queue_path),
+        queue=queue,
         search=SearchRunner(
             runner=make_search_provider(spotify_auth, timeout),
             ttl=ttl,
@@ -801,9 +816,11 @@ def build_runtime(logger: logging.Logger) -> ApiRuntime | None:
     )
 
 
-def start_api_thread(logger: logging.Logger) -> ApiServer | None:
+def start_api_thread(
+    logger: logging.Logger, queue: QueueManager | None = None
+) -> ApiServer | None:
     """Start the API in a daemon thread (single-container / TrueNAS mode)."""
-    runtime = build_runtime(logger)
+    runtime = build_runtime(logger, queue=queue)
     if runtime is None:
         return None
     server = create_server(runtime.bind, runtime.port, runtime.app)

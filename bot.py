@@ -952,17 +952,21 @@ def main() -> None:
 
     qm = QueueManager(str(QUEUE_DB))
     qm.reset_running()  # the bot owns the queue; API restarts must not steal jobs
-    gc.freeze()  # startup objects are permanent — stop GC rescanning them
     api_server = None
     if os.environ.get("RUN_API", "").strip().lower() in ("1", "true", "yes", "on"):
         try:
             from api import start_api_thread
 
-            api_server = start_api_thread(logger)
+            api_server = start_api_thread(logger, queue=qm)
         except Exception:
             logger.exception("Could not start the HTTP API thread")
+
+    bot = Bot(TOKEN, qm, cfg, logger)
+    # Freeze after every startup import/object (including the API thread), so
+    # GC never rescans permanent module/connection state.
+    gc.freeze()
     try:
-        asyncio.run(Bot(TOKEN, qm, cfg, logger).run())
+        asyncio.run(bot.run())
     finally:
         if api_server is not None:
             api_server.shutdown()

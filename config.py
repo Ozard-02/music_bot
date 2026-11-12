@@ -55,6 +55,10 @@ STALL_TIMEOUT = 1800         # 30min — a job that makes no per-track progress 
 MAX_QUEUE_AGE = 86400  # 24h — give up if item has been in queue this long
 RETRY_BACKOFF_BASE = 5    # seconds, doubles each retry
 MAX_RETRY_BACKOFF = 3600  # 1h cap
+# Idle worker poll: the API writes to SQLite from another process/thread and
+# cannot wake the bot's asyncio.Event. 30s keeps API-queued links responsive
+# while still costing only two tiny SELECTs per minute when idle.
+WORKER_IDLE_POLL_MAX = 30
 # Spotify answers 406/429 when it rate-limits our IP. Every retry builds a
 # fresh metadata client (2+ hits on open.spotify.com), so per-item backoff
 # alone keeps hammering it. On this error the worker pauses the whole queue.

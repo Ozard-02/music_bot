@@ -26,6 +26,7 @@ from config import (
     MAX_RETRY_BACKOFF,
     SPOTIFY_BLOCKED_ERROR,
     SPOTIFY_BLOCK_PAUSE,
+    WORKER_IDLE_POLL_MAX,
     esc,
 )
 from queue_manager import QueueManager
@@ -265,12 +266,12 @@ class Worker:
                     next_retry = await asyncio.to_thread(self._queue.get_next_retry_at)
                     if next_retry:
                         remaining = (next_retry - datetime.now(timezone.utc)).total_seconds()
-                        self._poll = max(5, min(300, remaining))
+                        self._poll = max(5, min(WORKER_IDLE_POLL_MAX, remaining))
                     else:
-                        self._poll = min(300, self._poll * 2)
+                        self._poll = min(WORKER_IDLE_POLL_MAX, self._poll * 2)
             except Exception as e:
                 self._logger.error("Worker error: %s", e)
-                self._poll = min(300, self._poll * 2)
+                self._poll = min(WORKER_IDLE_POLL_MAX, self._poll * 2)
             finally:
                 if slot:
                     self._sem.release()
