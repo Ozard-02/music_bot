@@ -99,12 +99,25 @@ class QueueManager:
             except sqlite3.OperationalError:
                 pass
 
-            # Reset items stranded in 'running' from a killed process
-            conn.execute(
-                "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
-            )
-
         self.prune_history(30)
+
+    @property
+    def path(self) -> str:
+        return self._db_path
+
+    def reset_running(self) -> int:
+        """Requeue items stranded in 'running' by a killed bot process.
+
+        Only the bot (the single queue worker) calls this. An API process
+        opening the same DB must never reset a job that is still running.
+        """
+        with self._lock:
+            conn = self._connect()
+            with conn:
+                cursor = conn.execute(
+                    "UPDATE queue SET status='queued', started_at=NULL WHERE status='running'"
+                )
+                return cursor.rowcount
 
     def prune_history(self, days: int = 30) -> int:
         """Drop completed/failed rows older than `days` to keep queue.db small."""

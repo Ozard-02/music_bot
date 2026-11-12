@@ -341,7 +341,10 @@ class TestQueueManager:
         assert qm1.get_status()["running"] == 1
         del qm1  # simulate kill — no explicit close
 
-        qm2 = QueueManager(db)  # simulate restart
+        qm2 = QueueManager(db)  # simulate another process opening the DB
+        # Opening the DB must not steal a job that is still running.
+        assert qm2.get_status()["running"] == 1
+        assert qm2.reset_running() == 1  # only the bot does this at startup
         s = qm2.get_status()
         assert s["running"] == 0
         assert s["queued"] == 2

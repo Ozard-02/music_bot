@@ -951,6 +951,7 @@ def main() -> None:
     lock.acquire()
 
     qm = QueueManager(str(QUEUE_DB))
+    qm.reset_running()  # the bot owns the queue; API restarts must not steal jobs
     gc.freeze()  # startup objects are permanent — stop GC rescanning them
     api_server = None
     if os.environ.get("RUN_API", "").strip().lower() in ("1", "true", "yes", "on"):
