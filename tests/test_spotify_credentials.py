@@ -156,24 +156,43 @@ def test_test_credentials_uses_client_credentials(tmp_path: Path, monkeypatch):
     assert calls == [("id", "secret"), ("probe", "token")]
 
 
+def test_fetch_token_success(monkeypatch):
+    monkeypatch.setattr(
+        "spotify_credentials._request_json",
+        lambda *a, **k: (200, {"access_token": "token"}),
+    )
+    assert fetch_client_credentials_token("id", "secret") == "token"
+
+
+def test_fetch_token_rejects_http_error(monkeypatch):
+    monkeypatch.setattr(
+        "spotify_credentials._request_json", lambda *a, **k: (401, {})
+    )
+    with pytest.raises(CredentialsError):
+        fetch_client_credentials_token("id", "secret")
+
+
+def test_probe_maps_http_status(monkeypatch):
+    for status in (401, 429, 500):
+        monkeypatch.setattr(
+            "spotify_credentials._request_json", lambda *a, **k: (status, {})
+        )
+        with pytest.raises(CredentialsError):
+            probe_official("token")
+
+
+def test_probe_success(monkeypatch):
+    monkeypatch.setattr(
+        "spotify_credentials._request_json", lambda *a, **k: (200, {})
+    )
+    probe_official("token")
+
+
 def test_fetch_and_probe_raise_safe_errors(monkeypatch):
-    import spotify_credentials
+    def offline(*args, **kwargs):
+        raise OSError("network down")
 
-    class Fail:
-        code = 401
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            raise spotify_credentials.HTTPError(
-                "https://example", 401, "Unauthorized", {}, None
-            )
-
-        def __exit__(self, *args):
-            return False
-
-    monkeypatch.setattr(spotify_credentials, "urlopen", lambda *a, **k: Fail())
+    monkeypatch.setattr("spotify_credentials._request_json", offline)
     with pytest.raises(CredentialsError):
         fetch_client_credentials_token("id", "secret")
     with pytest.raises(CredentialsError):

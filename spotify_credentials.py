@@ -10,17 +10,14 @@ from __future__ import annotations
 
 import base64
 import html
+import http.client
 import json
 import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
-TOKEN_URL = "https://accounts.spotify.com/api/token"
-SEARCH_URL = "https://api.spotify.com/v1/search"
 FIELDS = ("client_id", "client_secret", "access_token", "market")
 
 
@@ -195,26 +192,60 @@ def describe_credentials(path: str | Path | None = None) -> str:
     return "\n".join(lines)
 
 
+def _request_json(
+    host: str,
+    method: str,
+    path: str,
+    *,
+    headers: dict | None = None,
+    body: bytes | None = None,
+    timeout: int = 10,
+) -> tuple[int, dict]:
+    """One HTTPS request; returns (status, JSON object).
+
+    `http.client` is already in the parent for Telegram, so this avoids
+    `urllib.request` (which costs the parent ~3 MiB of RSS). Network/TLS
+    failures propagate as OSError/http.client.HTTPException so callers can
+    map them to a user-facing CredentialsError.
+    """
+    conn = http.client.HTTPSConnection(host, timeout=timeout)
+    try:
+        conn.request(method, path, body=body, headers=headers or {})
+        response = conn.getresponse()
+        status = response.status
+        raw = response.read()
+    finally:
+        conn.close()
+    try:
+        payload = json.loads(raw) if raw else {}
+    except (ValueError, UnicodeDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return status, payload
+
+
 def fetch_client_credentials_token(
     client_id: str, client_secret: str, timeout: int = 10
 ) -> str:
     basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    request = Request(
-        TOKEN_URL,
-        data=urlencode({"grant_type": "client_credentials"}).encode(),
-        headers={
-            "Authorization": f"Basic {basic}",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "spoty_loop/1.0",
-        },
-    )
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.load(response)
-    except HTTPError as exc:
-        raise CredentialsError("Spotify rejected the client credentials") from exc
-    except OSError as exc:
+        status, payload = _request_json(
+            "accounts.spotify.com",
+            "POST",
+            "/api/token",
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "spoty_loop/1.0",
+            },
+            body=urlencode({"grant_type": "client_credentials"}).encode(),
+            timeout=timeout,
+        )
+    except (OSError, http.client.HTTPException) as exc:
         raise CredentialsError("Cannot reach the Spotify token endpoint") from exc
+    if status != 200:
+        raise CredentialsError("Spotify rejected the client credentials")
     token = str(payload.get("access_token") or "")
     if not token:
         raise CredentialsError("Spotify returned no access token")
@@ -224,25 +255,26 @@ def fetch_client_credentials_token(
 def probe_official(access_token: str, timeout: int = 15) -> None:
     """One tiny search; validates an access token without returning data."""
     params = urlencode({"q": "daft punk", "type": "track", "limit": 1})
-    request = Request(
-        f"{SEARCH_URL}?{params}",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-            "User-Agent": "spoty_loop/1.0",
-        },
-    )
     try:
-        with urlopen(request, timeout=timeout) as response:
-            json.load(response)
-    except HTTPError as exc:
-        if exc.code == 401:
-            raise CredentialsError("Spotify rejected the access token") from exc
-        if exc.code == 429:
-            raise CredentialsError("Spotify is rate-limiting the official API") from exc
-        raise CredentialsError(f"Spotify API returned HTTP {exc.code}") from exc
-    except OSError as exc:
+        status, _ = _request_json(
+            "api.spotify.com",
+            "GET",
+            f"/v1/search?{params}",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+                "User-Agent": "spoty_loop/1.0",
+            },
+            timeout=timeout,
+        )
+    except (OSError, http.client.HTTPException) as exc:
         raise CredentialsError("Cannot reach the Spotify API") from exc
+    if status == 401:
+        raise CredentialsError("Spotify rejected the access token")
+    if status == 429:
+        raise CredentialsError("Spotify is rate-limiting the official API")
+    if status != 200:
+        raise CredentialsError(f"Spotify API returned HTTP {status}")
 
 
 def test_credentials(path: str | Path | None = None) -> str:
