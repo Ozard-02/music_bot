@@ -401,6 +401,47 @@ class Bot:
             chat_id, f"🔄 <b>Re-queued #{item_id}</b>\n  Retry counter reset."
         )
 
+    async def _command_folder(
+        self, chat_id: int, root: Path, args: str, flag: str
+    ) -> tuple[Path | None, bool]:
+        """Resolve an optional folder argument inside the user's library.
+
+        Returns (folder, flag_present). On an invalid folder it replies to the
+        chat and returns (None, flag_present).
+        """
+        tokens = args.split()
+        present = any(token.lower() == flag for token in tokens)
+        parts = [token for token in tokens if token.lower() != flag]
+        if not parts:
+            return root, present
+        folder = Path(" ".join(parts)).expanduser()
+        if not folder.is_absolute():
+            folder = root / folder
+        if not folder.resolve().is_relative_to(root.resolve()):
+            await self._client.send_message(
+                chat_id,
+                f"❌ Folder must be inside your library: <code>{esc(root)}</code>",
+            )
+            return None, present
+        if not folder.is_dir():
+            await self._client.send_message(
+                chat_id, f"❌ Not a folder: <code>{esc(folder)}</code>"
+            )
+            return None, present
+        return folder, present
+
+    async def _command_error(
+        self, chat_id: int, message_id: int | None, title: str, result: dict
+    ) -> None:
+        text = (
+            f"❌ <b>{title}</b>\n"
+            f"  <code>{esc(result.get('error') or 'unknown error')}</code>"
+        )
+        if message_id:
+            await self._client.edit_message(chat_id, message_id, text)
+        else:
+            await self._client.send_message(chat_id, text)
+
     async def _run_command_job(self, chat_id: int, spec: dict) -> tuple[dict | None, int | None]:
         """Run a one-shot command (m3u8 / fix_metadata / sync_lyrics) via
         stream_job — the same IPC loop downloads use — streaming progress into
@@ -514,11 +555,7 @@ class Bot:
         if result is None:
             return
         if result.get("error"):
-            text = f"❌ <b>Playlist failed</b>\n  <code>{esc(result['error'])}</code>"
-            if message_id:
-                await self._client.edit_message(chat_id, message_id, text)
-            else:
-                await self._client.send_message(chat_id, text)
+            await self._command_error(chat_id, message_id, "Playlist failed", result)
             return
         missing = result.get("missing_count", 0)
         lines = [
@@ -536,29 +573,10 @@ class Bot:
     async def _fixmetadata(self, chat_id: int, user: dict, args: str) -> None:
         ucfg = _user_cfg(self._qm, self._cfg, user)
         root = Path(ucfg["output_dir"])
-
-        lyrics = any(p.lower() == "--lyrics" for p in args.split())
-        parts = [p for p in args.split() if p.lower() != "--lyrics"]
-
-        if not parts:
-            folder = root
-        else:
-            folder = Path(" ".join(parts)).expanduser()
-            if not folder.is_absolute():
-                folder = root / folder
-            # fix_metadata re-tags AND moves files: keep it inside this
-            # user's own library (no "../other_Music", no absolute paths
-            # into another user's folder or the rest of the disk).
-            if not folder.resolve().is_relative_to(root.resolve()):
-                await self._client.send_message(
-                    chat_id, f"❌ Folder must be inside your library: <code>{esc(root)}</code>"
-                )
-                return
-            if not folder.is_dir():
-                await self._client.send_message(
-                    chat_id, f"❌ Not a folder: <code>{esc(folder)}</code>"
-                )
-                return
+        # fix_metadata re-tags AND moves files: never outside this library.
+        folder, lyrics = await self._command_folder(chat_id, root, args, "--lyrics")
+        if folder is None:
+            return
 
         mode = "fetch lyrics" if lyrics else "keep lyrics as-is"
         result, message_id = await self._run_command_job(chat_id, {
@@ -569,11 +587,9 @@ class Bot:
         if result is None:
             return
         if result.get("error"):
-            text = f"❌ <b>Fix metadata failed</b>\n  <code>{esc(result['error'])}</code>"
-            if message_id:
-                await self._client.edit_message(chat_id, message_id, text)
-            else:
-                await self._client.send_message(chat_id, text)
+            await self._command_error(
+                chat_id, message_id, "Fix metadata failed", result
+            )
             return
         lines = [
             "✅ <b>Fix metadata done</b>",
@@ -604,25 +620,9 @@ class Bot:
         """Fetch/refresh lyrics only — never re-tags or moves files."""
         ucfg = _user_cfg(self._qm, self._cfg, user)
         root = Path(ucfg["output_dir"])
-        force = any(p.lower() == "--force" for p in args.split())
-        parts = [p for p in args.split() if p.lower() != "--force"]
-
-        if not parts:
-            folder = root
-        else:
-            folder = Path(" ".join(parts)).expanduser()
-            if not folder.is_absolute():
-                folder = root / folder
-            if not folder.resolve().is_relative_to(root.resolve()):
-                await self._client.send_message(
-                    chat_id, f"❌ Folder must be inside your library: <code>{esc(root)}</code>"
-                )
-                return
-            if not folder.is_dir():
-                await self._client.send_message(
-                    chat_id, f"❌ Not a folder: <code>{esc(folder)}</code>"
-                )
-                return
+        folder, force = await self._command_folder(chat_id, root, args, "--force")
+        if folder is None:
+            return
 
         mode = "re-fetch all" if force else "missing or unsynced"
         result, message_id = await self._run_command_job(chat_id, {
@@ -633,11 +633,9 @@ class Bot:
         if result is None:
             return
         if result.get("error"):
-            text = f"❌ <b>Sync lyrics failed</b>\n  <code>{esc(result['error'])}</code>"
-            if message_id:
-                await self._client.edit_message(chat_id, message_id, text)
-            else:
-                await self._client.send_message(chat_id, text)
+            await self._command_error(
+                chat_id, message_id, "Sync lyrics failed", result
+            )
             return
         lines = [
             "✅ <b>Lyrics sync done</b>",
