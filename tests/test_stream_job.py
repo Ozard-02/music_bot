@@ -5,6 +5,7 @@ Drives a fake job script through spawn/spec/events/watchdog/kill paths.
 
 import asyncio
 import json
+import os
 import sys
 
 import pytest
@@ -112,6 +113,40 @@ async def test_exit_without_result_is_crash(tmp_path, monkeypatch):
     body = "pass"
     result, reason, _ = await _collect({}, tmp_path, monkeypatch, body)
     assert (result, reason) == (None, "crash")
+
+
+@pytest.mark.asyncio
+async def test_event_callback_error_still_kills_child(tmp_path, monkeypatch):
+    """A DB/Telegram error in on_event must not leave the child running."""
+    pid_file = tmp_path / "job.pid"
+    body = (
+        "import os\n"
+        f"with open({str(pid_file)!r}, 'w') as f:\n"
+        "    f.write(str(os.getpid()))\n"
+        "print(json.dumps({'event': 'progress', 'done': 1}), flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    _install(tmp_path, monkeypatch, body)
+
+    async def on_event(event):
+        raise RuntimeError("callback failed")
+
+    with pytest.raises(RuntimeError):
+        await stream_job(
+            {},
+            logger=__import__("logging").getLogger("test"),
+            on_event=on_event,
+            stall_timeout=5.0,
+        )
+
+    pid = int(pid_file.read_text())
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        await asyncio.sleep(0.02)
+    pytest.fail("job subprocess was not killed and reaped")
 
 
 @pytest.mark.asyncio

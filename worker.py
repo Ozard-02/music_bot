@@ -144,9 +144,9 @@ async def stream_job(
     """Spawn download_job.py, write `spec` to its stdin, stream its JSON-lines.
 
     Every event except `result` is passed to `on_event(event)`. The child is
-    killed on stall (no line for `stall_timeout`), on `deadline` (monotonic
-    timestamp), or when cancelled — killing it reclaims its RSS by
-    construction.
+    always killed and reaped on exit (stall, deadline, cancellation, a broken
+    stdin, or an `on_event` exception). `result` is the final protocol line,
+    so there is nothing left to wait for; killing it reclaims its RSS.
 
     Returns (result, reason): reason is None iff a result event arrived;
     otherwise 'stall', 'timeout', or 'crash' (exit without a result).
@@ -161,14 +161,18 @@ async def stream_job(
         stderr=asyncio.subprocess.DEVNULL,
         limit=64 * 1024 * 1024,
     )
-    proc.stdin.write((json.dumps(spec) + "\n").encode())
-    await proc.stdin.drain()
-    proc.stdin.close()
-
     result = None
     reason = None
     last_event = time.monotonic()
     try:
+        try:
+            proc.stdin.write((json.dumps(spec) + "\n").encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+        except OSError:
+            # The child died before reading its spec (e.g. import error).
+            reason = "crash"
+
         while result is None and reason is None:
             remaining = max(0.0, deadline - time.monotonic()) if deadline is not None else stall_timeout
             wait = min(stall_timeout, remaining)
@@ -198,19 +202,18 @@ async def stream_job(
                 result = event.get("result") or {}
             else:
                 await on_event(event)
-    except asyncio.CancelledError:
-        proc.kill()
-        raise
     finally:
-        if reason is not None:
+        # Every exit path must kill and reap the child: a result is the final
+        # protocol line, and on_event() failures (DB/Telegram) used to leave
+        # the subprocess running with no reader.
+        try:
             proc.kill()
-        if reason is not None or result is not None:
-            # bounded reap; after SIGKILL this is instant unless the child is
-            # stuck in uninterruptible I/O
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=stall_timeout)
-            except asyncio.TimeoutError:
-                pass
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning("Job subprocess still alive 5s after SIGKILL")
 
     if result is None and reason is None:
         reason = "crash"
