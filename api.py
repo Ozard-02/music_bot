@@ -715,23 +715,32 @@ def _queue_user() -> int | None:
         part = part.strip()
         if part.isdigit():
             return int(part)
-    return None
+    legacy = os.environ.get("TELEGRAM_ALLOWED_USER_ID", "").strip()
+    return int(legacy) if legacy.isdigit() else None
 
 
-def main() -> int:
-    load_env(ROOT / ".env")
-    logger = setup_logger(ROOT / "api.log")
+@dataclass
+class ApiRuntime:
+    app: ApiApp
+    bind: str
+    port: int
+    queue_path: str
+    spotify_auth: SpotifyAuth
+
+
+def build_runtime(logger: logging.Logger) -> ApiRuntime | None:
+    """Build the API from the current environment; None when disabled/invalid."""
     token = os.environ.get("API_TOKEN", "").strip()
     if not token:
-        logger.error("API_TOKEN is required; refusing to start")
-        return 1
+        logger.error("API_TOKEN is required; refusing to start the HTTP API")
+        return None
 
     bind = os.environ.get("API_BIND", "0.0.0.0").strip() or "0.0.0.0"
     try:
         port = int(os.environ.get("API_PORT", "8099"))
     except ValueError:
         logger.error("API_PORT must be an integer")
-        return 1
+        return None
     try:
         ttl = int(os.environ.get("SEARCH_CACHE_TTL", "60"))
     except ValueError:
@@ -764,16 +773,54 @@ def main() -> int:
         version=os.environ.get("BUILD_COMMIT", "dev"),
         logger=logger,
     )
-    server = create_server(bind, port, app)
+    return ApiRuntime(
+        app=app,
+        bind=bind,
+        port=port,
+        queue_path=queue_path,
+        spotify_auth=spotify_auth,
+    )
+
+
+def start_api_thread(logger: logging.Logger) -> ApiServer | None:
+    """Start the API in a daemon thread (single-container / TrueNAS mode)."""
+    runtime = build_runtime(logger)
+    if runtime is None:
+        return None
+    server = create_server(runtime.bind, runtime.port, runtime.app)
+    thread = threading.Thread(
+        target=server.serve_forever,
+        name="spoty-loop-api",
+        daemon=True,
+    )
+    thread.start()
     logger.info(
-        "API listening on %s:%s (queue=%s, user=%s, cors=%s, spotify=%s/%s)",
-        bind,
-        port,
-        queue_path,
-        app.queue_user,
-        ",".join(origins) or "none",
-        spotify_auth.mode,
-        spotify_auth.source,
+        "API thread listening on %s:%s (queue=%s, user=%s, spotify=%s/%s)",
+        runtime.bind,
+        runtime.port,
+        runtime.queue_path,
+        runtime.app.queue_user,
+        runtime.spotify_auth.mode,
+        runtime.spotify_auth.source,
+    )
+    return server
+
+
+def main() -> int:
+    load_env(ROOT / ".env")
+    logger = setup_logger(ROOT / "api.log")
+    runtime = build_runtime(logger)
+    if runtime is None:
+        return 1
+    server = create_server(runtime.bind, runtime.port, runtime.app)
+    logger.info(
+        "API listening on %s:%s (queue=%s, user=%s, spotify=%s/%s)",
+        runtime.bind,
+        runtime.port,
+        runtime.queue_path,
+        runtime.app.queue_user,
+        runtime.spotify_auth.mode,
+        runtime.spotify_auth.source,
     )
     try:
         server.serve_forever()

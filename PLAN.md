@@ -142,6 +142,17 @@ subprocess. Shared queue DB via WAL.
 - [x] Docs/env/compose notes; tests 461 passed.
 - [x] Commit; push/deploy pending (the TrueNAS image must include this build).
 
+## Phase 8c — Single-container API for TrueNAS ix-app (DONE)
+
+- [x] `RUN_API=1` starts the API in a daemon thread inside `bot.py`; default
+      command stays `python bot.py`, so the TrueNAS `ix-app` needs only the env
+      var (host networking + portal 8099 already configured).
+- [x] `api.build_runtime` / `start_api_thread` extracted; separate `api.py`
+      process still works for docker-compose.
+- [x] `API_QUEUE_USER` honours the legacy `TELEGRAM_ALLOWED_USER_ID`.
+- [x] Test: thread mode serves `/api/health`; legacy user mapping. 462 passed.
+- [ ] Rebuild image, push, update the TrueNAS app image tag + `RUN_API=1`.
+
 ## Phase 9 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes)
 - [ ] Push image, deploy, verify

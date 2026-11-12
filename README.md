@@ -65,6 +65,12 @@ docker compose up -d --build
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | No | — | Official Spotify app credentials (fallback if the file is empty) |
 | `SPOTIFY_ACCESS_TOKEN` | No | — | Static official token (fallback if the file is empty) |
 | `SPOTIFY_MARKET` | No | — | Optional market for official search (e.g. `IT`) |
+| `RUN_API` | No | off | Start the HTTP API inside the bot process/container (`1`) |
+| `API_PORT` | No | `8099` | API listen port |
+| `API_BIND` | No | `0.0.0.0` | API listen address |
+| `API_TOKEN` | API only | — | Bearer token Laila must send |
+| `API_CORS_ORIGINS` | No | — | Exact web origins allowed to call the API |
+| `API_QUEUE_USER` | No | first allowed Telegram id | Whose folder/quality API downloads use |
 
 *One of the two must be set.
 
@@ -103,6 +109,11 @@ API process never imports SpotiFLAC.
 # .env: API_TOKEN=...  (required)
 python api.py
 ```
+
+Or run it inside the bot process/container: set `RUN_API=1` and keep the
+normal `python bot.py` command. This is the single-container mode used by the
+TrueNAS `ix-app` (host network + portal on 8099). The API runs in a daemon
+thread; search still spawns `search_job.py` per cache miss.
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|

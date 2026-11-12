@@ -34,6 +34,12 @@ docker-compose -f docker-compose.truenas.yml up -d
   `/mnt/pool/VM/spotiflac` (SpotiFLAC config/credentials).
 - The same image runs the API with `command: ["python", "api.py"]`; both
   services mount `/mnt/pool/VM/spotiflac` so they share `queue.db`.
+- **TrueNAS `ix-app` single-container:** keep one container and simply add
+  `RUN_API=1` to its environment. The app already uses host networking and a
+  portal on `8099`, so no port mapping or second app is needed. The API runs in
+  a daemon thread inside the bot process and shares the same `queue.db`.
+- If the app has a memory limit, leave headroom for the search subprocess
+  (SpotiFLAC); 512 MB is safer than 256 MB.
 
 ## CI/CD
 

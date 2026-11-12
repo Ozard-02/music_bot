@@ -136,8 +136,14 @@ This is why `setup_logger` in the child must keep its StreamHandler on stderr.
 
 - Queue writes share `queue.db` with the bot through WAL; `busy_timeout=5000`
   makes the two processes wait instead of failing on a writer lock.
-- `API_QUEUE_USER` (default: first Telegram allowlist id) decides whose
-  folder/quality API downloads use.
+- **Single-container mode:** `RUN_API=1` starts the API in a daemon thread
+  inside `bot.py` (used by the TrueNAS `ix-app`, which already runs host
+  networking with a portal on 8099). It opens its own `QueueManager`
+  connection, and searches still run in `search_job.py` subprocesses. With
+  `RUN_API` unset, the API is a separate `python api.py` process as in the
+  local compose.
+- `API_QUEUE_USER` (default: first Telegram allowlist id, including the legacy
+  `TELEGRAM_ALLOWED_USER_ID`) decides whose folder/quality API downloads use.
 - Covers are restricted to `*.scdn.co` / `*.spotifycdn.com`, fetched without
   following redirects, capped at 5MiB, and kept in a small in-memory LRU.
   The endpoint has no auth so `<img>`/expo-image can load it; never expose the

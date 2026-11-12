@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import urllib.error
 import urllib.parse
@@ -21,6 +22,7 @@ from api import (
     canonical_spotify_url,
     create_server,
     make_search_provider,
+    start_api_thread,
 )
 from queue_manager import QueueManager
 from spotify_credentials import set_access_token, set_client_credentials
@@ -506,3 +508,29 @@ def test_search_provider_retries_once_on_auth_failure(spotify_env, monkeypatch):
     assert len(seen) == 2
     assert seen[0]["spotify_mode"] == "official"
     assert seen[0]["spotify_token"] == "token"
+
+
+def test_start_api_thread_single_container_mode(monkeypatch, tmp_path, spotify_env):
+    monkeypatch.setenv("API_TOKEN", "thread-token")
+    monkeypatch.setenv("API_BIND", "127.0.0.1")
+    monkeypatch.setenv("API_PORT", "0")
+    monkeypatch.setenv("QUEUE_DB_PATH", str(tmp_path / "queue.db"))
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_ID", "123456789")
+    monkeypatch.delenv("TELEGRAM_ALLOWED_USER_IDS", raising=False)
+    monkeypatch.delenv("API_QUEUE_USER", raising=False)
+
+    server = start_api_thread(logging.getLogger("test.api"))
+    assert server is not None
+    assert server.app.queue_user == 123456789
+    try:
+        port = server.server_address[1]
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/health",
+            headers={"Authorization": "Bearer thread-token"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+            assert json.load(response)["service"] == "spoty_loop"
+    finally:
+        server.shutdown()
+        server.server_close()
