@@ -16,6 +16,36 @@ jobs:
     permissions:
       packages: write
     steps:
+      - name: Purge pre-rewrite images
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Images built before the 2026-11-12 history rewrite may still
+            // contain personal data. Delete them on every run; the three
+            // clean images are newer than this cutoff.
+            const cutoff = new Date("2026-11-12T18:00:00Z");
+            const owner = context.repo.owner;
+            const versions = await github.paginate(
+              github.rest.packages.getAllPackageVersionsForPackageOwnedByUser,
+              {
+                username: owner,
+                package_type: "container",
+                package_name: "music_loop",
+                per_page: 100,
+              }
+            );
+            for (const version of versions) {
+              if (new Date(version.created_at) < cutoff) {
+                core.info(`Deleting pre-rewrite version ${version.id} (${version.created_at})`);
+                await github.rest.packages.deletePackageVersionForUser({
+                  username: owner,
+                  package_type: "container",
+                  package_name: "music_loop",
+                  package_version_id: version.id,
+                });
+              }
+            }
+
       - name: Delete old images
         uses: actions/delete-package-versions@v5
         # Known edge case: if every version gets removed, GHCR deletes the
