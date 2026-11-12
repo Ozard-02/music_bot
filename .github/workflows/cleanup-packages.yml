@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       min-versions-to-keep:
-        description: "Newest versions to keep (use 4 once to drop the pre-rewrite images)"
+        description: "Newest versions to keep (use 3 once to drop the pre-rewrite images)"
         required: false
         default: "10"
 
@@ -25,6 +25,6 @@ jobs:
         with:
           package-name: music_loop
           package-type: container
-          # Scheduled runs keep 10. Manual runs can use 4 once to remove the
-          # two pre-rewrite images (the three clean ones + the new main build).
+          # Scheduled runs keep 10. Manual runs can use 3 once to remove the
+          # two pre-rewrite images while keeping the three clean ones.
           min-versions-to-keep: ${{ github.event.inputs.min-versions-to-keep || 10 }}

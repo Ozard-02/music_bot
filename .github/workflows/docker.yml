@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     tags: ["v*.*.*"]
+    # Workflow-only changes do not alter the image; skip the build (and the
+    # extra GHCR version). Tag pushes are not filtered by paths.
+    paths-ignore:
+      - ".github/workflows/**"
 
 jobs:
   test:
