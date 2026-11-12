@@ -36,6 +36,39 @@ def load_env(path: str | Path) -> None:
         os.environ.setdefault(key.strip(), val.strip())
 
 
+def allowed_user_ids(env: dict | None = None) -> set[int]:
+    """Parse the allowlist (comma-separated ids, legacy single id)."""
+    source = os.environ if env is None else env
+    ids: set[int] = set()
+    for part in str(source.get("TELEGRAM_ALLOWED_USER_IDS", "")).split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.add(int(part))
+    legacy = str(source.get("TELEGRAM_ALLOWED_USER_ID", "")).strip()
+    if legacy.isdigit():
+        ids.add(int(legacy))
+    return ids
+
+
+def first_allowed_user_id(env: dict | None = None) -> int | None:
+    """Smallest allowlisted id, used as the default chat/API queue owner."""
+    ids = allowed_user_ids(env)
+    return min(ids) if ids else None
+
+
+def file_log_path(logger: logging.Logger) -> str | None:
+    """Path of the logger's file handler, if it has one.
+
+    Do not index `logger.handlers[0]`: handler order is an implementation
+    detail, and a test logger may only have a StreamHandler.
+    """
+    for handler in logger.handlers:
+        path = getattr(handler, "baseFilename", None)
+        if path:
+            return str(path)
+    return None
+
+
 # Download engine
 DEFAULT_SERVICES = ["qobuz", "deezer", "amazon"]
 MAX_CONCURRENT = 2

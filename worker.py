@@ -28,6 +28,7 @@ from config import (
     SPOTIFY_BLOCK_PAUSE,
     WORKER_IDLE_POLL_MAX,
     esc,
+    file_log_path,
 )
 from queue_manager import QueueManager
 from library import user_cfg
@@ -415,7 +416,7 @@ class Worker:
             "cfg": cfg,
             "skip_titles": sorted(skip_titles),
             "want_m3u8": item["input_type"] == "link",
-            "log_path": self._logger.handlers[0].baseFilename if self._logger.handlers else None,
+            "log_path": file_log_path(self._logger),
         }
         if item["input_type"] == "search":
             spec["query"] = item["query"]

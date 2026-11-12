@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from config import load_env, setup_logger
+from config import first_allowed_user_id, load_env, setup_logger
 from queue_manager import QueueManager
 from spotify_credentials import (
     CredentialsError,
@@ -736,13 +736,7 @@ def _queue_user() -> int | None:
     raw = os.environ.get("API_QUEUE_USER", "").strip()
     if raw.isdigit():
         return int(raw)
-    raw = os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "")
-    for part in raw.split(","):
-        part = part.strip()
-        if part.isdigit():
-            return int(part)
-    legacy = os.environ.get("TELEGRAM_ALLOWED_USER_ID", "").strip()
-    return int(legacy) if legacy.isdigit() else None
+    return first_allowed_user_id()
 
 
 @dataclass

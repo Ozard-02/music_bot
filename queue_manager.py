@@ -99,8 +99,6 @@ class QueueManager:
             except sqlite3.OperationalError:
                 pass
 
-        self.prune_history(30)
-
     @property
     def path(self) -> str:
         return self._db_path

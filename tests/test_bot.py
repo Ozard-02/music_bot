@@ -12,7 +12,8 @@ os.environ["TELEGRAM_ALLOWED_USER_IDS"] = "12345"
 # neutralize the legacy var, whether it leaks from the shell or from ./env
 os.environ["TELEGRAM_ALLOWED_USER_ID"] = ""
 
-from bot import Bot, _parse_allowed_user_ids, _user_folder, ALLOWED_USER_IDS
+from bot import Bot, _user_folder, ALLOWED_USER_IDS
+from config import allowed_user_ids
 
 
 @pytest.fixture
@@ -53,8 +54,8 @@ def spotify_path(monkeypatch, tmp_path):
 
 
 class TestAllowlist:
-    def test_parse_allowed_user_ids(self):
-        assert _parse_allowed_user_ids() == {12345}
+    def test_allowed_user_ids(self):
+        assert allowed_user_ids() == {12345}
 
     def test_user_folder_unique_without_username(self):
         assert _user_folder({"id": 10, "first_name": "Andrea"}) != _user_folder(

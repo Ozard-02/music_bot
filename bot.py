@@ -10,7 +10,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import STALL_TIMEOUT, load_env, setup_logger, load_config, esc
+from config import (
+    STALL_TIMEOUT,
+    allowed_user_ids,
+    esc,
+    file_log_path,
+    load_config,
+    load_env,
+    setup_logger,
+)
 from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from playlists import create_empty, empty_playlist
 from queue_manager import QueueManager
@@ -25,25 +33,7 @@ load_env(Path(__file__).parent / ".env")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 
-def _parse_allowed_user_ids() -> set[int]:
-    """Parse the allowlist: comma-separated TELEGRAM_ALLOWED_USER_IDS, with
-    the legacy single TELEGRAM_ALLOWED_USER_ID as a fallback."""
-    ids = set()
-    raw = os.environ.get("TELEGRAM_ALLOWED_USER_IDS")
-    if raw:
-        for part in raw.split(","):
-            part = part.strip()
-            if part.isdigit():
-                ids.add(int(part))
-    if os.environ.get("TELEGRAM_ALLOWED_USER_ID"):
-        try:
-            ids.add(int(os.environ["TELEGRAM_ALLOWED_USER_ID"]))
-        except ValueError:
-            pass
-    return ids
-
-
-ALLOWED_USER_IDS = _parse_allowed_user_ids()
+ALLOWED_USER_IDS = allowed_user_ids()
 
 QUEUE_DB = Path(os.environ.get("QUEUE_DB_PATH", str(Path(__file__).parent / "queue.db")))
 
@@ -136,7 +126,7 @@ class Bot:
         self._worker: Worker | None = None
         self._offset: int | None = None
         # Default notification chat: the first allowed user (single-owner use).
-        self._chat_id = next(iter(sorted(ALLOWED_USER_IDS)), None)
+        self._chat_id = min(ALLOWED_USER_IDS) if ALLOWED_USER_IDS else None
 
     def _is_allowed(self, user: dict) -> bool:
         return bool(user) and user.get("id") in ALLOWED_USER_IDS
@@ -429,7 +419,7 @@ class Bot:
             if message_id:
                 await self._client.edit_message(chat_id, message_id, text)
 
-        spec = {**spec, "log_path": self._logger.handlers[0].baseFilename if self._logger.handlers else None}
+        spec = {**spec, "log_path": file_log_path(self._logger)}
 
         last_edit = 0.0
 
@@ -845,6 +835,7 @@ def main() -> None:
 
     qm = QueueManager(str(QUEUE_DB))
     qm.reset_running()  # the bot owns the queue; API restarts must not steal jobs
+    qm.prune_history(30)  # API processes no longer prune the shared DB
     api_server = None
     if os.environ.get("RUN_API", "").strip().lower() in ("1", "true", "yes", "on"):
         try:
