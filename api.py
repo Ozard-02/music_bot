@@ -36,6 +36,11 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from config import load_env, setup_logger
 from queue_manager import QueueManager
+from spotify_credentials import (
+    CredentialsError,
+    effective_credentials,
+    fetch_client_credentials_token,
+)
 
 ROOT = Path(__file__).parent.absolute()
 SEARCH_SCRIPT = ROOT / "search_job.py"
@@ -82,9 +87,92 @@ class SearchError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def run_search_job(query: str, limit: int, timeout: int = 20) -> dict:
+class SpotifyAuth:
+    """Optional Spotify credentials for the official search API.
+
+    Reads the file written by the Telegram `/spotify` commands on every search,
+    so changes apply without restarting the API. Without creds, search falls
+    back to SpotiFLAC's anonymous web token. Tokens never reach Laila or logs.
+    """
+
+    def __init__(self, credentials_path=None, fetcher=None):
+        self._path = credentials_path
+        self._fetcher = fetcher or fetch_client_credentials_token
+        self._token: str = ""
+        self._expires_at = 0.0
+        self._key: tuple[str, str] | None = None
+        self._market = ""
+        self._source = "none"
+        self._lock = threading.Lock()
+
+    def _read(self) -> dict:
+        data = effective_credentials(self._path)
+        self._market = data["market"]
+        self._source = data["source"]
+        return data
+
+    @property
+    def mode(self) -> str:
+        return self._read()["mode"]
+
+    @property
+    def market(self) -> str:
+        return self._market
+
+    @property
+    def source(self) -> str:
+        return self._source
+
+    def can_refresh(self) -> bool:
+        return self.mode == "client"
+
+    def search_spec(self) -> tuple[str, str]:
+        """Return (search_job mode, token); anonymous has no token."""
+        data = self._read()
+        mode = data["mode"]
+        if mode == "anonymous":
+            return ("anonymous", "")
+        if mode == "token":
+            return ("official", data["access_token"])
+
+        key = (data["client_id"], data["client_secret"])
+        with self._lock:
+            if key != self._key or not self._token or time.monotonic() >= self._expires_at:
+                try:
+                    self._token = self._fetcher(*key)
+                except CredentialsError as exc:
+                    raise SearchError(
+                        "spotify_auth_failed", 502, str(exc)
+                    ) from exc
+                self._key = key
+                self._expires_at = time.monotonic() + 3300
+            return ("official", self._token)
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._token = ""
+            self._expires_at = 0.0
+            self._key = None
+
+
+def run_search_job(
+    query: str,
+    limit: int,
+    timeout: int = 20,
+    spotify_mode: str = "anonymous",
+    spotify_token: str = "",
+    spotify_market: str = "",
+) -> dict:
     """Run search_job.py and return its parsed payload."""
-    spec = json.dumps({"query": query, "limit": limit})
+    spec_payload = {
+        "query": query,
+        "limit": limit,
+        "spotify_mode": spotify_mode,
+        "spotify_market": spotify_market,
+    }
+    if spotify_token:
+        spec_payload["spotify_token"] = spotify_token
+    spec = json.dumps(spec_payload)
     try:
         proc = subprocess.run(
             [sys.executable, str(SEARCH_SCRIPT)],
@@ -152,6 +240,35 @@ class SearchRunner:
                 while len(self._cache) > self._max_entries:
                     self._cache.popitem(last=False)
         return result
+
+
+def make_search_provider(auth: SpotifyAuth, timeout: int):
+    """Build the runner used by SearchRunner, with one auth retry."""
+
+    def run(query: str, limit: int) -> dict:
+        for attempt in (0, 1):
+            try:
+                mode, token = auth.search_spec()
+                return run_search_job(
+                    query,
+                    limit,
+                    timeout=timeout,
+                    spotify_mode=mode,
+                    spotify_token=token,
+                    spotify_market=auth.market,
+                )
+            except SearchError as exc:
+                if (
+                    exc.kind == "spotify_auth_failed"
+                    and auth.can_refresh()
+                    and attempt == 0
+                ):
+                    auth.invalidate()
+                    continue
+                raise
+        raise SearchError("spotify_auth_failed", 502, "Spotify credentials failed")
+
+    return run
 
 
 # ---------------------------------------------------------------------------
@@ -630,12 +747,15 @@ def main() -> int:
         if part.strip()
     )
     queue_path = os.environ.get("QUEUE_DB_PATH", str(ROOT / "queue.db"))
+    spotify_auth = SpotifyAuth(
+        credentials_path=os.environ.get("SPOTIFY_CREDENTIALS_PATH") or None
+    )
 
     app = ApiApp(
         token=token,
         queue=QueueManager(queue_path),
         search=SearchRunner(
-            runner=lambda query, limit: run_search_job(query, limit, timeout=timeout),
+            runner=make_search_provider(spotify_auth, timeout),
             ttl=ttl,
         ),
         covers=CoverCache(),
@@ -646,12 +766,14 @@ def main() -> int:
     )
     server = create_server(bind, port, app)
     logger.info(
-        "API listening on %s:%s (queue=%s, user=%s, cors=%s)",
+        "API listening on %s:%s (queue=%s, user=%s, cors=%s, spotify=%s/%s)",
         bind,
         port,
         queue_path,
         app.queue_user,
         ",".join(origins) or "none",
+        spotify_auth.mode,
+        spotify_auth.source,
     )
     try:
         server.serve_forever()

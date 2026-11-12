@@ -4,6 +4,7 @@
 music_bot_rewrite/
 ├── bot.py               # Telegram dispatch + handlers + main loop (front end)
 ├── api.py               # HTTP API for Laila: search/queue/cover (front end)
+├── spotify_credentials.py # Telegram-managed Spotify creds (front ends; stdlib)
 ├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (front end)
 ├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (front end)
 ├── queue_manager.py     # SQLite queue (front ends; stdlib-only, WAL + busy timeout)

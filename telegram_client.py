@@ -127,3 +127,15 @@ class TelegramClient:
             })
         except (OSError, TelegramError) as e:
             self._logger.warning("editMessageText failed: %s", e)
+
+    async def delete_message(self, chat_id: int, message_id: int | None) -> None:
+        """Best-effort delete; used to remove credential commands from chat."""
+        if not message_id:
+            return
+        try:
+            await self._call("deleteMessage", {
+                "chat_id": chat_id,
+                "message_id": message_id,
+            })
+        except (OSError, TelegramError) as e:
+            self._logger.warning("deleteMessage failed: %s", e)

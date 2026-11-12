@@ -129,6 +129,19 @@ subprocess. Shared queue DB via WAL.
       full suite green (435 passed).
 - [x] Commit (2190d5d); push/deploy pending.
 
+## Phase 8b — Telegram-managed Spotify credentials (DONE)
+
+- [x] `spotify_credentials.py` — atomic 0600 JSON in `~/.spotiflac`, file values
+      override `.env`, safe status (no token/secret).
+- [x] Bot `/spotify` commands: status, token, client, market, test, clear;
+      deletes the command message that contained a secret.
+- [x] API re-reads the file on every search; client credentials refresh + one
+      401 retry; anonymous stays the fallback.
+- [x] `search_job.py` official Web API path (stdlib urllib) + normalization;
+      anonymous path unchanged.
+- [x] Docs/env/compose notes; tests 461 passed.
+- [x] Commit; push/deploy pending (the TrueNAS image must include this build).
+
 ## Phase 9 — TrueNAS
 - [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes)
 - [ ] Push image, deploy, verify

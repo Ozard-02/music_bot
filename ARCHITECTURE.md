@@ -112,8 +112,16 @@ This is why `setup_logger` in the child must keep its StreamHandler on stderr.
   `{"ok": false, "kind": "spotify_blocked", "error": "..."}`.
 - **stderr**: logs only. The API captures them and never forwards them.
 - The child sets `sync_extensions=False` and uses `spotiflac_patch` (no GitHub
-  version check). It wraps the metadata client's `query` so a swallowed
-  Spotify 406/429 is reported as `spotify_blocked` instead of "no results".
+  version check) only in anonymous mode. It wraps the metadata client's
+  `query` so a swallowed Spotify 406/429 is reported as `spotify_blocked`
+  instead of "no results".
+- **Official mode:** if `~/.spotiflac/spotify.json` (managed by Telegram
+  `/spotify`) or `.env` has client credentials or an access token, `api.py`
+  sends `spotify_mode=official` + the token to the child, which calls the
+  official Web API with stdlib `urllib`. Client credentials are refreshed in
+  the API process and retried once on a 401. The file is re-read on every
+  search, so `/spotify` changes need no restart. Without credentials, the
+  child uses SpotiFLAC's anonymous web token.
 - The API caches results for `SEARCH_CACHE_TTL` (default 60s) and serializes
   cache misses, so typing does not fan out into parallel Spotify requests.
 

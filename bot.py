@@ -13,6 +13,7 @@ from pathlib import Path
 from config import STALL_TIMEOUT, load_env, setup_logger, load_config, esc
 from library import QUALITY_CHOICES, user_cfg, user_folder_name
 from queue_manager import QueueManager
+import spotify_credentials as spotify_creds
 from resolver import parse_inputs, format_help
 from telegram_client import TelegramClient
 from track_utils import sanitize
@@ -140,7 +141,9 @@ class Bot:
     def _is_allowed(self, user: dict) -> bool:
         return bool(user) and user.get("id") in ALLOWED_USER_IDS
 
-    async def _handle_command(self, chat_id: int, user: dict, command: str, args: str) -> None:
+    async def _handle_command(
+        self, chat_id: int, user: dict, command: str, args: str, message_id: int | None = None
+    ) -> None:
         if command == "start":
             await self._client.send_message(
                 chat_id,
@@ -167,6 +170,8 @@ class Bot:
             await self._synclyrics(chat_id, user, args)
         elif command == "rmplaylist":
             await self._rmplaylist(chat_id, user, args)
+        elif command == "spotify":
+            await self._spotify(chat_id, args, message_id)
 
     async def _status(self, chat_id: int, user: dict) -> None:
         uid = user["id"]
@@ -261,6 +266,126 @@ class Bot:
         await self._client.send_message(
             chat_id,
             f"✅ <b>Quality set to</b> <code>{esc(value)}</code>\n  Applies to new downloads only.",
+        )
+
+    async def _spotify(
+        self, chat_id: int, args: str, message_id: int | None = None
+    ) -> None:
+        parts = args.split()
+        action = parts[0].lower() if parts else "status"
+
+        if action in ("status", "show"):
+            await self._client.send_message(chat_id, spotify_creds.describe_credentials())
+            return
+
+        if action in ("token", "access_token"):
+            if len(parts) != 2:
+                await self._client.send_message(
+                    chat_id,
+                    "🔑 <b>Usage:</b> /spotify token &lt;access_token&gt;\n"
+                    "  Short-lived; for a durable setup use /spotify client.",
+                )
+                return
+            token = parts[1].strip()
+            if len(token) < 20:
+                await self._client.send_message(chat_id, "❌ That does not look like a token.")
+                return
+            try:
+                await asyncio.to_thread(spotify_creds.set_access_token, None, token)
+            except (OSError, ValueError) as exc:
+                self._logger.warning("Could not save Spotify token: %s", exc)
+                await self._client.send_message(chat_id, "❌ Could not save the token.")
+                return
+            await self._client.delete_message(chat_id, message_id)
+            await self._client.send_message(
+                chat_id,
+                "✅ <b>Spotify access token saved</b>\n"
+                "  Searches use the official API; the command message was deleted.\n"
+                "  It expires; /spotify clear falls back to anonymous.",
+            )
+            return
+
+        if action == "client":
+            if len(parts) != 3:
+                await self._client.send_message(
+                    chat_id,
+                    "🔑 <b>Usage:</b> /spotify client &lt;client_id&gt; &lt;client_secret&gt;\n"
+                    "  Create a free app at developer.spotify.com; no user login needed.",
+                )
+                return
+            client_id, client_secret = parts[1].strip(), parts[2].strip()
+            if len(client_id) < 10 or len(client_secret) < 10:
+                await self._client.send_message(
+                    chat_id, "❌ Client ID or secret looks too short."
+                )
+                return
+            try:
+                await asyncio.to_thread(
+                    spotify_creds.set_client_credentials, None, client_id, client_secret
+                )
+            except (OSError, ValueError) as exc:
+                self._logger.warning("Could not save Spotify client credentials: %s", exc)
+                await self._client.send_message(chat_id, "❌ Could not save the credentials.")
+                return
+            await self._client.delete_message(chat_id, message_id)
+            await self._client.send_message(
+                chat_id,
+                "✅ <b>Spotify client credentials saved</b>\n"
+                "  The API refreshes the token automatically; the command message was deleted.\n"
+                "  /spotify test checks them, /spotify clear falls back to anonymous.",
+            )
+            return
+
+        if action == "market":
+            if len(parts) != 2 or len(parts[1]) != 2 or not parts[1].isalpha():
+                await self._client.send_message(
+                    chat_id, "🔑 <b>Usage:</b> /spotify market &lt;IT&gt;"
+                )
+                return
+            market = parts[1].upper()
+            try:
+                await asyncio.to_thread(spotify_creds.set_market, None, market)
+            except (OSError, ValueError) as exc:
+                self._logger.warning("Could not save Spotify market: %s", exc)
+                await self._client.send_message(chat_id, "❌ Could not save the market.")
+                return
+            await self._client.send_message(
+                chat_id, f"✅ <b>Spotify market set to</b> <code>{esc(market)}</code>"
+            )
+            return
+
+        if action == "clear":
+            try:
+                await asyncio.to_thread(spotify_creds.clear_credentials, None)
+            except spotify_creds.CredentialsError as exc:
+                await self._client.send_message(chat_id, f"❌ {esc(exc)}")
+                return
+            await self._client.send_message(
+                chat_id,
+                "🧹 <b>Spotify credentials cleared</b>\n"
+                "  Searches fall back to the anonymous web token (or .env, if configured).",
+            )
+            return
+
+        if action == "test":
+            await self._client.send_message(chat_id, "⏳ Testing Spotify credentials…")
+            try:
+                result = await asyncio.to_thread(spotify_creds.test_credentials, None)
+            except spotify_creds.CredentialsError as exc:
+                await self._client.send_message(chat_id, f"❌ <b>Spotify test failed</b>\n  {esc(exc)}")
+                return
+            await self._client.send_message(chat_id, f"✅ {esc(result)}")
+            return
+
+        await self._client.send_message(
+            chat_id,
+            "🔑 <b>Spotify credentials</b>\n"
+            "  /spotify — status\n"
+            "  /spotify token &lt;token&gt; — static access token\n"
+            "  /spotify client &lt;id&gt; &lt;secret&gt; — client credentials\n"
+            "  /spotify market &lt;IT&gt; — optional market\n"
+            "  /spotify test — validate the official API\n"
+            "  /spotify clear — anonymous fallback",
         )
 
     async def _retry(self, chat_id: int, user: dict, args: str) -> None:
@@ -777,7 +902,9 @@ class Bot:
             parts = text[1:].split(maxsplit=1)
             command = parts[0].split("@")[0].lower()
             args = parts[1] if len(parts) > 1 else ""
-            await self._handle_command(chat_id, user, command, args)
+            await self._handle_command(
+                chat_id, user, command, args, message.get("message_id")
+            )
         else:
             await self._handle_text(chat_id, user, text)
 

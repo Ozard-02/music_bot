@@ -154,7 +154,8 @@ def format_help() -> str:
         "  /mkplaylist &lt;name&gt; \u2014 create empty <code>&lt;name&gt;.m3u8</code> (no url)\n"
         "  /fixmetadata [album folder] \u2014 re-tag + fix covers (--lyrics also embeds lyrics; your library if omitted)\n"
         "  /synclyrics [album folder] [--force] \u2014 fetch missing/unsynced lyrics + .lrc sidecars (no re-tag/move)\n"
-        "  /rmplaylist [name] \u2014 delete every track listed in &lt;name&gt;.m3u8 (default Trash) and prune empty folders"
+        "  /rmplaylist [name] \u2014 delete every track listed in &lt;name&gt;.m3u8 (default Trash) and prune empty folders\n"
+        "  /spotify [token|client|market|test|clear] \u2014 optional official Spotify search credentials"
     )
 
 

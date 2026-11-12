@@ -17,6 +17,11 @@ docker compose logs -f api
   `music-bot` (Telegram) and `api` (HTTP for Laila) on port `8099`.
 - The API refuses to start without `API_TOKEN`. Put it behind LAN/Tailscale;
   never publish the port to the internet.
+- Spotify search credentials are optional and managed from Telegram:
+  `/spotify client <id> <secret>` or `/spotify token <token>`. The bot writes
+  `~/.spotiflac/spotify.json`; both services mount `~/.spotiflac`, and the API
+  re-reads the file on the next search (no restart). Without it, search uses
+  SpotiFLAC's anonymous token.
 
 ## TrueNAS
 

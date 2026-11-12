@@ -1,6 +1,7 @@
 """Tests for bot.py — Telegram handlers (raw client, no PTB)."""
 
 import asyncio
+import json
 import os
 from unittest.mock import AsyncMock
 
@@ -25,6 +26,7 @@ def _update(user_id: int = 12345, text: str = "") -> dict:
         "message": {
             "chat": {"id": 12345},
             "from": {"id": user_id, "username": "espo", "first_name": "Espo"},
+            "message_id": 99,
             "text": text,
         },
     }
@@ -34,6 +36,20 @@ def _assert_sent(bot, contains: str):
     assert bot._client.send_message.call_count >= 1
     texts = [c.args[1] for c in bot._client.send_message.call_args_list]
     assert any(contains in t for t in texts)
+
+
+@pytest.fixture
+def spotify_path(monkeypatch, tmp_path):
+    path = tmp_path / "spotify.json"
+    monkeypatch.setenv("SPOTIFY_CREDENTIALS_PATH", str(path))
+    for key in (
+        "SPOTIFY_ACCESS_TOKEN",
+        "SPOTIFY_CLIENT_ID",
+        "SPOTIFY_CLIENT_SECRET",
+        "SPOTIFY_MARKET",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    return path
 
 
 class TestAllowlist:
@@ -101,7 +117,76 @@ class TestHandlers:
         assert "Unknown quality" in bot._client.send_message.call_args.args[1]
 
     @pytest.mark.asyncio
-    async def test_purge(self, bot):
+    async def test_spotify_status_anonymous(self, bot, spotify_path):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(_update(text="/spotify"))
+        _assert_sent(bot, "anonymous")
+        _assert_sent(bot, "Source: none")
+
+    @pytest.mark.asyncio
+    async def test_spotify_access_token_saved_and_command_deleted(self, bot, spotify_path):
+        bot._client.send_message = AsyncMock()
+        bot._client.delete_message = AsyncMock()
+        token = "BQ" + "x" * 40
+
+        await bot._handle_update(_update(text=f"/spotify token {token}"))
+
+        data = json.loads(spotify_path.read_text())
+        assert data["access_token"] == token
+        assert data["client_id"] == ""
+        bot._client.delete_message.assert_awaited_once_with(12345, 99)
+        sent = "\n".join(c.args[1] for c in bot._client.send_message.call_args_list)
+        assert "access token saved" in sent
+        assert token not in sent
+
+    @pytest.mark.asyncio
+    async def test_spotify_client_credentials_saved(self, bot, spotify_path):
+        bot._client.send_message = AsyncMock()
+        bot._client.delete_message = AsyncMock()
+        client_id = "a" * 32
+        secret = "b" * 32
+
+        await bot._handle_update(_update(text=f"/spotify client {client_id} {secret}"))
+
+        data = json.loads(spotify_path.read_text())
+        assert data["client_id"] == client_id
+        assert data["client_secret"] == secret
+        assert data["access_token"] == ""
+        sent = "\n".join(c.args[1] for c in bot._client.send_message.call_args_list)
+        assert "client credentials saved" in sent
+        assert secret not in sent
+
+    @pytest.mark.asyncio
+    async def test_spotify_clear_falls_back_to_anonymous(self, bot, spotify_path):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(_update(text="/spotify token " + "c" * 40))
+        assert spotify_path.exists()
+
+        await bot._handle_update(_update(text="/spotify clear"))
+
+        assert not spotify_path.exists()
+        _assert_sent(bot, "cleared")
+
+    @pytest.mark.asyncio
+    async def test_spotify_market_saved(self, bot, spotify_path):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(_update(text="/spotify market it"))
+        data = json.loads(spotify_path.read_text())
+        assert data["market"] == "IT"
+
+    @pytest.mark.asyncio
+    async def test_spotify_test_anonymous(self, bot, spotify_path):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(_update(text="/spotify test"))
+        _assert_sent(bot, "Anonymous mode")
+
+    @pytest.mark.asyncio
+    async def test_spotify_usage(self, bot, spotify_path):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(_update(text="/spotify bogus"))
+        _assert_sent(bot, "Spotify credentials")
+
+
         bot._client.send_message = AsyncMock()
         bot._qm.enqueue_unique("link", "https://open.spotify.com/track/abc", 12345)
         await bot._handle_update(_update(text="/purge"))

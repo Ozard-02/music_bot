@@ -39,6 +39,12 @@ download job** whose RSS is reclaimed on exit. See [ARCHITECTURE.md](ARCHITECTUR
 | `/fixmetadata [folder]` | Re-tag all FLACs in a folder inside your library (fixes split albums in Navidrome) |
 | `/synclyrics [folder] [--force]` | Fetch missing/unsynced lyrics + `.lrc` sidecars only (no re-tag, no moves) |
 | `/rmplaylist [name]` | Delete every track in `name.m3u8` (default `Trash`) + prune empty folders |
+| `/spotify` | Show Spotify search credential status |
+| `/spotify token <token>` | Use a static Spotify access token (official API) |
+| `/spotify client <id> <secret>` | Use client credentials (official API, auto-refresh) |
+| `/spotify market <IT>` | Optional official-API market |
+| `/spotify test` | Validate the configured official credentials |
+| `/spotify clear` | Remove them and fall back to anonymous |
 
 ## Quick start (local Docker)
 
@@ -55,8 +61,34 @@ docker compose up -d --build
 | `TELEGRAM_ALLOWED_USER_IDS` | Yes* | — | Comma-separated Telegram user IDs (allowlist) |
 | `TELEGRAM_ALLOWED_USER_ID` | Yes* | — | Legacy single-user fallback |
 | `QUEUE_DB_PATH` | No | `./queue.db` | Queue database path |
+| `SPOTIFY_CREDENTIALS_PATH` | No | `~/.spotiflac/spotify.json` | Credentials file written by `/spotify` |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | No | — | Official Spotify app credentials (fallback if the file is empty) |
+| `SPOTIFY_ACCESS_TOKEN` | No | — | Static official token (fallback if the file is empty) |
+| `SPOTIFY_MARKET` | No | — | Optional market for official search (e.g. `IT`) |
 
 *One of the two must be set.
+
+### Spotify search credentials
+
+Search works without any Spotify credentials: it uses SpotiFLAC's anonymous
+web token. If Spotify starts rate-limiting it, add official credentials from
+Telegram (no user login needed):
+
+```text
+/spotify client <client_id> <client_secret>   # recommended, auto-refreshed
+/spotify token <access_token>                 # short-lived alternative
+/spotify market IT                            # optional
+/spotify test
+/spotify clear                                # back to anonymous
+```
+
+- The bot writes `~/.spotiflac/spotify.json` (mode 0600) and deletes the
+  command message that contained the secret, when Telegram allows it.
+- The API re-reads the file on the next search: no restart needed.
+- File values override `.env`; without either, anonymous is used.
+- The token/secret never reaches Laila or the logs.
+- Official credentials are only for search; downloads still use SpotiFLAC's
+  provider chain.
 
 Provider order, quality, and download options go in `~/.spotiflac/config.json`.
 

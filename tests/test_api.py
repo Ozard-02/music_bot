@@ -16,11 +16,14 @@ from api import (
     CoverCache,
     SearchError,
     SearchRunner,
+    SpotifyAuth,
     allowed_cover_url,
     canonical_spotify_url,
     create_server,
+    make_search_provider,
 )
 from queue_manager import QueueManager
+from spotify_credentials import set_access_token, set_client_credentials
 
 TOKEN = "test-token"
 ORIGIN = "http://localhost:8081"
@@ -407,3 +410,99 @@ def test_canonical_spotify_url(value, expected):
 )
 def test_allowed_cover_url(url, allowed):
     assert allowed_cover_url(url) is allowed
+
+
+# ---------------------------------------------------------------------------
+# Spotify auth (Telegram-managed file + env fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def spotify_env(monkeypatch, tmp_path):
+    path = tmp_path / "spotify.json"
+    for key in (
+        "SPOTIFY_ACCESS_TOKEN",
+        "SPOTIFY_CLIENT_ID",
+        "SPOTIFY_CLIENT_SECRET",
+        "SPOTIFY_MARKET",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    return path
+
+
+def test_spotify_auth_anonymous(spotify_env):
+    auth = SpotifyAuth(credentials_path=spotify_env)
+    assert auth.mode == "anonymous"
+    assert auth.source == "none"
+    assert auth.search_spec() == ("anonymous", "")
+
+
+def test_spotify_auth_block_token(spotify_env):
+    set_access_token(spotify_env, "BQ" + "x" * 40)
+    auth = SpotifyAuth(credentials_path=spotify_env)
+    assert auth.mode == "token"
+    assert auth.source == "telegram"
+    mode, token = auth.search_spec()
+    assert mode == "official"
+    assert token.startswith("BQ")
+
+
+def test_spotify_auth_client_credentials_cache_and_reload(spotify_env):
+    set_client_credentials(spotify_env, "id", "secret")
+    calls: list[tuple[str, str]] = []
+
+    def fetch(client_id, client_secret):
+        calls.append((client_id, client_secret))
+        return "client-token"
+
+    auth = SpotifyAuth(credentials_path=spotify_env, fetcher=fetch)
+    assert auth.search_spec() == ("official", "client-token")
+    assert auth.search_spec() == ("official", "client-token")
+    assert calls == [("id", "secret")]
+
+    set_client_credentials(spotify_env, "id", "new-secret")
+    assert auth.search_spec() == ("official", "client-token")
+    assert calls == [("id", "secret"), ("id", "new-secret")]
+
+
+def test_spotify_auth_invalidate_refetches(spotify_env):
+    set_client_credentials(spotify_env, "id", "secret")
+    calls = []
+
+    def fetch(client_id, client_secret):
+        calls.append((client_id, client_secret))
+        return f"token-{len(calls)}"
+
+    auth = SpotifyAuth(credentials_path=spotify_env, fetcher=fetch)
+    assert auth.search_spec()[1] == "token-1"
+    auth.invalidate()
+    assert auth.search_spec()[1] == "token-2"
+
+
+def test_spotify_auth_env_fallback(spotify_env, monkeypatch):
+    monkeypatch.setenv("SPOTIFY_CLIENT_ID", "env-id")
+    monkeypatch.setenv("SPOTIFY_CLIENT_SECRET", "env-secret")
+    auth = SpotifyAuth(credentials_path=spotify_env)
+    assert auth.mode == "client"
+    assert auth.source == "env"
+
+
+def test_search_provider_retries_once_on_auth_failure(spotify_env, monkeypatch):
+    import api
+
+    set_client_credentials(spotify_env, "id", "secret")
+    auth = SpotifyAuth(credentials_path=spotify_env, fetcher=lambda i, s: "token")
+    seen = []
+
+    def fake_run(query, limit, **kwargs):
+        seen.append(kwargs)
+        if len(seen) == 1:
+            raise SearchError("spotify_auth_failed", 502, "rejected")
+        return {"tracks": [], "albums": [], "playlists": []}
+
+    monkeypatch.setattr(api, "run_search_job", fake_run)
+    provider = make_search_provider(auth, timeout=20)
+    assert provider("x", 1) == {"tracks": [], "albums": [], "playlists": []}
+    assert len(seen) == 2
+    assert seen[0]["spotify_mode"] == "official"
+    assert seen[0]["spotify_token"] == "token"
