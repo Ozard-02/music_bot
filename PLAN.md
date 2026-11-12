@@ -151,12 +151,13 @@ subprocess. Shared queue DB via WAL.
       process still works for docker-compose.
 - [x] `API_QUEUE_USER` honours the legacy `TELEGRAM_ALLOWED_USER_ID`.
 - [x] Test: thread mode serves `/api/health`; legacy user mapping. 462 passed.
-- [ ] Rebuild image, push, update the TrueNAS app image tag + `RUN_API=1`.
+- [x] Release `v1.1.0` tag pushed; CI builds the image.
+- [ ] Update the TrueNAS app image tag + `RUN_API=1`.
 
 ## Phase 9 — TrueNAS
 - [x] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes) — single
       service with `RUN_API=1`, port 8099.
-- [ ] Push image, deploy, verify
+- [ ] Deploy and verify on TrueNAS
 
 ## Phase 10 — CI/CD
 - [x] GitHub Actions: pytest on push + build/push ghcr on main
