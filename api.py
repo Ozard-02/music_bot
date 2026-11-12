@@ -52,6 +52,11 @@ MAX_LIMIT = 50
 DEFAULT_LIMIT = 20
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 COVER_TIMEOUT = 10
+# Caches are bounded by memory, not by "nice to have": in RUN_API mode they
+# live in the bot process, so 32 results and 8 MiB of covers are plenty.
+SEARCH_CACHE_ENTRIES = 32
+COVER_CACHE_ENTRIES = 32
+COVER_CACHE_BYTES = 8 * 1024 * 1024
 
 _HTTP_LINK_RE = re.compile(
     r"^https?://open\.spotify\.com/(track|album|playlist)/([A-Za-z0-9]{22})(?:[/?#].*)?$"
@@ -209,7 +214,7 @@ def run_search_job(
 class SearchRunner:
     """TTL cache plus a lock so concurrent queries never fan out to Spotify."""
 
-    def __init__(self, runner=run_search_job, ttl: int = 60, max_entries: int = 64):
+    def __init__(self, runner=run_search_job, ttl: int = 60, max_entries: int = SEARCH_CACHE_ENTRIES):
         self._runner = runner
         self._ttl = max(0, ttl)
         self._max_entries = max_entries
@@ -235,7 +240,16 @@ class SearchRunner:
                     return cached[1]
             result = self._runner(query, limit)
             with self._cache_lock:
-                self._cache[key] = (time.monotonic() + self._ttl, result)
+                now = time.monotonic()
+                # TTL only means "not fresh"; purge expired entries so they do
+                # not stay resident until LRU eviction.
+                expired = [
+                    k for k, (expires, _) in self._cache.items()
+                    if expires <= now
+                ]
+                for stale in expired:
+                    del self._cache[stale]
+                self._cache[key] = (now + self._ttl, result)
                 self._cache.move_to_end(key)
                 while len(self._cache) > self._max_entries:
                     self._cache.popitem(last=False)
@@ -343,7 +357,12 @@ def fetch_cover(url: str, timeout: int = COVER_TIMEOUT) -> tuple[bytes, str]:
 class CoverCache:
     """Small in-memory LRU so scrolling does not refetch the same covers."""
 
-    def __init__(self, fetcher=fetch_cover, max_entries: int = 64, max_bytes: int = 24 * 1024 * 1024):
+    def __init__(
+        self,
+        fetcher=fetch_cover,
+        max_entries: int = COVER_CACHE_ENTRIES,
+        max_bytes: int = COVER_CACHE_BYTES,
+    ):
         self._fetch = fetcher
         self._max_entries = max_entries
         self._max_bytes = max_bytes

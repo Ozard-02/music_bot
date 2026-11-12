@@ -510,6 +510,26 @@ def test_search_provider_retries_once_on_auth_failure(spotify_env, monkeypatch):
     assert seen[0]["spotify_token"] == "token"
 
 
+def test_search_cache_drops_expired_entries():
+    def runner(query, limit):
+        return {"tracks": [], "albums": [], "playlists": [], "query": query}
+
+    search = SearchRunner(runner, ttl=0)
+    search.search("first", 1)
+    search.search("second", 1)
+    assert len(search._cache) == 1
+    assert next(iter(search._cache)) == ("second", 1)
+
+
+def test_cover_cache_honours_byte_budget():
+    payload = b"x" * 10
+    covers = CoverCache(fetcher=lambda url: (payload, "image/jpeg"), max_bytes=15)
+    covers.get("https://i.scdn.co/image/a")
+    covers.get("https://i.scdn.co/image/b")
+    assert covers._bytes == 10
+    assert len(covers._items) == 1
+
+
 def test_start_api_thread_single_container_mode(monkeypatch, tmp_path, spotify_env):
     monkeypatch.setenv("API_TOKEN", "thread-token")
     monkeypatch.setenv("API_BIND", "127.0.0.1")
