@@ -7,10 +7,10 @@ import pytest
 from resolver import (
     parse_input,
     parse_inputs,
-    resolve_search,
     split_search,
     format_help,
 )
+from resolver_match import resolve_search
 
 
 class TestSplitSearch:

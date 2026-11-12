@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from mutagen.flac import FLAC
 
 from config import load_config, SCRIPT_MAX_CONCURRENT as MAX_CONCURRENT
-from resolver import best_track_match
+from resolver_match import best_track_match
 from track_utils import get_jpeg_dimensions
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")

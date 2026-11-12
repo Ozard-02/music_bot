@@ -56,7 +56,7 @@ async def _job(spec: dict, logger: logging.Logger) -> DownloadResult:
 
     if spec.get("type") == "search":
         from SpotiFLAC import AsyncSpotiFLAC
-        from resolver import resolve_search
+        from resolver_match import resolve_search
 
         async with AsyncSpotiFLAC(output_dir=cfg["output_dir"]) as client:
             url, display, _kind = await resolve_search(client, spec["query"])
