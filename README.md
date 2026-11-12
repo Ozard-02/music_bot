@@ -65,7 +65,7 @@ docker compose up -d --build
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | No | — | Official Spotify app credentials (fallback if the file is empty) |
 | `SPOTIFY_ACCESS_TOKEN` | No | — | Static official token (fallback if the file is empty) |
 | `SPOTIFY_MARKET` | No | — | Optional market for official search (e.g. `IT`) |
-| `RUN_API` | No | off | Start the HTTP API inside the bot process/container (`1`) |
+| `RUN_API` | No | off (on in compose) | Start the HTTP API inside the bot process/container (`1`) |
 | `API_PORT` | No | `8099` | API listen port |
 | `API_BIND` | No | `0.0.0.0` | API listen address |
 | `API_TOKEN` | API only | — | Bearer token Laila must send |
@@ -110,10 +110,11 @@ API process never imports SpotiFLAC.
 python api.py
 ```
 
-Or run it inside the bot process/container: set `RUN_API=1` and keep the
-normal `python bot.py` command. This is the single-container mode used by the
-TrueNAS `ix-app` (host network + portal on 8099). The API runs in a daemon
-thread; search still spawns `search_job.py` per cache miss.
+The compose files run it inside the bot container: `RUN_API=1` starts the API
+in a daemon thread, so one process serves Telegram and HTTP on `8099`. This is
+also the single-container mode used by the TrueNAS `ix-app` (host network +
+portal on 8099). The standalone `python api.py` process remains supported;
+search still spawns `search_job.py` per cache miss in both modes.
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|

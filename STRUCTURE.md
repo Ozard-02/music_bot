@@ -1,9 +1,10 @@
 # Code Structure
 
 ```
-music_bot_rewrite/
+spoty_loop/
 ├── bot.py               # Telegram dispatch + handlers + main loop (front end)
-├── api.py               # HTTP API for Laila: search/queue/cover (front end)
+├── api.py               # HTTP API for Laila: search/queue/cover (front end;
+│                        #   standalone process or RUN_API thread inside bot.py)
 ├── spotify_credentials.py # Telegram-managed Spotify creds (front ends; stdlib)
 ├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (front end)
 ├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (front end)

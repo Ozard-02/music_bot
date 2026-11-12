@@ -6,15 +6,15 @@
 cp .env.example .env          # token + allowed user IDs + API_TOKEN
 docker compose up -d --build
 docker compose logs -f music-bot
-docker compose logs -f api
 ```
 
 - Builds from `./Dockerfile` (SpotiFLAC 1.6.0 + pydoll lib, no chromium).
 - `.:/app` bind-mount: edit code and `docker compose restart` to apply.
 - Music + SpotiFLAC config live in the mounted volumes
   (`~/Music`, `~/.spotiflac`) — downloads survive container rebuilds.
-- Two services share the image and the `queue.db` volume (WAL):
-  `music-bot` (Telegram) and `api` (HTTP for Laila) on port `8099`.
+- One container: `music-bot` runs the Telegram bot and, with `RUN_API=1`
+  (set by compose), the HTTP API on port `8099` in a daemon thread. The
+  standalone `python api.py` service remains supported.
 - The API refuses to start without `API_TOKEN`. Put it behind LAN/Tailscale;
   never publish the port to the internet.
 - Spotify search credentials are optional and managed from Telegram:
@@ -29,15 +29,15 @@ docker compose logs -f api
 docker-compose -f docker-compose.truenas.yml up -d
 ```
 
-- Uses a **pinned** ghcr tag (e.g. `:1.0.0` or `:sha-ee4b508`), not `latest`.
+- Uses a **pinned** ghcr tag (e.g. `:1.1.0` or `:sha-<commit>`), not `latest`.
 - Volumes point at `/mnt/pool/navidrome/Music` (shared with Navidrome) and
   `/mnt/pool/VM/spotiflac` (SpotiFLAC config/credentials).
-- The same image runs the API with `command: ["python", "api.py"]`; both
-  services mount `/mnt/pool/VM/spotiflac` so they share `queue.db`.
+- One container with `RUN_API=1`: the API runs in a daemon thread inside the
+  bot process, so it shares the same `queue.db` and mounts. The standalone
+  `python api.py` service remains supported if you prefer two processes.
 - **TrueNAS `ix-app` single-container:** keep one container and simply add
   `RUN_API=1` to its environment. The app already uses host networking and a
-  portal on `8099`, so no port mapping or second app is needed. The API runs in
-  a daemon thread inside the bot process and shares the same `queue.db`.
+  portal on `8099`, so no port mapping or second app is needed.
 - If the app has a memory limit, leave headroom for the search subprocess
   (SpotiFLAC); 512 MB is safer than 256 MB.
 
