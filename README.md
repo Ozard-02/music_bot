@@ -13,8 +13,10 @@ Telegram msg / Laila HTTP API → SQLite queue → worker → subprocess(downloa
 
 The previous single-process bot (python-telegram-bot + SpotiFLAC) idled at
 ~252MiB, ~89MiB after removing the browser stack. This version splits into a
-**stdlib-only parent** (~15-20MiB idle) and a **short-lived subprocess per
-download job** whose RSS is reclaimed on exit. See [ARCHITECTURE.md](ARCHITECTURE.md).
+**stdlib-only parent** and a **short-lived subprocess per download job** whose
+RSS is reclaimed on exit. Measured idle: **~29MiB on the host**, **~22MiB for
+the single container** (`docker stats`, bot + API). See
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Features
 

@@ -186,7 +186,8 @@ class TestHandlers:
         await bot._handle_update(_update(text="/spotify bogus"))
         _assert_sent(bot, "Spotify credentials")
 
-
+    @pytest.mark.asyncio
+    async def test_purge_removes_items(self, bot):
         bot._client.send_message = AsyncMock()
         bot._qm.enqueue_unique("link", "https://open.spotify.com/track/abc", 12345)
         await bot._handle_update(_update(text="/purge"))

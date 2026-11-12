@@ -1,8 +1,8 @@
 """Parse user input into (type, value) and resolve name searches.
 
-The parent imports this module and only ever calls `parse_inputs`/`format_help`
-— so SpotiFLAC is imported lazily inside `resolve_search`, which only runs in
-the download subprocess."""
+The parent imports this module for `parse_inputs`/`format_help` only.
+`resolve_search` and its matching helpers run in the download subprocess,
+where the caller passes an already-created AsyncSpotiFLAC client."""
 
 import difflib
 import re

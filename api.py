@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """HTTP API for the Laila Spotify search tab.
 
-Separate process from the Telegram bot, stdlib only. It shares the SQLite
-queue (WAL) and runs every Spotify search in a short-lived subprocess
-(`search_job.py`) so SpotiFLAC never enters this process.
+Stdlib only. It runs either as a standalone process or in a daemon thread
+inside bot.py (RUN_API=1). It shares the SQLite queue (WAL) and runs every
+Spotify search in a short-lived subprocess (`search_job.py`) so SpotiFLAC
+never enters this process.
 
 Endpoints (all but covers require `Authorization: Bearer $API_TOKEN`):
 

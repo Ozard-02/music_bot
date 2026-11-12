@@ -154,11 +154,29 @@ subprocess. Shared queue DB via WAL.
 - [ ] Rebuild image, push, update the TrueNAS app image tag + `RUN_API=1`.
 
 ## Phase 9 — TrueNAS
-- [ ] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes)
+- [x] `docker-compose.truenas.yml` (ghcr image, /mnt/pool volumes) — single
+      service with `RUN_API=1`, port 8099.
 - [ ] Push image, deploy, verify
 
 ## Phase 10 — CI/CD
-- [ ] GitHub Actions: pytest on push + build/push ghcr on main
+- [x] GitHub Actions: pytest on push + build/push ghcr on main
+
+## Phase 11 — KISS/RSS pass (DONE)
+
+- [x] `spotify_credentials.py` on `http.client`: `urllib.request` no longer
+      enters the parent; host bot idle 31.0 → 29.1 MiB.
+- [x] API caches bounded: search 32 entries + expiry purge, covers 8 MiB.
+- [x] `gc.freeze()` after the API thread and Bot construction.
+- [x] Compose runs one service (`RUN_API=1`); standalone `python api.py` stays.
+- [x] `QueueManager.reset_running()` is explicit and bot-only; an API restart
+      can no longer requeue a live job.
+- [x] `stream_job()` always kills/reaps the child, including `on_event`
+      exceptions and broken stdin.
+- [x] Worker idle poll capped at 30s (API-queued links start promptly).
+- [x] `RUN_API` reuses the bot's `QueueManager`; unread HTTP bodies close the
+      connection.
+- [x] Architecture guard test: the parent never imports SpotiFLAC/httpx/
+      telegram/mutagen/PIL/urllib.request.
 
 ## Deferred (explicit, not forgotten)
 - `/fixmetadata` and `/mkplaylist` are subprocess-triggered commands (port the

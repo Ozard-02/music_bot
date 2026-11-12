@@ -15,20 +15,25 @@ Laila ─────► api.py (stdlib) ──search─────┘         
                                 └─► JSON results                    └─► FLAC on disk
 ```
 
-## Why two processes
+## Why the split
 
 The old single-process bot (python-telegram-bot + SpotiFLAC) idled at ~252MiB;
 after removing the browser stack it dropped to ~89MiB. The floor for one
 process is ~46MiB (telegram + httpx stack) plus SpotiFLAC's ~57MiB once
 imported. Idle RSS is a hard requirement (see AGENTS.md), so we split:
 
-- **Front ends** (`bot.py`, `api.py`) import stdlib only: `asyncio`, `json`,
-  `urllib`, `sqlite3`, `http.server`, `fcntl`, `logging`, `pathlib`. Bot idle
-  target **~15-20MiB**; the API idles in the same ballpark.
+- **Front ends** (`bot.py`, optional `api.py`) import stdlib only: `asyncio`,
+  `json`, `http.client`, `sqlite3`, `http.server`, `fcntl`, `logging`,
+  `pathlib`. The API can be a separate process or, with `RUN_API=1`, a daemon
+  thread inside the bot container.
 - **Subprocesses** (`download_job.py`, `search_job.py`) import SpotiFLAC +
   patches. Spawned per job, they exit when the job ends, so peak RSS is
   **reclaimed** — no lingering threads, no `_trim_rss` needed for the heavy
   part.
+
+The realistic floor for the stdlib front end on Python 3.14 is ~27-29MiB:
+`asyncio` alone is ~6MiB, logging ~3MiB, SQLite ~1.5MiB. The old 15-20MiB
+target predates this stack; the hard rule is still "well under the old 89MiB".
 
 ## Process split (what runs where)
 
@@ -37,7 +42,7 @@ imported. Idle RSS is a hard requirement (see AGENTS.md), so we split:
 |--------|------|
 | `telegram_client.py` | Raw Telegram Bot API client on `http.client` with two persistent keep-alive connections (one for the long-poll, one locked-shared for sends) |
 | `bot.py` | Message dispatch, command handlers, allowlist, main loop |
-| `api.py` | HTTP API for Laila: health/search/queue/cover, Bearer auth, CORS allowlist, search cache + single-flight |
+| `api.py` | HTTP API for Laila: health/search/queue/cover, Bearer auth, CORS allowlist, search cache + single-flight; standalone process or `RUN_API` daemon thread in the bot |
 | `queue_manager.py` | SQLite queue (`queue`, `users`, `failed_tracks`); WAL + busy timeout for two processes |
 | `worker.py` | Job orchestration; owns `stream_job()`, the shared spawn/stream/watchdog IPC loop used by both downloads and one-shot commands |
 | `config.py` | Constants, config.json loading, `.env` loading, logger setup (`silence_spotiflac_loggers` inlined) |
@@ -122,8 +127,9 @@ This is why `setup_logger` in the child must keep its StreamHandler on stderr.
   the API process and retried once on a 401. The file is re-read on every
   search, so `/spotify` changes need no restart. Without credentials, the
   child uses SpotiFLAC's anonymous web token.
-- The API caches results for `SEARCH_CACHE_TTL` (default 60s) and serializes
-  cache misses, so typing does not fan out into parallel Spotify requests.
+- The API caches results for `SEARCH_CACHE_TTL` (default 60s, 32 entries;
+  expired entries are dropped on insert) and serializes cache misses, so
+  typing does not fan out into parallel Spotify requests.
 
 ## HTTP API
 
@@ -137,15 +143,15 @@ This is why `setup_logger` in the child must keep its StreamHandler on stderr.
 - Queue writes share `queue.db` with the bot through WAL; `busy_timeout=5000`
   makes the two processes wait instead of failing on a writer lock.
 - **Single-container mode:** `RUN_API=1` starts the API in a daemon thread
-  inside `bot.py` (used by the TrueNAS `ix-app`, which already runs host
-  networking with a portal on 8099). It opens its own `QueueManager`
-  connection, and searches still run in `search_job.py` subprocesses. With
-  `RUN_API` unset, the API is a separate `python api.py` process as in the
-  local compose.
+  inside `bot.py` (default in both compose files and used by the TrueNAS
+  `ix-app`, which already runs host networking with a portal on 8099). It
+  reuses the bot's `QueueManager` connection and searches still run in
+  `search_job.py` subprocesses. With `RUN_API` unset, the API can run as a
+  separate `python api.py` process.
 - `API_QUEUE_USER` (default: first Telegram allowlist id, including the legacy
   `TELEGRAM_ALLOWED_USER_ID`) decides whose folder/quality API downloads use.
 - Covers are restricted to `*.scdn.co` / `*.spotifycdn.com`, fetched without
-  following redirects, capped at 5MiB, and kept in a small in-memory LRU.
+  following redirects, capped at 5MiB, and kept in an 8MiB / 32-entry LRU.
   The endpoint has no auth so `<img>`/expo-image can load it; never expose the
   API port publicly.
 - CORS only echoes origins listed in `API_CORS_ORIGINS`.
@@ -154,9 +160,12 @@ This is why `setup_logger` in the child must keep its StreamHandler on stderr.
 
 `worker.stream_job()` reads the child's stdout asynchronously. If no line
 arrives for `stall_timeout_seconds` (config, default 1800), or the job exceeds
-its overall deadline, the child is SIGKILLed and reaped. The same loop kills
-on task cancellation. This permanently fixes the old "leaked straggler thread"
-bug: a dead child's RSS is reclaimed by the kernel, no orphan threads survive.
+its overall deadline, the child is SIGKILLed and reaped. Every other exit path
+does the same: task cancellation, a broken stdin, or an exception in
+`on_event()` (DB/Telegram). `result` is the final protocol line, so there is
+nothing left to wait for. This permanently fixes the old "leaked straggler
+thread" bug: a dead child's RSS is reclaimed by the kernel, no orphan
+processes survive.
 
 ## Cross-process in-flight guard
 
@@ -174,29 +183,36 @@ so overlap protection moves to **`fcntl.flock` lockfiles**:
   persistent keep-alive connection — zero TLS handshakes while idle (the old
   urllib client shook hands on every API call, ~1700/day from polling alone).
 - Worker: `asyncio.Event` — wakes instantly when the bot enqueues, otherwise
-  sleeps with idle backoff 5s -> 10 -> 20 -> 40 -> 80 -> 160 -> 300s cap.
+  sleeps with idle backoff 5s -> 10 -> 20 -> 30s cap. The API writes to SQLite
+  from another process/thread and cannot set the event, so the 30s cap is what
+  keeps API-queued links responsive (two tiny SELECTs per minute when idle).
 - Spotify block: a 406/429 from `*.spotify.com` is tagged `spotify_blocked`
   by the job; the worker then stops dequeuing for `SPOTIFY_BLOCK_PAUSE`
   (30min) instead of letting every item retry against a rate-limited IP.
 - Download subprocesses skip SpotiFLAC's import-time GitHub version check
   (one useless HTTPS request per job).
 - QueueManager: one persistent SQLite connection, no polling.
-- `gc.freeze()` after startup: permanent objects are never rescanned.
-- Idle cost is one long-poll request + zero DB polls. Near-zero CPU.
+- `gc.freeze()` after startup imports + API thread: permanent objects are
+  never rescanned.
+- Idle cost is one Telegram long-poll request plus at most one tiny queue
+  SELECT every 30s (the API cannot wake the event; bot messages wake it
+  instantly). Near-zero CPU.
 
 ## RSS budget
 
-Measured (host, import chain): interpreter ~12.6MiB + logging ~4.3MiB +
-asyncio ~5.5MiB + http.client/ssl ~2.5MiB + app code — **parent idle
-~26MiB** (was ~29.4MiB on `urllib.request`). `MALLOC_ARENA_MAX=2` (Dockerfile/
-compose) trims glibc arena overhead under threads; container idle lands in the
-high-20s MiB.
+Measured after Phase 11 (host, import chain + QueueManager + Bot):
+interpreter ~12.3MiB + logging ~3.3MiB + asyncio ~6.1MiB + sqlite ~1.5MiB +
+http.client/ssl ~1.4MiB + app code — **parent idle ~29MiB**. `urllib.request`
+is no longer in the graph (Spotify credentials use `http.client`).
+`MALLOC_ARENA_MAX=2` (Dockerfile/compose) trims glibc arena overhead under
+threads.
 
 | Component | RSS |
 |-----------|-----|
 | python interpreter base | ~12-13MiB |
 | stdlib (`logging`, `asyncio`, `sqlite3`, `http.client`, `json`) | ~12MiB |
-| parent app code | ~1-2MiB |
-| **parent idle total** | **~26MiB** |
+| parent app code | ~2-3MiB |
+| **parent idle total (host)** | **~29MiB** |
+| API standalone import | ~27MiB |
+| **single container (docker stats, bot + API)** | **~22MiB** |
 | subprocess peak (during job) | ~150-250MiB (transient, reclaimed at exit) |
-| idle container total | **high-20s MiB** |

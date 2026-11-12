@@ -26,8 +26,8 @@ spoty_loop/
 ├── tests/               # pytest suite
 │
 ├── Dockerfile
-├── docker-compose.yml         # local dev (build .)
-├── docker-compose.truenas.yml # TrueNAS (ghcr image)
+├── docker-compose.yml         # local dev (build ., RUN_API=1)
+├── docker-compose.truenas.yml # TrueNAS (ghcr image, RUN_API=1)
 ├── requirements.txt           # subprocess deps (parent needs none)
 ├── requirements-dev.txt       # test deps (SpotiFLAC as in Dockerfile + pytest plugins)
 ├── config.default.json
@@ -67,7 +67,7 @@ bot.py ──► queue_manager.enqueue(query, user)
 
 ### Laila search tab (HTTP API)
 ```
-Laila ──GET /api/search──► api.py ──cache?──► search_job.py (SpotiFLAC)
+Laila ──GET /api/search──► api.py (or RUN_API thread in bot.py) ──cache?──► search_job.py (SpotiFLAC)
    ◄── tracks/albums/playlists + /api/cover proxy URLs ──┘
 Laila ──POST /api/queue──► api.py ──► queue_manager.enqueue_unique("link", url, API_QUEUE_USER)
    ──► existing worker picks it up like a Telegram link

@@ -412,9 +412,9 @@ class Bot:
         )
 
     async def _run_command_job(self, chat_id: int, spec: dict) -> tuple[dict | None, int | None]:
-        """Run a one-shot command (m3u8 / fix_metadata) via stream_job —
-        the same IPC loop downloads use — streaming progress into a single
-        Telegram message.
+        """Run a one-shot command (m3u8 / fix_metadata / sync_lyrics) via
+        stream_job — the same IPC loop downloads use — streaming progress into
+        a single Telegram message.
 
         Returns (result_dict, message_id); (None, message_id) on
         stall/timeout/crash/error with the message already edited."""
@@ -684,9 +684,10 @@ class Bot:
         """Delete every FLAC listed in a local .m3u8 (default Trash) and prune empty album/artist folders.
 
         Local-only: reads ``<output_dir>/<sanitize(name)>.m3u8`` (as created by
-        /mkplaylist), deletes each listed ``.flac`` + ``.lrc`` sidecar, then
-        prunes empty parents and removes the .m3u8 + cover + missing log.
-        Navidrome picks it up on next scan – hence the trash-bin workflow.
+        /mkplaylist), deletes each listed ``.flac`` + ``.lrc`` sidecar, prunes
+        empty parents and removes the missing log. The .m3u8 is truncated to
+        its header and kept, together with its cover. Navidrome picks the
+        deletions up on the next scan — hence the trash-bin workflow.
         """
         name = args.strip() or "Trash"
         # keep display name as user typed; file name uses sanitize

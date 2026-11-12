@@ -34,8 +34,8 @@ Audit performed against `561c6bc`; fixes below are on `main` after that commit.
 - `partition_tracks()` is still existence-based: a 0-byte/truncated file at
   the expected path counts as downloaded. A content/duration check is the
   next candidate.
-- `failed_tracks` is still keyed by title, so two different songs sharing a
-  title can be skipped together.
+- ~~`failed_tracks` is still keyed by title~~ — fixed: `get_give_up_titles`
+  keys by `track_id` and falls back to the title only for legacy rows.
 - SpotiFLAC's post-download validation is intentionally loose (preview/large
   mismatch only); provider title/artist guards remain the real defence.
 

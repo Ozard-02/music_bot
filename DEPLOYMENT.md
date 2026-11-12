@@ -69,5 +69,7 @@ sleep 30                                   # let the bot settle
 docker stats --no-stream music-bot         # MEM USAGE
 ```
 
-Target: well under the old ~89MiB; parent ~15-20MiB. The subprocess only
-exists while a job is running — it is never resident at idle.
+Measured after the KISS/RSS pass: **~29MiB host** for the parent and
+**~22MiB for the single container** (`docker stats` with `RUN_API=1`). That is
+well under the old ~89MiB; the subprocess only exists while a job is running,
+so it is never resident at idle.
