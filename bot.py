@@ -12,11 +12,11 @@ from pathlib import Path
 
 from config import STALL_TIMEOUT, load_env, setup_logger, load_config, esc
 from library import QUALITY_CHOICES, user_cfg, user_folder_name
+from playlists import create_empty, empty_playlist
 from queue_manager import QueueManager
 import spotify_credentials as spotify_creds
 from resolver import parse_inputs, format_help
 from telegram_client import TelegramClient
-from track_utils import sanitize
 from worker import Worker, stream_job
 
 
@@ -486,22 +486,9 @@ class Bot:
         if not first_is_url:
             # name-only → create empty playlist (no Spotify lookup)
             name = raw  # preserve spaces: "My Playlist" not just parts[0]
-            file_name = sanitize(name, fallback="playlist")
             ucfg = _user_cfg(self._qm, self._cfg, user)
             root = Path(ucfg["output_dir"])
-            m3u = root / f"{file_name}.m3u8"
-
-            def _do_create() -> dict:
-                if m3u.is_file():
-                    return {"error": "exists", "name": name, "file_name": file_name, "path": str(m3u)}
-                try:
-                    root.mkdir(parents=True, exist_ok=True)
-                    m3u.write_text("#EXTM3U\n", encoding="utf-8")
-                except Exception as e:
-                    return {"error": "write_error", "name": name, "detail": str(e)}
-                return {"name": name, "file_name": file_name, "path": str(m3u)}
-
-            result = await asyncio.to_thread(_do_create)
+            result = await asyncio.to_thread(create_empty, root, name)
             if result.get("error") == "exists":
                 await self._client.send_message(
                     chat_id,
@@ -683,112 +670,17 @@ class Bot:
     async def _rmplaylist(self, chat_id: int, user: dict, args: str) -> None:
         """Delete every FLAC listed in a local .m3u8 (default Trash) and prune empty album/artist folders.
 
-        Local-only: reads ``<output_dir>/<sanitize(name)>.m3u8`` (as created by
-        /mkplaylist), deletes each listed ``.flac`` + ``.lrc`` sidecar, prunes
-        empty parents and removes the missing log. The .m3u8 is truncated to
-        its header and kept, together with its cover. Navidrome picks the
-        deletions up on the next scan — hence the trash-bin workflow.
+        Local-only: `playlists.empty_playlist()` reads
+        ``<output_dir>/<sanitized name>.m3u8`` (as created by /mkplaylist),
+        deletes each listed ``.flac`` + ``.lrc`` sidecar, prunes empty parents
+        and removes the missing log. The .m3u8 is truncated to its header and
+        kept, together with its cover. Navidrome picks the deletions up on the
+        next scan — hence the trash-bin workflow.
         """
         name = args.strip() or "Trash"
-        # keep display name as user typed; file name uses sanitize
-        file_name = sanitize(name, fallback="playlist")
         ucfg = _user_cfg(self._qm, self._cfg, user)
         root = Path(ucfg["output_dir"])
-        m3u = root / f"{file_name}.m3u8"
-
-        def _do_delete() -> dict:
-            if not m3u.is_file():
-                avail = sorted(p.stem for p in root.glob("*.m3u8"))
-                return {"error": "not_found", "name": name, "path": str(m3u), "avail": avail}
-            try:
-                text = m3u.read_text(encoding="utf-8")
-            except Exception as e:
-                return {"error": "read_error", "name": name, "detail": str(e)}
-            rels = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
-            deleted = 0
-            not_found = 0
-            pruned = 0
-            # need root resolved for traversal guard
-            try:
-                root_res = root.resolve()
-            except Exception:
-                root_res = root
-            for rel in rels:
-                # guard absolute / traversal – m3u should be relative
-                if rel.startswith("/") or rel.startswith("\\"):
-                    not_found += 1
-                    continue
-                p = root / rel
-                # ensure p is inside root (even when p doesn't exist yet, resolve parent)
-                try:
-                    # resolve() follows symlinks; for missing files it resolves as far as possible
-                    p_res = p.resolve()
-                    if not p_res.is_relative_to(root_res):
-                        not_found += 1
-                        continue
-                except Exception:
-                    not_found += 1
-                    continue
-                if not p.is_file() or p.suffix.lower() != ".flac":
-                    not_found += 1
-                    continue
-                try:
-                    p.unlink()
-                    deleted += 1
-                except Exception as e:
-                    self._logger.warning("rmplaylist: failed to delete %s: %s", p, e)
-                    not_found += 1
-                    continue
-                # sidecar .lrc
-                try:
-                    lrc = p.with_suffix(".lrc")
-                    if lrc.is_file():
-                        lrc.unlink()
-                except Exception:
-                    pass
-                # prune empty album/artist dirs, count how many were removed
-                # duplicate prune_empty_parents logic but count
-                parent = p.parent
-                while True:
-                    try:
-                        # need to be inside root and not root itself
-                        if parent == root or parent == root_res or not parent.is_relative_to(root_res):
-                            break
-                    except Exception:
-                        break
-                    try:
-                        parent.rmdir()
-                        pruned += 1
-                    except OSError:
-                        break
-                    parent = parent.parent
-            # keep playlist but be sure it's empty – truncate to header only; keep cover
-            try:
-                m3u.write_text("#EXTM3U\n", encoding="utf-8")
-            except Exception:
-                pass
-            try:
-                missing_log = root / "temp" / f"{file_name}_missing.txt"
-                if missing_log.is_file():
-                    missing_log.unlink()
-                    # prune temp if empty
-                    try:
-                        Path(root / "temp").rmdir()
-                    except OSError:
-                        pass
-            except Exception:
-                pass
-            return {
-                "name": name,
-                "file_name": file_name,
-                "total": len(rels),
-                "deleted": deleted,
-                "not_found": not_found,
-                "pruned": pruned,
-                "path": str(m3u),
-            }
-
-        result = await asyncio.to_thread(_do_delete)
+        result = await asyncio.to_thread(empty_playlist, root, name)
         if result.get("error") == "not_found":
             avail = result.get("avail") or []
             if avail:
