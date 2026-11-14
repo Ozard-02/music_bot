@@ -134,7 +134,12 @@ def api(tmp_path: Path):
         version="test",
     )
     server = create_server("127.0.0.1", 0, app)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # The default 0.5s poll interval makes every teardown wait up to half a
+    # second. These tests are synchronous and local, so poll much faster.
+    thread = threading.Thread(
+        target=lambda: server.serve_forever(poll_interval=0.05),
+        daemon=True,
+    )
     thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
