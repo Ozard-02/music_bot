@@ -16,6 +16,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES, SPOTIFY_BLOCKED_ERROR
+
+# Import the patch before anything that imports SpotiFLAC: it skips the GitHub
+# version check and installs the provider guards at import time.
+from spotiflac_patch import pop_track_provider
+
 from deezer_meta import (
     DeezerMetadataError,
     fetch_tracks as fetch_deezer_tracks,
@@ -28,7 +33,6 @@ from flac_utils import (
     resolve_cover_data,
     write_lrc_sidecar,
 )
-from spotiflac_patch import pop_track_provider
 from track_utils import (
     on_disk_relative_path,
     partition_tracks,
