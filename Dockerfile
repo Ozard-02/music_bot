@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # Build identity, passed by CI so the startup log shows which commit is
 # actually running (makes "is the fix deployed?" obvious).
