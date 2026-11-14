@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from downloader import _rename_after_download, is_spotify_block, run_url
+from downloader import (
+    DownloadResult,
+    _download_metadata,
+    _rename_after_download,
+    is_spotify_block,
+    run_url,
+)
 from SpotiFLAC.core.models import TrackMetadata
 from track_utils import partition_tracks, spotiflac_track_relative_path, track_relative_path
 
@@ -123,6 +129,82 @@ def _make_client(track_return=None, playlist_return=None,
 
     client.download_track = AsyncMock(side_effect=_download_track)
     return client
+
+
+@pytest.mark.asyncio
+async def test_run_deezer_passes_metadata_to_download_worker(monkeypatch, config, logger):
+    from downloader import run_deezer
+
+    track = _mock_track("deezer-1", "Test Track")
+    track.external_url = "https://www.deezer.com/track/1"
+    track.cover_url = ""
+    fetch = AsyncMock(return_value=[track])
+    monkeypatch.setattr("downloader.fetch_deezer_tracks", fetch)
+
+    client = AsyncMock()
+    client._downloader._run_worker_async = AsyncMock(return_value=[])
+    called = {}
+
+    async def fake_download_tracks(
+        client, tracks, cfg, logger, skip_titles, progress_cb, failure_cb, download_one=None
+    ):
+        called["tracks"] = tracks
+        called["result"] = await download_one(tracks[0])
+        return DownloadResult(ok=1, total=1)
+
+    monkeypatch.setattr("downloader._download_tracks", fake_download_tracks)
+
+    with patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls:
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        result = await run_deezer(
+            "https://www.deezer.com/track/1", config, logger
+        )
+
+    assert result.ok == 1
+    assert called["tracks"] == [track]
+    assert called["result"] == []
+    fetch.assert_awaited_once_with("https://www.deezer.com/track/1")
+    client._downloader._run_worker_async.assert_awaited_once_with(
+        [track], "Deezer", {}, False, False
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_deezer_metadata_failure_returns_failed(monkeypatch, config, logger):
+    from downloader import run_deezer
+    from deezer_meta import DeezerMetadataError
+
+    monkeypatch.setattr(
+        "downloader.fetch_deezer_tracks",
+        AsyncMock(side_effect=DeezerMetadataError("nope")),
+    )
+    failures = []
+    result = await run_deezer(
+        "https://www.deezer.com/track/1",
+        config,
+        logger,
+        failure_cb=lambda track_id, title, err: failures.append((track_id, title, err)),
+    )
+    assert result.failed == 1
+    assert failures == [("", "https://www.deezer.com/track/1", "metadata_error")]
+
+
+@pytest.mark.asyncio
+async def test_download_metadata_uses_spotiflac_worker():
+    calls = []
+
+    class _Downloader:
+        async def _run_worker_async(self, tracks, name, info, is_album, is_playlist):
+            calls.append((tracks, name, info, is_album, is_playlist))
+            return []
+
+    class _Client:
+        _downloader = _Downloader()
+
+    track = _mock_track("deezer-1", "Test Track")
+    assert await _download_metadata(_Client(), track, is_album=True) == []
+    assert calls == [([track], "Deezer", {}, True, False)]
 
 
 class TestRunUrl:

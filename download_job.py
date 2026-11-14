@@ -19,7 +19,8 @@ from pathlib import Path
 
 import spotiflac_patch  # noqa: F401  (import-time side-effects)
 from config import SPOTIFY_BLOCKED_ERROR, setup_logger
-from downloader import DownloadResult, is_spotify_block, run_url
+from deezer_meta import is_deezer_url
+from downloader import DownloadResult, is_spotify_block, run_deezer, run_url
 
 
 def _emit(event: dict) -> None:
@@ -66,7 +67,11 @@ async def _job(spec: dict, logger: logging.Logger) -> DownloadResult:
         await _maybe_m3u8(spec, logger)
         return result
 
-    result = await run_url(spec["url"], cfg, logger, skip_titles, _progress, _failure)
+    url = spec["url"]
+    if is_deezer_url(url):
+        result = await run_deezer(url, cfg, logger, skip_titles, _progress, _failure)
+    else:
+        result = await run_url(url, cfg, logger, skip_titles, _progress, _failure)
     await _maybe_m3u8(spec, logger)
     return result
 
@@ -79,7 +84,9 @@ async def _maybe_m3u8(spec: dict, logger: logging.Logger) -> None:
     from m3u8 import build_m3u8
 
     url = spec.get("url")
-    if url and parse_spotify_url(url).get("type") == "playlist":
+    if not url or is_deezer_url(url):
+        return
+    if parse_spotify_url(url).get("type") == "playlist":
         try:
             result = await build_m3u8(url, cfg=spec.get("cfg") or {})
             logger.info("Auto m3u8: %s", result.get("path"))

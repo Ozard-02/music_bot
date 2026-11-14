@@ -31,3 +31,30 @@ async def test_progress_events_reach_stdout(monkeypatch, capsys):
     assert [(e["done"], e["total"], e["title"]) for e in progress] == [
         (1, 2, "First"), (2, 2, "Second"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_deezer_link_routes_to_run_deezer(monkeypatch):
+    calls: list[str] = []
+
+    async def fake_run_deezer(url, cfg, logger, skip_titles, progress_cb, failure_cb):
+        calls.append("deezer")
+        return DownloadResult(ok=1, total=1)
+
+    async def fake_run_url(url, cfg, logger, skip_titles, progress_cb, failure_cb):
+        calls.append("spotify")
+        return DownloadResult(ok=1, total=1)
+
+    monkeypatch.setattr(download_job, "run_deezer", fake_run_deezer)
+    monkeypatch.setattr(download_job, "run_url", fake_run_url)
+
+    result = await download_job._job(
+        {
+            "type": "link",
+            "url": "https://www.deezer.com/track/3135553",
+            "cfg": {},
+        },
+        logging.getLogger("test"),
+    )
+    assert result.ok == 1
+    assert calls == ["deezer"]

@@ -78,9 +78,11 @@ docker compose up -d --build
 
 ### Spotify search credentials
 
-Search works without any Spotify credentials: it uses SpotiFLAC's anonymous
-web token. If Spotify starts rate-limiting it, add official credentials from
-Telegram (no user login needed):
+These credentials affect Telegram name search and the legacy Spotify API path
+only. The Laila Deezer tab needs no credentials. Telegram search works without
+any Spotify credentials: it uses SpotiFLAC's anonymous web token. If Spotify
+starts rate-limiting it, add official credentials from Telegram (no user login
+needed):
 
 ```text
 /spotify client <client_id> <client_secret>   # recommended, auto-refreshed
@@ -103,9 +105,12 @@ Provider order, quality, and download options go in `~/.spotiflac/config.json`.
 ## HTTP API (Laila search tab)
 
 `api.py` is an optional stdlib-only HTTP service on top of the same queue. It
-powers a Spotify search tab in Laila: type a title, pick one result, queue it
-for download. Searches run in a short-lived `search_job.py` subprocess, so the
-API process never imports SpotiFLAC.
+powers the Deezer search tab in Laila: type a title, pick one result, queue it
+for download. Searches call the public Deezer API directly from `api.py`, so the
+API process never imports SpotiFLAC and needs no music-service credentials.
+Downloads still use SpotiFLAC's Qobuz/Deezer/Amazon provider chain; Laila sends
+Deezer links, while Telegram keeps accepting Spotify links with Spotify
+metadata.
 
 ```bash
 # .env: API_TOKEN=...  (required)
@@ -115,26 +120,29 @@ python api.py
 The compose files run it inside the bot container: `RUN_API=1` starts the API
 in a daemon thread, so one process serves Telegram and HTTP on `8099`. This is
 also the single-container mode used by the TrueNAS `ix-app` (host network +
-portal on 8099). The standalone `python api.py` process remains supported;
-search still spawns `search_job.py` per cache miss in both modes.
+portal on 8099). The standalone `python api.py` process remains supported.
+Search runs in-process in both modes; `search_job.py` is retained only for the
+legacy Spotify path and its tests.
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
 | `GET /api/health` | Bearer | Connectivity/token check |
-| `GET /api/search?q=...&limit=20` | Bearer | Spotify tracks/albums/playlists |
-| `POST /api/queue` | Bearer | Queue canonical Spotify links |
-| `GET /api/cover?u=...` | none | Spotify CDN image proxy (allowlist) |
+| `GET /api/search?q=...&limit=20` | Bearer | Deezer tracks/albums/playlists |
+| `POST /api/queue` | Bearer | Queue canonical Deezer links (Spotify still accepted) |
+| `GET /api/cover?u=...` | none | Deezer/Spotify CDN image proxy (allowlist) |
 
 ```bash
 curl -H "Authorization: Bearer $API_TOKEN" \
   "http://localhost:8099/api/search?q=one%20more%20time"
 ```
 
-- Search results are Spotify's own order (no best-match resolver): the caller
+- Search results are Deezer's own order (no best-match resolver): the caller
   picks. `queued`/`duplicates`/`invalid` come back from `/api/queue`.
-- Links are canonicalized (`?si=...` removed) so the same track dedupes.
-- The cover endpoint is open but only fetches `*.scdn.co` / `*.spotifycdn.com`
-  images, with a size cap and no redirects, so `<img>` works without a token.
+- Deezer and Spotify links are canonicalized (locale/query removed) so the same
+  track dedupes.
+- The cover endpoint is open but only fetches `*.dzcdn.net`, `*.scdn.co` or
+  `*.spotifycdn.com` images, with a size cap and no redirects, so `<img>` works
+  without a token.
 - Keep it on LAN/Tailscale. Do not expose this port to the public internet.
 - Web clients need an exact origin in `API_CORS_ORIGINS`.
 

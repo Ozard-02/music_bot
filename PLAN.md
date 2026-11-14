@@ -192,6 +192,34 @@ subprocess. Shared queue DB via WAL.
 - [x] `resolver_match.py`: `difflib`/`unicodedata` stay out of the parent.
 - [x] Host parent idle ~28.7 MiB; test suite green.
 
+## Phase 13 — Deezer search + Deezer-native downloads for Laila (DONE)
+
+Goal: the Laila tab searches Deezer instead of Spotify and queues Deezer links.
+Downloads use Deezer metadata but the same SpotiFLAC provider chain
+(Qobuz/Deezer/Amazon). Telegram keeps Spotify links and Spotify metadata.
+Search stays in the stdlib parent; no SpotiFLAC import and no subprocess.
+
+- [x] `deezer_search.py` (front end, stdlib): track/album/playlist search,
+      three parallel `api.deezer.com` calls, stable API shape.
+- [x] `api.py`: `/api/search` uses Deezer; canonical Deezer queue URLs;
+      `*.dzcdn.net` cover allowlist; runtime logs say `search=deezer`.
+- [x] `deezer_meta.py` (subprocess): parse `deezer.com/{track,album,playlist}`
+      and map to `TrackMetadata`; `/track/{id}` for ISRC, track/disc numbers;
+      `/album/{id}` for album artist, total tracks, label/UPC.
+- [x] `downloader.py`: `run_deezer`, per-track metadata download through
+      `_run_worker_async`, shared `_download_tracks`, generic ID for rename.
+- [x] `download_job.py`: route Deezer links to `run_deezer`; no Spotify m3u8
+      for Deezer jobs.
+- [x] `flac_utils.py`: recognise Deezer track URLs in the `URL` tag for the
+      duplicate-rename check.
+- [x] Tests: `test_deezer_search.py`, `test_deezer_meta.py`, API queue/cover
+      additions, download-job routing; architecture guard still green.
+- [x] Docs: README, ARCHITECTURE, STRUCTURE, PLAN.
+- [x] Full pytest green (506 passed); commit pending.
+- [ ] Deferred: Deezer ARL download fallback. SpotiFLAC's Deezer provider does
+      not read ARL today; adding a gw-light/license-token provider is a
+      separate medium task.
+
 ## Deferred (explicit, not forgotten)
 - `/fixmetadata` and `/mkplaylist` are subprocess-triggered commands (port the
   scripts behind a subprocess call); not part of the core download path.

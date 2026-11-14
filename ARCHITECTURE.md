@@ -9,11 +9,15 @@ Telegram ──► bot.py (stdlib) ──────────────┐
                                           ├─► SQLite queue (WAL)
 Laila ─────► api.py (stdlib) ──search─────┘         │
                  │                                  ▼
-                 └─spawn─► search_job.py      worker.py ─spawn─► download_job.py
-                           (SpotiFLAC)                          (SpotiFLAC)
-                                │                                   │
-                                └─► JSON results                    └─► FLAC on disk
+                 ├─► api.deezer.com (stdlib)   worker.py ─spawn─► download_job.py
+                 │                                              (SpotiFLAC)
+                 └─► cover CDN proxy                               │
+                                                                  └─► FLAC on disk
 ```
+
+`search_job.py` (Spotify search subprocess) is legacy: the Laila API no longer
+spawns it. Telegram name search still resolves through Spotify inside the
+download subprocess.
 
 ## Why the split
 
@@ -42,7 +46,8 @@ target predates this stack; the hard rule is still "well under the old 89MiB".
 |--------|------|
 | `telegram_client.py` | Raw Telegram Bot API client on `http.client` with two persistent keep-alive connections (one for the long-poll, one locked-shared for sends) |
 | `bot.py` | Message dispatch, command handlers, allowlist, main loop |
-| `api.py` | HTTP API for Laila: health/search/queue/cover, Bearer auth, CORS allowlist, search cache + single-flight; standalone process or `RUN_API` daemon thread in the bot |
+| `api.py` | HTTP API for Laila: health/search/queue/cover, Bearer auth, CORS allowlist, Deezer search cache + single-flight; standalone process or `RUN_API` daemon thread in the bot |
+| `deezer_search.py` | Stdlib Deezer client: three parallel public-API searches, normalised results, no credentials |
 | `queue_manager.py` | SQLite queue (`queue`, `users`, `failed_tracks`); WAL + busy timeout for two processes |
 | `worker.py` | Job orchestration; owns `stream_job()`, the shared spawn/stream/watchdog IPC loop used by both downloads and one-shot commands |
 | `config.py` | Constants, config.json loading, `.env` loading, logger setup (`silence_spotiflac_loggers` inlined) |
@@ -55,9 +60,10 @@ target predates this stack; the hard rule is still "well under the old 89MiB".
 | Module | Role |
 |--------|------|
 | `download_job.py` | Entry point: reads one JSON spec from stdin, runs the job, emits JSON-lines |
-| `search_job.py` | Entry point: reads one JSON search spec, emits one JSON result object |
+| `search_job.py` | Legacy Spotify search entry point (tests/rollback; the Laila API no longer spawns it) |
 | `resolver_match.py` | Fuzzy artist/title matching + `resolve_search` (imports difflib/unicodedata) |
-| `downloader.py` | Download engine (`run_url`): resolution, partition, parallel download, rename, cover |
+| `deezer_meta.py` | Deezer track/album/playlist metadata → `TrackMetadata`, including ISRC enrichment |
+| `downloader.py` | Download engine (`run_url` for Spotify, `run_deezer` for Deezer): resolution, partition, parallel download, rename, cover |
 | `spotiflac_patch.py` | Import-time monkey-patches (GitHub version-check skip, console silencing, community-dead, provider IO timeout cap, MB no-op, provider tracking, provider matching guards) |
 | `m3u8.py` | Playlist m3u8 + cover generation (auto-build happens here, not in parent) |
 | `flac_utils.py` | FLAC tag read/write, cover embed/dedupe (httpx/mutagen/pillow live here) |
@@ -109,51 +115,50 @@ The parent treats `result` as the job's end. A nonzero child exit without a
 
 This is why `setup_logger` in the child must keep its StreamHandler on stderr.
 
-## Search IPC (HTTP API)
+## Deezer search (HTTP API)
 
-`api.py` spawns `search_job.py` for every cache miss:
+`api.py` calls `deezer_search.search()` in-process for every cache miss:
 
-- **stdin**: one JSON line `{"query": "...", "limit": 20}`.
-- **stdout**: exactly one JSON object:
-  `{"ok": true, "tracks": [...], "albums": [...], "playlists": [...]}`, or
-  `{"ok": false, "kind": "spotify_blocked", "error": "..."}`.
-- **stderr**: logs only. The API captures them and never forwards them.
-- The child sets `sync_extensions=False` and uses `spotiflac_patch` (no GitHub
-  version check) only in anonymous mode. It wraps the metadata client's
-  `query` so a swallowed Spotify 406/429 is reported as `spotify_blocked`
-  instead of "no results".
-- **Official mode:** if `~/.spotiflac/spotify.json` (managed by Telegram
-  `/spotify`) or `.env` has client credentials or an access token, `api.py`
-  sends `spotify_mode=official` + the token to the child, which calls the
-  official Web API with stdlib `urllib`. Client credentials are refreshed in
-  the API process and retried once on a 401. The file is re-read on every
-  search, so `/spotify` changes need no restart. Without credentials, the
-  child uses SpotiFLAC's anonymous web token.
+- Three parallel public-API requests: `/search`, `/search/album`,
+  `/search/playlist` on `api.deezer.com`.
+- No credentials, no SpotiFLAC import, no subprocess. The parent stays stdlib
+  only (`http.client`), so the search peak RSS is the normal ~29MiB instead of
+  the old 150–250MiB transient child.
+- Results are normalised to `tracks` / `albums` / `playlists`; tracks keep
+  their ISRC and Deezer URL.
 - The API caches results for `SEARCH_CACHE_TTL` (default 60s, 32 entries;
-  expired entries are dropped on insert) and serializes cache misses, so
-  typing does not fan out into parallel Spotify requests.
+  expired entries are dropped on insert) and serialises cache misses, so
+  typing does not fan out into parallel requests.
+- Failures map to `deezer_unavailable` (502) or `deezer_blocked` (503 plus
+  `Retry-After: 1800`) when Deezer reports a quota/429.
+
+The legacy Spotify search path (`search_job.py`, `SpotifyAuth`) remains in the
+tree for tests and manual rollback, but `build_runtime` uses Deezer. Telegram
+name search is separate and still resolves through Spotify in the download
+subprocess.
 
 ## HTTP API
 
 | Endpoint | Auth | Notes |
 |----------|------|-------|
 | `GET /api/health` | Bearer | Token/connectivity check |
-| `GET /api/search?q=&limit=` | Bearer | Tracks/albums/playlists in Spotify's order |
-| `POST /api/queue` | Bearer | Canonical `track/album/playlist` links, dedupes |
-| `GET /api/cover?u=` | none | Spotify CDN image proxy |
+| `GET /api/search?q=&limit=` | Bearer | Deezer tracks/albums/playlists, in Deezer's order |
+| `POST /api/queue` | Bearer | Canonical Deezer (or Spotify) `track/album/playlist` links, dedupes |
+| `GET /api/cover?u=` | none | Deezer/Spotify CDN image proxy |
 
 - Queue writes share `queue.db` with the bot through WAL; `busy_timeout=5000`
   makes the two processes wait instead of failing on a writer lock.
 - **Single-container mode:** `RUN_API=1` starts the API in a daemon thread
   inside `bot.py` (default in both compose files and used by the TrueNAS
   `ix-app`, which already runs host networking with a portal on 8099). It
-  reuses the bot's `QueueManager` connection and searches still run in
-  `search_job.py` subprocesses. With `RUN_API` unset, the API can run as a
-  separate `python api.py` process.
+  reuses the bot's `QueueManager` connection and searches run in-process in
+  `api.py`. With `RUN_API` unset, the API can run as a separate `python api.py`
+  process.
 - `API_QUEUE_USER` (default: first Telegram allowlist id, including the legacy
   `TELEGRAM_ALLOWED_USER_ID`) decides whose folder/quality API downloads use.
-- Covers are restricted to `*.scdn.co` / `*.spotifycdn.com`, fetched without
-  following redirects, capped at 5MiB, and kept in an 8MiB / 32-entry LRU.
+- Covers are restricted to `*.dzcdn.net`, `*.scdn.co` / `*.spotifycdn.com`,
+  fetched without following redirects, capped at 5MiB, and kept in an 8MiB /
+  32-entry LRU.
   The endpoint has no auth so `<img>`/expo-image can load it; never expose the
   API port publicly.
 - CORS only echoes origins listed in `API_CORS_ORIGINS`.

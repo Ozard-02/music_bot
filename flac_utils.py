@@ -14,6 +14,7 @@ from track_utils import get_jpeg_dimensions
 _IMAGE_SIMILAR_THRESHOLD = 0.005  # normalized mean-abs-diff: same art ~0.0001, different ~0.01+
 
 _TRACK_ID_RE = re.compile(r"open\.spotify\.com/track/([a-zA-Z0-9]+)")
+_DEEZER_TRACK_RE = re.compile(r"deezer\.com/(?:[a-z]{2}/)?track/([0-9]+)")
 
 _SPOTIFY_COVER_UPGRADE = re.compile(r"(ab67616d0000)1e02")
 
@@ -26,7 +27,7 @@ def upgrade_apple_cover(url: str, size: str = "3000x3000") -> str:
     return url.replace("100x100", size)
 
 
-def get_spotify_id_from_file(fpath: str | Path) -> str | None:
+def _track_url_from_file(fpath: str | Path) -> str | None:
     try:
         audio = FLAC(str(fpath))
     except Exception:
@@ -34,10 +35,33 @@ def get_spotify_id_from_file(fpath: str | Path) -> str | None:
     for tag in ("URL", "comment"):
         val = audio.get(tag, [None])[0]
         if val:
-            m = _TRACK_ID_RE.search(val)
-            if m:
-                return m.group(1)
+            return str(val)
     return None
+
+
+def get_spotify_id_from_file(fpath: str | Path) -> str | None:
+    val = _track_url_from_file(fpath)
+    if not val:
+        return None
+    match = _TRACK_ID_RE.search(val)
+    return match.group(1) if match else None
+
+
+def get_track_id_from_file(fpath: str | Path) -> str | None:
+    """Return the stable ID stored in the file's URL tag.
+
+    Spotify IDs are returned as-is; Deezer IDs get the same `deezer-` prefix
+    used by `TrackMetadata.id`, so the duplicate-rename check can compare
+    both without knowing the source.
+    """
+    val = _track_url_from_file(fpath)
+    if not val:
+        return None
+    match = _TRACK_ID_RE.search(val)
+    if match:
+        return match.group(1)
+    match = _DEEZER_TRACK_RE.search(val)
+    return f"deezer-{match.group(1)}" if match else None
 
 
 def upgrade_cover_url(url: str) -> str:

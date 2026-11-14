@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""HTTP API for the Laila Spotify search tab.
+"""HTTP API for the Laila download tab.
 
 Stdlib only. It runs either as a standalone process or in a daemon thread
-inside bot.py (RUN_API=1). It shares the SQLite queue (WAL) and runs every
-Spotify search in a short-lived subprocess (`search_job.py`) so SpotiFLAC
-never enters this process.
+inside bot.py (RUN_API=1). It shares the SQLite queue (WAL). Laila searches
+Deezer directly in this process; no SpotiFLAC import and no search subprocess.
+Telegram keeps its own Spotify search path and is unaffected.
 
 Endpoints (all but covers require `Authorization: Bearer $API_TOKEN`):
 
     GET  /api/health
     GET  /api/search?q=...&limit=20
-    POST /api/queue        {"urls": ["https://open.spotify.com/track/..."]}
-    GET  /api/cover?u=...  (Spotify CDN allowlist, no auth)
+    POST /api/queue        {"urls": ["https://www.deezer.com/track/..."]}
+    GET  /api/cover?u=...  (Deezer/Spotify CDN allowlist, no auth)
 
 The cover endpoint is intentionally open so `<img>`/expo-image can load it;
 keep this service on LAN/Tailscale, never on the public internet.
@@ -36,6 +36,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 from config import first_allowed_user_id, load_env, setup_logger
+from deezer_search import DeezerError, search as deezer_search
 from queue_manager import QueueManager
 from spotify_credentials import (
     CredentialsError,
@@ -63,9 +64,13 @@ _HTTP_LINK_RE = re.compile(
     r"^https?://open\.spotify\.com/(track|album|playlist)/([A-Za-z0-9]{22})(?:[/?#].*)?$"
 )
 _SPOTIFY_URI_RE = re.compile(r"^spotify:(track|album|playlist):([A-Za-z0-9]{22})$")
+_DEEZER_LINK_RE = re.compile(
+    r"^https?://(?:www\.)?deezer\.com/(?:[a-z]{2}/)?"
+    r"(track|album|playlist)/([0-9]+)(?:[/?#].*)?$"
+)
 _COVER_HOST_RE = re.compile(
     r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-    r"(?:scdn\.co|spotifycdn\.com)$"
+    r"(?:scdn\.co|spotifycdn\.com|dzcdn\.net)$"
 )
 _COVER_PATH_RE = re.compile(r"^/[A-Za-z0-9/_.%+-]{1,400}$")
 _COVER_QUERY_RE = re.compile(r"^[A-Za-z0-9=&_.%+-]{0,200}$")
@@ -286,13 +291,33 @@ def make_search_provider(auth: SpotifyAuth, timeout: int):
     return run
 
 
+def make_deezer_provider(timeout: int):
+    """Build the Deezer runner used by the Laila tab.
+
+    The legacy Spotify provider above stays available for tests and manual
+    rollback, but the API defaults to Deezer: no credentials, no subprocess
+    and no SpotiFLAC import in the parent.
+    """
+
+    def run(query: str, limit: int) -> dict:
+        try:
+            return deezer_search(query, limit, timeout=timeout)
+        except DeezerError as exc:
+            text = str(exc).lower()
+            blocked = "quota" in text or "429" in text or "too many requests" in text
+            kind = "deezer_blocked" if blocked else "deezer_unavailable"
+            raise SearchError(kind, 503 if blocked else 502, str(exc)) from exc
+
+    return run
+
+
 # ---------------------------------------------------------------------------
 # Cover proxy
 # ---------------------------------------------------------------------------
 
 
 def allowed_cover_url(url: str) -> bool:
-    """Only Spotify CDN image URLs, https, sane path/query."""
+    """Only Deezer/Spotify CDN image URLs, https, sane path/query."""
     try:
         parsed = urlparse(url)
     except ValueError:
@@ -421,6 +446,7 @@ class ApiApp:
                     "url": item.get("url", ""),
                     "coverUrl": self._public_cover(item.get("cover", "")),
                     "explicit": bool(item.get("explicit")),
+                    "isrc": item.get("isrc", ""),
                 }
                 for item in raw.get("tracks", [])
             ],
@@ -467,7 +493,7 @@ class ApiApp:
         seen: set[str] = set()
         for value in urls:
             original = value.strip()
-            canonical = canonical_spotify_url(original)
+            canonical = canonical_spotify_url(original) or canonical_deezer_url(original)
             if canonical is None:
                 invalid += 1
                 items.append({"url": original[:200], "status": "invalid"})
@@ -510,6 +536,17 @@ def canonical_spotify_url(value: str) -> str | None:
         kind, spotify_id = match.groups()
         return f"https://open.spotify.com/{kind}/{spotify_id}"
     return None
+
+
+def canonical_deezer_url(value: str) -> str | None:
+    """Accept a clean Deezer link and return a canonical https URL."""
+    if not value or len(value) > 500:
+        return None
+    match = _DEEZER_LINK_RE.fullmatch(value.strip())
+    if not match:
+        return None
+    kind, deezer_id = match.groups()
+    return f"https://www.deezer.com/{kind}/{deezer_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -609,7 +646,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 extra_headers=exc.headers,
             )
         except SearchError as exc:
-            headers = {"Retry-After": "1800"} if exc.kind == "spotify_blocked" else None
+            headers = (
+                {"Retry-After": "1800"}
+                if exc.kind in ("spotify_blocked", "deezer_blocked")
+                else None
+            )
             self._send_json(
                 exc.status,
                 {"error": exc.kind, "message": exc.message},
@@ -745,7 +786,7 @@ class ApiRuntime:
     bind: str
     port: int
     queue_path: str
-    spotify_auth: SpotifyAuth
+    search_provider: str = "deezer"
 
 
 def build_runtime(
@@ -785,15 +826,11 @@ def build_runtime(
     if queue is None:
         queue = QueueManager(queue_path)
     queue_path = queue.path
-    spotify_auth = SpotifyAuth(
-        credentials_path=os.environ.get("SPOTIFY_CREDENTIALS_PATH") or None
-    )
-
     app = ApiApp(
         token=token,
         queue=queue,
         search=SearchRunner(
-            runner=make_search_provider(spotify_auth, timeout),
+            runner=make_deezer_provider(timeout),
             ttl=ttl,
         ),
         covers=CoverCache(),
@@ -807,7 +844,7 @@ def build_runtime(
         bind=bind,
         port=port,
         queue_path=queue_path,
-        spotify_auth=spotify_auth,
+        search_provider="deezer",
     )
 
 
@@ -826,13 +863,12 @@ def start_api_thread(
     )
     thread.start()
     logger.info(
-        "API thread listening on %s:%s (queue=%s, user=%s, spotify=%s/%s)",
+        "API thread listening on %s:%s (queue=%s, user=%s, search=%s)",
         runtime.bind,
         runtime.port,
         runtime.queue_path,
         runtime.app.queue_user,
-        runtime.spotify_auth.mode,
-        runtime.spotify_auth.source,
+        runtime.search_provider,
     )
     return server
 
@@ -845,13 +881,12 @@ def main() -> int:
         return 1
     server = create_server(runtime.bind, runtime.port, runtime.app)
     logger.info(
-        "API listening on %s:%s (queue=%s, user=%s, spotify=%s/%s)",
+        "API listening on %s:%s (queue=%s, user=%s, search=%s)",
         runtime.bind,
         runtime.port,
         runtime.queue_path,
         runtime.app.queue_user,
-        runtime.spotify_auth.mode,
-        runtime.spotify_auth.source,
+        runtime.search_provider,
     )
     try:
         server.serve_forever()

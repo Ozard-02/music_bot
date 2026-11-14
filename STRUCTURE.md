@@ -5,6 +5,7 @@ spoty_loop/
 ├── bot.py               # Telegram dispatch + handlers + main loop (front end)
 ├── api.py               # HTTP API for Laila: search/queue/cover (front end;
 │                        #   standalone process or RUN_API thread inside bot.py)
+├── deezer_search.py     # Public Deezer search, stdlib only (front end)
 ├── spotify_credentials.py # Telegram-managed Spotify creds (front ends; stdlib)
 ├── telegram_client.py   # raw Bot API client on http.client keep-alive conns (front end)
 ├── worker.py            # job orchestration + stream_job IPC loop (spawn, JSON-lines, watchdog) (front end)
@@ -16,9 +17,10 @@ spoty_loop/
 ├── track_utils.py       # sanitize/path helpers (front ends; TrackMetadata TYPE_CHECKING)
 │
 ├── download_job.py      # subprocess entry point: stdin spec → JSON-lines events
-├── search_job.py        # subprocess entry point: stdin search spec → one JSON result
+├── search_job.py        # legacy Spotify search subprocess (tests/rollback)
 ├── resolver_match.py    # fuzzy name matching + resolve_search (subprocess only)
-├── downloader.py        # download engine: run_url, partition, rename, cover (subprocess)
+├── deezer_meta.py       # Deezer URL → TrackMetadata, ISRC enrichment (subprocess)
+├── downloader.py        # download engine: run_url/run_deezer, partition, rename, cover (subprocess)
 ├── spotiflac_patch.py   # import-time SpotiFLAC monkey-patches + match guards (subprocess)
 ├── m3u8.py              # playlist m3u8 + cover (subprocess)
 ├── flac_utils.py        # FLAC tag/cover utilities (subprocess)
@@ -69,11 +71,15 @@ bot.py ──► queue_manager.enqueue(query, user)
 
 ### Laila search tab (HTTP API)
 ```
-Laila ──GET /api/search──► api.py (or RUN_API thread in bot.py) ──cache?──► search_job.py (SpotiFLAC)
+Laila ──GET /api/search──► api.py (or RUN_API thread in bot.py) ──cache?──► api.deezer.com (stdlib)
    ◄── tracks/albums/playlists + /api/cover proxy URLs ──┘
-Laila ──POST /api/queue──► api.py ──► queue_manager.enqueue_unique("link", url, API_QUEUE_USER)
-   ──► existing worker picks it up like a Telegram link
+Laila ──POST /api/queue──► api.py ──► canonicalise Deezer URL ──► queue_manager.enqueue_unique("link", url, API_QUEUE_USER)
+   ──► worker ──► download_job.py ──► deezer_meta.py ──► SpotiFLAC provider chain
 ```
+
+Telegram links still take the Spotify path: `resolver.parse_inputs` → queue →
+`download_job.py` → `run_url` → Spotify metadata. The two metadata sources
+share the same provider chain and queue.
 
 ### /status
 ```

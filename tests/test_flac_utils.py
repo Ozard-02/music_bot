@@ -6,7 +6,13 @@ import pytest
 from PIL import Image
 from unittest.mock import AsyncMock, patch
 
-from flac_utils import _images_similar, upgrade_apple_cover, upgrade_cover_url
+from flac_utils import (
+    _images_similar,
+    get_spotify_id_from_file,
+    get_track_id_from_file,
+    upgrade_apple_cover,
+    upgrade_cover_url,
+)
 
 
 def test_upgrade_apple_cover_defaults_to_3000():
@@ -23,6 +29,30 @@ def test_upgrade_cover_url_bumps_300_to_640():
     url = "https://i.scdn.co/image/ab67616d00001e02abcdef"
     assert "b273" in upgrade_cover_url(url)
     assert "1e02" not in upgrade_cover_url(url)
+
+
+class _FakeFlac:
+    def __init__(self, url: str):
+        self._url = url
+
+    def get(self, tag, default):
+        return [self._url] if tag == "URL" else default
+
+
+def test_get_track_id_from_file_reads_spotify_and_deezer(monkeypatch):
+    monkeypatch.setattr(
+        "flac_utils.FLAC",
+        lambda _path: _FakeFlac("https://open.spotify.com/track/abc123"),
+    )
+    assert get_spotify_id_from_file("x") == "abc123"
+    assert get_track_id_from_file("x") == "abc123"
+
+    monkeypatch.setattr(
+        "flac_utils.FLAC",
+        lambda _path: _FakeFlac("https://www.deezer.com/track/3135553"),
+    )
+    assert get_spotify_id_from_file("x") is None
+    assert get_track_id_from_file("x") == "deezer-3135553"
 
 
 def _jpeg(color, size=600):

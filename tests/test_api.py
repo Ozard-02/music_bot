@@ -19,6 +19,7 @@ from api import (
     SearchRunner,
     SpotifyAuth,
     allowed_cover_url,
+    canonical_deezer_url,
     canonical_spotify_url,
     create_server,
     make_search_provider,
@@ -261,6 +262,23 @@ def test_enqueue_canonicalizes_and_dedupes(api):
     assert body["duplicates"] == 1
 
 
+def test_enqueue_accepts_and_dedupes_deezer_links(api):
+    payload = {
+        "urls": [
+            "https://www.deezer.com/it/track/3135553?utm_source=x",
+            "https://deezer.com/track/3135553",
+        ]
+    }
+    status, _, body = api["client"].json("POST", "/api/queue", payload)
+    assert status == 200
+    assert body["queued"] == 1
+    assert body["duplicates"] == 1
+    assert body["invalid"] == 0
+    assert body["items"][0]["url"] == "https://www.deezer.com/track/3135553"
+    item = api["queue"].get_item(body["items"][0]["id"])
+    assert item["query"] == "https://www.deezer.com/track/3135553"
+
+
 def test_enqueue_rejects_invalid_links(api):
     payload = {
         "urls": [
@@ -336,6 +354,16 @@ def test_cover_proxy(api):
     assert api["cover_calls"] == [target]
 
 
+def test_cover_proxy_allows_deezer_host(api):
+    target = "https://cdn-images.dzcdn.net/images/cover/abc/1000x1000.jpg"
+    status, _, body = api["client"].request(
+        "GET", "/api/cover?" + urllib.parse.urlencode({"u": target})
+    )
+    assert status == 200
+    assert body == b"fake-image"
+    assert api["cover_calls"] == [target]
+
+
 def test_cover_rejects_non_spotify_host(api):
     status, _, _ = api["client"].request(
         "GET",
@@ -396,12 +424,40 @@ def test_canonical_spotify_url(value, expected):
 
 
 @pytest.mark.parametrize(
+    "value,expected",
+    [
+        (
+            "https://www.deezer.com/track/3135553",
+            "https://www.deezer.com/track/3135553",
+        ),
+        (
+            "https://deezer.com/it/album/302127?utm_source=x",
+            "https://www.deezer.com/album/302127",
+        ),
+        (
+            "http://www.deezer.com/playlist/908622995",
+            "https://www.deezer.com/playlist/908622995",
+        ),
+        ("https://www.deezer.com/artist/27", None),
+        ("https://www.deezer.com/track/not-a-number", None),
+        ("not a link", None),
+    ],
+)
+def test_canonical_deezer_url(value, expected):
+    assert canonical_deezer_url(value) == expected
+
+
+@pytest.mark.parametrize(
     "url,allowed",
     [
         ("https://i.scdn.co/image/abc123", True),
         ("https://mosaic.scdn.co/640/abc", True),
         ("https://pickasso.spotifycdn.com/image/abc/en", True),
         ("https://image-cdn-ak.spotifycdn.com/image/abc", True),
+        (
+            "https://cdn-images.dzcdn.net/images/cover/abc/1000x1000-000000-80-0-0.jpg",
+            True,
+        ),
         ("http://i.scdn.co/image/abc", False),
         ("https://evil.example/image/abc", False),
         ("https://i.scdn.co.evil.example/image/abc", False),
