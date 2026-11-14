@@ -233,6 +233,37 @@ Search stays in the stdlib parent; no SpotiFLAC import and no subprocess.
 - [x] Tests for partial results, cover size, cache normalisation and
       `Server-Timing`.
 
+## Phase 13c — Deezer track-list pagination + playlist paths (DONE)
+
+Real `/tmp` download tests found two silent truncations and one wrong folder:
+
+- `/album/{id}` embeds at most 25 tracks; the dedicated
+  `/album/{id}/tracks?limit=500&index=...` returns the whole album (314 in the
+  Mozart box-set test).
+- `/playlist/{id}` embeds at most 400 tracks; its `/tracks` endpoint paginates
+  via `next` (1288-track playlist).
+- Playlist downloads were written under an extra `Deezer/` collection folder
+  because `_download_metadata` passed `collection_name="Deezer"` and
+  `is_playlist=True`.
+
+- [x] `deezer_meta._get_tracks_pages()`: follow `next`, dedupe by track id,
+      cap at 5000, and log a warning when Deezer reports more tracks than it
+      returns.
+- [x] `_album_tracks()` uses the paginated `/album/{id}/tracks` list, keeps the
+      full `/track/{id}` details for contributor/ARTIST metadata.
+- [x] `_playlist_tracks()` uses the paginated `/playlist/{id}/tracks` list and
+      avoids per-track detail calls (the list already has ISRC).
+- [x] `_download_metadata()` passes `collection_name=""` and
+      `is_playlist=False`; playlist files land in the expected path.
+- [x] Tests: 27-track album keeps all 27, 1288-track playlist pagination,
+      mismatch warning, empty collection name.
+- [x] Real `/tmp`: track 27/27 of “1 (Remastered 2015)” downloaded with
+      `TRACKNUMBER=27`, `TRACKTOTAL=27`; playlist track landed in the expected
+      path with `ok=1`; 314-track album list returned 314.
+- [x] Full pytest green (512 passed).
+- [x] Note: a 1288-track playlist returned 1287 tracks (one entry unavailable
+      from Deezer); the warning is logged and the remaining tracks download.
+
 ## Deferred (explicit, not forgotten)
 - `/fixmetadata` and `/mkplaylist` are subprocess-triggered commands (port the
   scripts behind a subprocess call); not part of the core download path.

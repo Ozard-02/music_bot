@@ -119,13 +119,17 @@ async def run_url(
         return await _download_tracks(client, tracks, cfg, logger, skip_titles, progress_cb, failure_cb)
 
 
-async def _download_metadata(client, track, *, is_album: bool = False, is_playlist: bool = False):
+async def _download_metadata(client, track, *, is_album: bool = False):
     """Download one already-resolved TrackMetadata through SpotiFLAC.
 
     `AsyncSpotiFLAC.download_track()` always re-resolves metadata from a
     Spotify URL. For Deezer we already have the metadata, so go one level
     down to the downloader's worker, which still runs the normal provider
     chain, retries and per-track timeout.
+
+    `collection_name` must stay empty and `is_playlist` false: SpotiFLAC
+    prepends the collection name to the output directory when either is set,
+    which would put playlist tracks under an unwanted `Deezer/` folder.
     """
     downloader = getattr(client, "_downloader", None)
     worker = getattr(downloader, "_run_worker_async", None)
@@ -133,10 +137,10 @@ async def _download_metadata(client, track, *, is_album: bool = False, is_playli
         raise RuntimeError("SpotiFLAC downloader is unavailable")
     return await worker(
         [track],
-        "Deezer",
+        "",
         {},
         is_album,
-        is_playlist,
+        False,
     )
 
 
@@ -177,7 +181,6 @@ async def run_deezer(
         return DownloadResult(failed=1, failed_tracks=[("", url, "metadata_error")], total=1)
 
     is_album = parsed["type"] == "album"
-    is_playlist = parsed["type"] == "playlist"
     async with AsyncSpotiFLAC(**_client_kwargs(cfg)) as client:
         return await _download_tracks(
             client,
@@ -191,7 +194,6 @@ async def run_deezer(
                 client,
                 track,
                 is_album=is_album,
-                is_playlist=is_playlist,
             ),
         )
 

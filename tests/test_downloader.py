@@ -166,7 +166,7 @@ async def test_run_deezer_passes_metadata_to_download_worker(monkeypatch, config
     assert called["result"] == []
     fetch.assert_awaited_once_with("https://www.deezer.com/track/1")
     client._downloader._run_worker_async.assert_awaited_once_with(
-        [track], "Deezer", {}, False, False
+        [track], "", {}, False, False
     )
 
 
@@ -204,7 +204,11 @@ async def test_download_metadata_uses_spotiflac_worker():
 
     track = _mock_track("deezer-1", "Test Track")
     assert await _download_metadata(_Client(), track, is_album=True) == []
-    assert calls == [([track], "Deezer", {}, True, False)]
+    assert await _download_metadata(_Client(), track, is_album=False) == []
+    assert calls == [
+        ([track], "", {}, True, False),
+        ([track], "", {}, False, False),
+    ]
 
 
 class TestRunUrl:

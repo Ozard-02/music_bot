@@ -15,14 +15,18 @@ import asyncio
 import logging
 import re
 import time
+from urllib.parse import urlparse
 
 import httpx
 from SpotiFLAC.core.models import TrackMetadata
 
 DEEZER_API = "https://api.deezer.com"
+DEEZER_HOST = "api.deezer.com"
 DEFAULT_TIMEOUT = 15
 DETAIL_CONCURRENCY = 2
 DETAIL_MIN_INTERVAL = 0.2
+TRACKS_PAGE_SIZE = 500
+MAX_TRACKS = 5000
 USER_AGENT = "spoty_loop/1.0"
 _DEEZER_RE = re.compile(
     r"^https?://(?:www\.)?deezer\.com/(?:[a-z]{2}/)?"
@@ -190,6 +194,79 @@ async def _get(client: httpx.AsyncClient, path: str) -> dict:
     raise DeezerMetadataError("Deezer metadata request failed")
 
 
+async def _get_tracks_pages(
+    client: httpx.AsyncClient,
+    path: str,
+    expected: int = 0,
+) -> list[dict]:
+    """Read a Deezer /tracks list completely with index pagination.
+
+    The `tracks` object embedded in /album/{id} and /playlist/{id} is capped
+    (25 and 400 tracks in practice). The dedicated /tracks endpoint accepts
+    limit/index and reports the real total, so we use it instead of the
+    embedded list and verify that nothing was silently dropped.
+    """
+    items: list[dict] = []
+    seen: set[str] = set()
+    separator = "&" if "?" in path else "?"
+    request_path = f"{path}{separator}limit={TRACKS_PAGE_SIZE}&index=0"
+    while True:
+        page = await _get(client, request_path)
+        chunk = page.get("data")
+        if not isinstance(chunk, list):
+            raise DeezerMetadataError("Deezer returned an invalid track list")
+
+        added = 0
+        for item in chunk:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            track_id = str(item["id"])
+            if track_id in seen:
+                continue
+            seen.add(track_id)
+            items.append(item)
+            added += 1
+
+        if len(items) > MAX_TRACKS:
+            raise DeezerMetadataError(
+                f"Deezer returned too many tracks (> {MAX_TRACKS})"
+            )
+
+        total = page.get("total")
+        try:
+            total_count = int(total) if total is not None else 0
+        except (TypeError, ValueError):
+            total_count = 0
+        if total_count and len(items) >= total_count:
+            break
+
+        next_url = page.get("next")
+        if not next_url:
+            break
+        if added == 0:
+            break
+
+        parsed = urlparse(str(next_url))
+        if parsed.netloc and parsed.netloc != DEEZER_HOST:
+            raise DeezerMetadataError("Deezer returned a foreign track-list URL")
+        if not parsed.path.startswith(path):
+            raise DeezerMetadataError("Deezer returned an unexpected track-list URL")
+        request_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
+    expected_count = int(expected or 0)
+    if expected_count and len(items) != expected_count:
+        # Deezer occasionally reports one more track than it returns (an
+        # unavailable/duplicated entry). Do not fail the whole playlist or
+        # album: keep what exists, but leave a clear server-side warning.
+        log.warning(
+            "Deezer track list %s returned %d of %d tracks",
+            path,
+            len(items),
+            expected_count,
+        )
+    return items
+
+
 async def _throttled_get(
     client: httpx.AsyncClient,
     path: str,
@@ -212,9 +289,10 @@ async def _details(
 ) -> list[dict]:
     """Fetch full /track/{id} objects in bounded, throttled parallel batches.
 
-    Album and playlist track lists omit ISRC, track_position and disk_number.
+    The album /tracks list already has ISRC, track_position and disk_number;
+    the full track object adds the contributor list used for the ARTIST tag.
     If a detail call fails we keep the basic object so the download can still
-    try the provider's text fallback.
+    use its ISRC and the provider's text fallback.
     """
     semaphore = asyncio.Semaphore(DETAIL_CONCURRENCY)
     lock = asyncio.Lock()
@@ -238,13 +316,22 @@ async def _details(
 
 async def _album_tracks(client: httpx.AsyncClient, album_id: str) -> list[TrackMetadata]:
     album = await _get(client, f"/album/{album_id}")
-    basics = [
-        item
-        for item in (album.get("tracks") or {}).get("data", [])
-        if isinstance(item, dict) and item.get("id")
-    ]
+    # The embedded tracks object stops at 25; this endpoint returns the whole
+    # album (314 tracks in the Mozart box-set test) and includes ISRC.
+    basics = await _get_tracks_pages(
+        client,
+        f"/album/{album_id}/tracks",
+        expected=int(album.get("nb_tracks") or 0),
+    )
     details = await _details(client, basics)
     total = int(album.get("nb_tracks") or len(details) or 0)
+    if total and len(details) != total:
+        log.warning(
+            "Deezer album %s returned %d of %d tracks",
+            album_id,
+            len(details),
+            total,
+        )
     total_discs = max(
         (int(item.get("disk_number") or 1) for item in details), default=1
     )
@@ -264,16 +351,17 @@ async def _playlist_tracks(
     client: httpx.AsyncClient, playlist_id: str
 ) -> list[TrackMetadata]:
     playlist = await _get(client, f"/playlist/{playlist_id}")
-    basics = [
-        item
-        for item in (playlist.get("tracks") or {}).get("data", [])
-        if isinstance(item, dict) and item.get("id")
-    ]
-    # The playlist payload already carries ISRC, title, artist, album and
-    # cover for every track. Do not fan out into one /track/{id} per entry:
-    # a 500-track playlist would cost hundreds of quota-limited requests.
-    # Playlist order is the meaningful track order here; the album artist
-    # falls back to the track artist for compilation entries.
+    # The embedded playlist object stops at 400; the dedicated endpoint
+    # paginates and already carries ISRC, title, artist, album and cover.
+    basics = await _get_tracks_pages(
+        client,
+        f"/playlist/{playlist_id}/tracks",
+        expected=int(playlist.get("nb_tracks") or 0),
+    )
+    # Do not fan out into one /track/{id} per entry: a 1288-track playlist
+    # would cost hundreds of quota-limited requests. Playlist order is the
+    # meaningful track order here; the album artist falls back to the track
+    # artist for compilation entries.
     total = len(basics)
     return [
         _track_metadata(
