@@ -126,9 +126,16 @@ This is why `setup_logger` in the child must keep its StreamHandler on stderr.
   the old 150–250MiB transient child.
 - Results are normalised to `tracks` / `albums` / `playlists`; tracks keep
   their ISRC and Deezer URL.
-- The API caches results for `SEARCH_CACHE_TTL` (default 60s, 32 entries;
-  expired entries are dropped on insert) and serialises cache misses, so
-  typing does not fan out into parallel requests.
+- Search uses a bounded 8 s deadline and returns **partial results** if one
+  endpoint is slow or fails; only an all-endpoint failure raises.
+- Search covers are the 250–500 px variants (`cover_medium`/`cover_big`), not
+  the 1000 px `cover_xl`; the download path still fetches the large cover.
+- The API caches results for `SEARCH_CACHE_TTL` (default 300s, 32 entries;
+  expired entries are dropped on insert). Cache keys are case-, accent- and
+  whitespace-insensitive, and cache misses are serialised so typing does not
+  fan out into parallel requests.
+- `/api/search` emits `Server-Timing: search;dur=...` so the client can see
+  the server-side cost.
 - Failures map to `deezer_unavailable` (502) or `deezer_blocked` (503 plus
   `Retry-After: 1800`) when Deezer reports a quota/429.
 
@@ -161,7 +168,8 @@ subprocess.
   32-entry LRU.
   The endpoint has no auth so `<img>`/expo-image can load it; never expose the
   API port publicly.
-- CORS only echoes origins listed in `API_CORS_ORIGINS`.
+- CORS only echoes origins listed in `API_CORS_ORIGINS`; preflights are
+  cached for 24 hours (`Access-Control-Max-Age: 86400`).
 
 ## Stall watchdog
 

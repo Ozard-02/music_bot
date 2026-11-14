@@ -11,13 +11,16 @@ from __future__ import annotations
 import http.client
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 from urllib.parse import urlencode
 
 DEEZER_HOST = "api.deezer.com"
 DEFAULT_TIMEOUT = 15
 MAX_LIMIT = 50
+# Search is interactive: do not let one slow endpoint hold the whole result
+# for the full HTTP timeout. Return whatever finished by this deadline.
+SEARCH_DEADLINE_SECONDS = 8
 USER_AGENT = "spoty_loop/1.0"
 
 
@@ -97,7 +100,9 @@ def _track(item: object) -> dict | None:
         "album": str(album.get("title") or ""),
         "durationMs": _duration_ms(item),
         "url": f"https://www.deezer.com/track/{item['id']}",
-        "cover": _cover(album, "cover_xl", "cover_big", "cover_medium"),
+        # List rows are ~48-56 px. 250-500 px is plenty and much cheaper than
+        # the 1000 px cover_xl; the download path still fetches the large one.
+        "cover": _cover(album, "cover_medium", "cover_big", "cover_xl"),
         "explicit": bool(item.get("explicit_lyrics")),
         "isrc": str(item.get("isrc") or ""),
     }
@@ -113,7 +118,7 @@ def _album(item: object) -> dict | None:
         "artists": str(artist.get("name") or ""),
         "releaseDate": str(item.get("release_date") or ""),
         "url": f"https://www.deezer.com/album/{item['id']}",
-        "cover": _cover(item, "cover_xl", "cover_big", "cover_medium"),
+        "cover": _cover(item, "cover_medium", "cover_big", "cover_xl"),
     }
 
 
@@ -129,7 +134,7 @@ def _playlist(item: object) -> dict | None:
         "owner": str(user.get("name") or ""),
         "releaseDate": str(item.get("creation_date") or ""),
         "url": f"https://www.deezer.com/playlist/{item['id']}",
-        "cover": _cover(item, "picture_xl", "picture_big", "picture_medium"),
+        "cover": _cover(item, "picture_medium", "picture_big", "picture_xl"),
     }
 
 
@@ -159,18 +164,38 @@ def search(
     except (TypeError, ValueError) as exc:
         raise DeezerError("limit must be an integer") from exc
 
-    getter = fetch or (lambda path: _get_json(path, timeout))
+    deadline = max(1, min(timeout, SEARCH_DEADLINE_SECONDS))
+    getter = fetch or (lambda path: _get_json(path, deadline))
     common = urlencode({"q": text, "limit": size})
-    paths = (
-        f"/search?{common}",
-        f"/search/album?{common}",
-        f"/search/playlist?{common}",
+    endpoints = (
+        ("tracks", f"/search?{common}"),
+        ("albums", f"/search/album?{common}"),
+        ("playlists", f"/search/playlist?{common}"),
     )
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        tracks, albums, playlists = pool.map(getter, paths)
+
+    results: dict[str, dict] = {}
+    errors: list[BaseException] = []
+    executor = ThreadPoolExecutor(max_workers=3)
+    futures = {executor.submit(getter, path): kind for kind, path in endpoints}
+    try:
+        for future in as_completed(futures, timeout=deadline):
+            kind = futures[future]
+            try:
+                results[kind] = future.result()
+            except BaseException as exc:  # noqa: BLE001 - one endpoint may fail
+                errors.append(exc)
+    except TimeoutError:
+        # Return whatever arrived; the remaining requests are abandoned.
+        pass
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    if not results:
+        detail = str(errors[0]) if errors else "timed out"
+        raise DeezerError(f"Deezer search failed: {detail}")
 
     return {
-        "tracks": _items(tracks, _track),
-        "albums": _items(albums, _album),
-        "playlists": _items(playlists, _playlist),
+        "tracks": _items(results.get("tracks", {}), _track),
+        "albums": _items(results.get("albums", {}), _album),
+        "playlists": _items(results.get("playlists", {}), _playlist),
     }

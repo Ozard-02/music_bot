@@ -191,11 +191,12 @@ def test_search_requires_token(api):
 
 
 def test_search_shape_and_cover_proxy(api):
-    status, _, body = api["client"].json(
+    status, headers, body = api["client"].json(
         "GET",
         "/api/search?" + urllib.parse.urlencode({"q": "one more time", "limit": 2}),
     )
     assert status == 200
+    assert headers["Server-Timing"].startswith("search;dur=")
     assert body["query"] == "one more time"
     assert [track["id"] for track in body["tracks"]] == ["track-1", "track-2"]
     assert body["tracks"][0]["coverUrl"].startswith("/api/cover?u=")
@@ -216,7 +217,23 @@ def test_search_limit_is_clamped(api):
 def test_search_cache_hits_do_not_rerun(api):
     api["client"].json("GET", "/api/search?" + urllib.parse.urlencode({"q": "Daft Punk"}))
     api["client"].json("GET", "/api/search?" + urllib.parse.urlencode({"q": "daft punk"}))
-    assert len(api["search_calls"]) == 1
+    api["client"].json("GET", "/api/search?" + urllib.parse.urlencode({"q": "Beyonce"}))
+    api["client"].json("GET", "/api/search?" + urllib.parse.urlencode({"q": "Beyoncé"}))
+    assert len(api["search_calls"]) == 2
+
+
+def test_search_cache_normalizes_accents_and_whitespace():
+    calls: list[tuple[str, int]] = []
+
+    def runner(query: str, limit: int) -> dict:
+        calls.append((query, limit))
+        return {"tracks": [], "albums": [], "playlists": []}
+
+    search = SearchRunner(runner, ttl=60)
+    search.search("  Beyoncé   Knowles ", 3)
+    search.search("beyonce knowles", 3)
+    search.search("BEYONCE   KNOWLES", 3)
+    assert calls == [("  Beyoncé   Knowles ", 3)]
 
 
 def test_search_empty_query(api):
@@ -397,6 +414,7 @@ def test_cors_preflight_allowed(api):
     assert status == 204
     assert headers["Access-Control-Allow-Origin"] == ORIGIN
     assert "Authorization" in headers["Access-Control-Allow-Headers"]
+    assert headers["Access-Control-Max-Age"] == "86400"
 
 
 def test_cors_unknown_origin_gets_no_header(api):

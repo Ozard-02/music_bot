@@ -29,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -217,10 +218,26 @@ def run_search_job(
     return payload
 
 
-class SearchRunner:
-    """TTL cache plus a lock so concurrent queries never fan out to Spotify."""
+def normalize_search_query(value: str) -> str:
+    """Case/accent/whitespace-insensitive cache key.
 
-    def __init__(self, runner=run_search_job, ttl: int = 60, max_entries: int = SEARCH_CACHE_ENTRIES):
+    Deezer treats “Beyonce” and “Beyoncé” as the same search; the cache should
+    too. The original query is still sent to Deezer on a miss.
+    """
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return " ".join(text.lower().split())
+
+
+class SearchRunner:
+    """TTL cache plus a lock so concurrent queries never fan out to Deezer."""
+
+    def __init__(
+        self,
+        runner=run_search_job,
+        ttl: int = 300,
+        max_entries: int = SEARCH_CACHE_ENTRIES,
+    ):
         self._runner = runner
         self._ttl = max(0, ttl)
         self._max_entries = max_entries
@@ -229,7 +246,7 @@ class SearchRunner:
         self._run_lock = threading.Lock()
 
     def search(self, query: str, limit: int) -> dict:
-        key = (query.strip().lower(), limit)
+        key = (normalize_search_query(query), limit)
         now = time.monotonic()
         with self._cache_lock:
             cached = self._cache.get(key)
@@ -617,7 +634,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if len(query) > MAX_QUERY_LENGTH:
                     raise ApiError(400, "invalid_request", "q is too long")
                 limit = _parse_int((params.get("limit") or [None])[0], DEFAULT_LIMIT, 1, MAX_LIMIT)
-                self._send_json(200, self.app.search_results(query, limit), origin)
+                started = time.perf_counter()
+                payload = self.app.search_results(query, limit)
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                self._send_json(
+                    200,
+                    payload,
+                    origin,
+                    extra_headers={"Server-Timing": f"search;dur={elapsed_ms:.1f}"},
+                )
                 return
 
             if parsed.path == "/api/queue":
@@ -720,7 +745,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             ("Vary", "Origin"),
             ("Access-Control-Allow-Headers", "Authorization, Content-Type"),
             ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-            ("Access-Control-Max-Age", "600"),
+            ("Access-Control-Max-Age", "86400"),
         ]
 
     def _send_empty(self, status: int, origin: str | None) -> None:
@@ -809,9 +834,9 @@ def build_runtime(
         logger.error("API_PORT must be an integer")
         return None
     try:
-        ttl = int(os.environ.get("SEARCH_CACHE_TTL", "60"))
+        ttl = int(os.environ.get("SEARCH_CACHE_TTL", "300"))
     except ValueError:
-        ttl = 60
+        ttl = 300
     try:
         timeout = int(os.environ.get("SEARCH_TIMEOUT", "20"))
     except ValueError:

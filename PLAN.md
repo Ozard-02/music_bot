@@ -220,6 +220,19 @@ Search stays in the stdlib parent; no SpotiFLAC import and no subprocess.
       not read ARL today; adding a gw-light/license-token provider is a
       separate medium task.
 
+## Phase 13b — Search polish (DONE)
+
+- [x] Medium covers for list results (`cover_medium`/`cover_big`); the download
+      path keeps `cover_xl`.
+- [x] Partial results: an 8 s search deadline; one slow/failed endpoint no
+      longer fails the whole search.
+- [x] Search cache default 60 s → 300 s and accent/case/whitespace-insensitive
+      keys.
+- [x] `Server-Timing: search;dur=...` on `/api/search`.
+- [x] CORS preflight cache 600 s → 86400 s.
+- [x] Tests for partial results, cover size, cache normalisation and
+      `Server-Timing`.
+
 ## Deferred (explicit, not forgotten)
 - `/fixmetadata` and `/mkplaylist` are subprocess-triggered commands (port the
   scripts behind a subprocess call); not part of the core download path.

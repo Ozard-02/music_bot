@@ -138,6 +138,9 @@ curl -H "Authorization: Bearer $API_TOKEN" \
 
 - Search results are Deezer's own order (no best-match resolver): the caller
   picks. `queued`/`duplicates`/`invalid` come back from `/api/queue`.
+- Search is cache-friendly (5 min, accent/case/space insensitive) and returns
+  partial results if one Deezer endpoint is slow or fails. `/api/search` also
+  emits `Server-Timing: search;dur=...`.
 - Deezer and Spotify links are canonicalized (locale/query removed) so the same
   track dedupes.
 - The cover endpoint is open but only fetches `*.dzcdn.net`, `*.scdn.co` or
