@@ -2,7 +2,7 @@
 
 The system is a **lean front ends + short-lived workers** split: the Telegram
 bot and the HTTP API are both stdlib-only processes, and every job that needs
-SpotiFLAC runs in its own subprocess.
+SpotiFLAC 5.x runs in its own subprocess.
 
 ```
 Telegram ──► bot.py (stdlib) ──────────────┐
@@ -30,8 +30,9 @@ imported. Idle RSS is a hard requirement (see AGENTS.md), so we split:
   `json`, `http.client`, `sqlite3`, `http.server`, `fcntl`, `logging`,
   `pathlib`. The API can be a separate process or, with `RUN_API=1`, a daemon
   thread inside the bot container.
-- **Subprocesses** (`download_job.py`, `search_job.py`) import SpotiFLAC +
-  patches. Spawned per job, they exit when the job ends, so peak RSS is
+- **Subprocesses** (`download_job.py`, `search_job.py`, `session_refresh.py`)
+  import SpotiFLAC + its extension runtime. Spawned per job, they exit when the
+  job ends, so peak RSS is
   **reclaimed** — no lingering threads, no `_trim_rss` needed for the heavy
   part.
 
@@ -64,24 +65,24 @@ target predates this stack; the hard rule is still "well under the old 89MiB".
 | `resolver_match.py` | Fuzzy artist/title matching + `resolve_search` (imports difflib/unicodedata) |
 | `deezer_meta.py` | Deezer track/album/playlist metadata → `TrackMetadata`, including ISRC enrichment |
 | `downloader.py` | Download engine (`run_url` for Spotify, `run_deezer` for Deezer): resolution, partition, parallel download, rename, cover |
-| `spotiflac_patch.py` | Import-time monkey-patches (GitHub version-check skip, console silencing, community-dead, provider IO timeout cap, MB no-op, provider tracking, provider matching guards) |
+| `spotiflac_patch.py` | Import-time monkey-patches (GitHub version-check skip, console/input silencing, MB no-op, ProgressManager neutralization) |
+| `session_refresh.py` | Refresh the signed `zarz-v2` sessions over HTTP (no browser); run by the worker every 2h |
 | `m3u8.py` | Playlist m3u8 + cover generation (auto-build happens here, not in parent) |
 | `flac_utils.py` | FLAC tag read/write, cover embed/dedupe (httpx/mutagen/pillow live here) |
 
-### Provider matching guards
+### Extension providers and signed sessions
 
-SpotiFLAC falls back to fuzzy text search when an ISRC is missing from a
-provider catalog.  Qobuz's fallbacks are unsafe: `_search_by_text_async`
-returns its best candidate even below its own threshold, and
-`_search_by_text_with_duration_async` picks the closest duration without
-checking title or artist.  That downloaded a random unrelated track while
-Spotify tags were applied on top (right metadata, wrong audio).
+SpotiFLAC 5.x removed the native provider implementations.  Downloads go
+through installed JavaScript extensions (`deezer`, `qobuz-web`, `amazon`), so
+the image includes Node.js.  The extensions authenticate against the Zarz v2
+gateway with a signed session stored in `~/.spotiflac/signed_sessions/`.
 
-`spotiflac_patch._patch_provider_matching()` wraps those searches (plus
-Deezer's text search and Qobuz's ISRC search) and rejects candidates whose
-title/artist — and ISRC/duration where available — do not plausibly match.
-Rejections are logged to `spoty_loop.patch` at `WARNING`; the provider then
-fails and the next service runs (Deezer does an exact ISRC lookup).
+A session lasts ~5 hours and is refreshed 2h before expiry.  `worker.py` runs
+`session_refresh.py` every 2h in a subprocess, so a bot that is idle for a
+while keeps working without a browser.  The first session must be created once
+with `scripts/seed_sessions.py` on a machine with a browser; the bot itself
+never launches one.  If the session is missing/expired, downloads fail and the
+worker sends a Telegram warning instead of retrying silently.
 
 ## IPC protocol
 
@@ -206,6 +207,8 @@ so overlap protection moves to **`fcntl.flock` lockfiles**:
   (30min) instead of letting every item retry against a rate-limited IP.
 - Download subprocesses skip SpotiFLAC's import-time GitHub version check
   (one useless HTTPS request per job).
+- Session keeper: one tiny refresh subprocess every 2h (three HMAC-signed
+  POSTs); no browser and no polling.
 - QueueManager: one persistent SQLite connection, no polling.
 - `gc.freeze()` after startup imports + API thread: permanent objects are
   never rescanned.
@@ -215,9 +218,10 @@ so overlap protection moves to **`fcntl.flock` lockfiles**:
 
 ## RSS budget
 
-Measured after Phase 11 (host, import chain + QueueManager + Bot):
-interpreter ~12.3MiB + logging ~3.3MiB + asyncio ~6.1MiB + sqlite ~1.5MiB +
-http.client/ssl ~1.4MiB + app code — **parent idle ~29MiB**. `urllib.request`
+Measured after the 5.x migration (Python 3.14.10 base, `RUN_API=1`):
+**~36MiB in the container**, ~40MiB on the host for the same parent code. The
+SpotiFLAC 5.x dependency tree (fastapi, numpy, pydoll, …) is imported only by
+the short-lived download subprocess, never by the parent. `urllib.request`
 is no longer in the graph (Spotify credentials use `http.client`), and
 `difflib`/`unicodedata` live in `resolver_match.py` (subprocess only).
 `MALLOC_ARENA_MAX=2` (Dockerfile/compose) trims glibc arena overhead under

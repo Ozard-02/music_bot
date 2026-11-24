@@ -268,3 +268,25 @@ Real `/tmp` download tests found two silent truncations and one wrong folder:
 - `/fixmetadata` and `/mkplaylist` are subprocess-triggered commands (port the
   scripts behind a subprocess call); not part of the core download path.
 - `maintenance.py`/scripts stay CLI tools runnable against the subprocess env.
+
+## Phase 15 — SpotiFLAC 5.x migration (2026-11-24)
+
+The old 1.6.0 native providers were retired upstream (`v1/dl` returns 410
+`V1_RETIRED`, Antra keys retired, several mirrors have no DNS). 5.x removed
+the native providers entirely: every download now goes through a JS extension.
+
+- [x] Pin `SpotiFLAC==5.0.6` in `Dockerfile` + `requirements-dev.txt`.
+- [x] Install Node.js in the image (the extension runtime needs it).
+- [x] Update `parse_spotify_url` imports to `SpotiFLAC.core.spotify_metadata`.
+- [x] Shrink `spotiflac_patch.py` to the 5.x-compatible subset (GitHub skip,
+      console/input silencing, MusicBrainz no-op, ProgressManager).
+- [x] Provider tracking from `_downloader._last_results`; propagate the real
+      error text instead of always `download_failed`.
+- [x] Add `session_refresh.py`: refresh `zarz-v2` sessions every 2h in the
+      worker, no browser; notify Telegram when a session is missing/expired.
+- [x] Add `scripts/seed_sessions.py`: one-off browser seed on a workstation.
+- [x] Tests updated for 5.x (`487 passed` with `.venv` 5.0.6).
+- [x] Integration: Deezer link downloaded via `ext:deezer`; Spotify link via
+      `ext:qobuz-web`; Docker image (Node 20.19.2, SpotiFLAC 5.0.6) downloaded
+      a track with mounted sessions and no browser.
+- [x] Document the one-time session seed + TrueNAS volume requirement.

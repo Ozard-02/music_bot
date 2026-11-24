@@ -17,16 +17,17 @@ spoty_loop/
 ├── track_utils.py       # sanitize/path helpers (front ends; TrackMetadata TYPE_CHECKING)
 │
 ├── download_job.py      # subprocess entry point: stdin spec → JSON-lines events
+├── session_refresh.py   # refresh signed zarz-v2 sessions (subprocess; no browser)
 ├── search_job.py        # legacy Spotify search subprocess (tests/rollback)
 ├── resolver_match.py    # fuzzy name matching + resolve_search (subprocess only)
 ├── deezer_meta.py       # Deezer URL → TrackMetadata, ISRC enrichment (subprocess)
 ├── downloader.py        # download engine: run_url/run_deezer, partition, rename, cover (subprocess)
-├── spotiflac_patch.py   # import-time SpotiFLAC monkey-patches + match guards (subprocess)
+├── spotiflac_patch.py   # import-time SpotiFLAC 5.x monkey-patches (subprocess)
 ├── m3u8.py              # playlist m3u8 + cover (subprocess)
 ├── flac_utils.py        # FLAC tag/cover utilities (subprocess)
 │
 ├── maintenance.py       # library maintenance: rescan/cover re-embed (subprocess; fix_covers dep)
-├── scripts/             # CLI tools (fix_metadata, fix_covers, ...) (subprocess)
+├── scripts/             # CLI tools (fix_metadata, fix_covers, seed_sessions, ...) (subprocess)
 ├── tests/               # pytest suite
 │
 ├── Dockerfile
@@ -46,8 +47,12 @@ spoty_loop/
   stdlib only, plus sibling front-end modules. Never `from SpotiFLAC import ...`,
   never httpx, never telegram.
 - **Subprocess modules** (`download_job.py`, `search_job.py`, `downloader.py`,
-  `flac_utils.py`, …) may import SpotiFLAC + its deps; they are never imported
-  by a front end.
+  `session_refresh.py`, `flac_utils.py`, …) may import SpotiFLAC + its deps;
+  they are never imported by a front end. `scripts/seed_sessions.py` is a
+  workstation-only tool (needs a browser) and is not used by the bot.
+- Downloads require Node.js + a signed `zarz-v2` session; the worker refreshes
+  sessions every 2h from a subprocess. The parent only spawns the refresh
+  script, never imports SpotiFLAC.
 - `config.py` must NOT import `spotiflac_patch` — the silence loop is inlined
   so the front-end import graph never touches SpotiFLAC.
 
@@ -74,12 +79,12 @@ bot.py ──► queue_manager.enqueue(query, user)
 Laila ──GET /api/search──► api.py (or RUN_API thread in bot.py) ──cache?──► api.deezer.com (stdlib)
    ◄── tracks/albums/playlists + /api/cover proxy URLs ──┘
 Laila ──POST /api/queue──► api.py ──► canonicalise Deezer URL ──► queue_manager.enqueue_unique("link", url, API_QUEUE_USER)
-   ──► worker ──► download_job.py ──► deezer_meta.py ──► SpotiFLAC provider chain
+   ──► worker ──► download_job.py ──► deezer_meta.py ──► SpotiFLAC 5.x extensions
 ```
 
 Telegram links still take the Spotify path: `resolver.parse_inputs` → queue →
 `download_job.py` → `run_url` → Spotify metadata. The two metadata sources
-share the same provider chain and queue.
+share the same extension providers and queue.
 
 ### /status
 ```

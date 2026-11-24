@@ -2,8 +2,8 @@
 
 **⚠️ Educational purpose only.** Downloads copyrighted music. Know your local laws.
 
-Telegram bot that turns Spotify links into FLAC files via SpotiFLAC
-(Qobuz/Deezer/Amazon lossless providers).
+Telegram bot that turns Spotify links into FLAC files via SpotiFLAC 5.x
+(Qobuz/Deezer/Amazon lossless extension providers).
 
 ```
 Telegram msg / Laila HTTP API → SQLite queue → worker → subprocess(download_job) → SpotiFLAC → FLAC on disk
@@ -14,9 +14,9 @@ Telegram msg / Laila HTTP API → SQLite queue → worker → subprocess(downloa
 The previous single-process bot (python-telegram-bot + SpotiFLAC) idled at
 ~252MiB, ~89MiB after removing the browser stack. This version splits into a
 **stdlib-only parent** and a **short-lived subprocess per download job** whose
-RSS is reclaimed on exit. Measured idle: **~29MiB on the host**, **~22MiB for
-the single container** (`docker stats`, bot + API). See
-[ARCHITECTURE.md](ARCHITECTURE.md).
+RSS is reclaimed on exit. Measured idle: **~36MiB for the single container**
+(`RUN_API=1`, Python 3.14.10 base). The 5.x SpotiFLAC dependencies live in the
+download subprocess, not in the parent. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Features
 
@@ -97,8 +97,24 @@ needed):
 - The API re-reads the file on the next search: no restart needed.
 - File values override `.env`; without either, anonymous is used.
 - The token/secret never reaches Laila or the logs.
-- Official credentials are only for search; downloads still use SpotiFLAC's
-  provider chain.
+- Official credentials are only for search; downloads use SpotiFLAC 5.x
+  extension providers.
+
+### Download sessions (SpotiFLAC 5.x)
+
+Download providers are JavaScript extensions, so the image includes Node.js and
+uses a signed `zarz-v2` session (no Spotify/Qobuz account needed). Create the
+first session once on a machine with a browser:
+
+```bash
+python scripts/seed_sessions.py --data-dir ~/.spotiflac
+# copy ~/.spotiflac/signed_sessions/zarz-v2-*.json to the server's volume
+```
+
+The worker refreshes the sessions every 2 hours from `session_refresh.py`
+(no browser); if a session is missing/expired it sends a Telegram warning.
+Sessions are per installation/extension version, so an extension update may
+require a fresh seed.
 
 Provider order, quality, and download options go in `~/.spotiflac/config.json`.
 
@@ -108,9 +124,9 @@ Provider order, quality, and download options go in `~/.spotiflac/config.json`.
 powers the Deezer search tab in Laila: type a title, pick one result, queue it
 for download. Searches call the public Deezer API directly from `api.py`, so the
 API process never imports SpotiFLAC and needs no music-service credentials.
-Downloads still use SpotiFLAC's Qobuz/Deezer/Amazon provider chain; Laila sends
-Deezer links, while Telegram keeps accepting Spotify links with Spotify
-metadata.
+Downloads still use SpotiFLAC 5.x's Qobuz/Deezer/Amazon extension providers;
+Laila sends Deezer links, while Telegram keeps accepting Spotify links with
+Spotify metadata.
 
 ```bash
 # .env: API_TOKEN=...  (required)

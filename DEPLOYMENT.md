@@ -8,10 +8,18 @@ docker compose up -d --build
 docker compose logs -f music-bot
 ```
 
-- Builds from `./Dockerfile` (SpotiFLAC 1.6.0 + pydoll lib, no chromium).
+- Builds from `./Dockerfile` (SpotiFLAC 5.0.6 + Node.js + pydoll lib, no
+  Chromium).
 - `.:/app` bind-mount: edit code and `docker compose restart` to apply.
 - Music + SpotiFLAC config live in the mounted volumes
   (`~/Music`, `~/.spotiflac`) — downloads survive container rebuilds.
+- Downloads go through SpotiFLAC's JS extensions, which need Node.js (baked
+  into the image) and a signed `zarz-v2` session. Sessions live in
+  `~/.spotiflac/signed_sessions/`; the bot refreshes them every 2h. The first
+  session must be created on a machine with a browser:
+  `python scripts/seed_sessions.py --data-dir ~/.spotiflac`, then copy the
+  `zarz-v2-*.json` files to the server's volume (mode 0600). The bot itself
+  never runs a browser.
 - One container: `music-bot` runs the Telegram bot and, with `RUN_API=1`
   (set by compose), the HTTP API on port `8099` in a daemon thread. The
   standalone `python api.py` service remains supported.
@@ -29,9 +37,15 @@ docker compose logs -f music-bot
 docker-compose -f docker-compose.truenas.yml up -d
 ```
 
-- Uses a **pinned** ghcr tag (e.g. `:1.1.0` or `:sha-<commit>`), not `latest`.
+- Uses a **pinned** ghcr tag (default `:1.2.0`; override with
+  `SPOTY_LOOP_TAG`), not `latest`.
 - Volumes point at `/mnt/pool/navidrome/Music` (shared with Navidrome) and
-  `/mnt/pool/VM/spotiflac` (SpotiFLAC config/credentials).
+  `/mnt/pool/VM/spotiflac` (SpotiFLAC config/credentials/extensions/sessions).
+- After the first deploy, seed the sessions once (from a machine with a
+  browser) and copy them to `/mnt/pool/VM/spotiflac/signed_sessions/`. The
+  worker refreshes them every 2h, so later image rebuilds need no manual
+  session work as long as the volume is kept and the container is not stopped
+  for longer than the session lifetime.
 - One container with `RUN_API=1`: the API runs in a daemon thread inside the
   bot process, so it shares the same `queue.db` and mounts. The standalone
   `python api.py` service remains supported if you prefer two processes.
@@ -52,9 +66,9 @@ GitHub Actions on `main`:
 Release:
 
 ```bash
-git tag v1.2.3
-git push origin v1.2.3
-# then pin docker-compose.truenas.yml to :1.2.3 and redeploy
+git tag v1.2.0
+git push origin v1.2.0
+# docker-compose.truenas.yml already defaults to :1.2.0
 ```
 
 The parent is stdlib-only, so the CI test job does not need the full SpotiFLAC
@@ -69,7 +83,8 @@ sleep 30                                   # let the bot settle
 docker stats --no-stream music-bot         # MEM USAGE
 ```
 
-Measured after the KISS/RSS pass: **~29MiB host** for the parent and
-**~22MiB for the single container** (`docker stats` with `RUN_API=1`). That is
-well under the old ~89MiB; the subprocess only exists while a job is running,
-so it is never resident at idle.
+Current measurement (Python 3.14.10 base): **~36MiB** in the single container
+with `RUN_API=1`, and ~40MiB on the host for the same code. The parent code is
+unchanged stdlib-only; the SpotiFLAC 5.x deps live in the download subprocess
+and are not resident at idle. The old ~89MiB single-process bot is still the
+reference ceiling.
