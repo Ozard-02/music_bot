@@ -429,16 +429,35 @@ class TestEnqueue:
         assert bot._qm.get_status()["running"] == 0
 
     @pytest.mark.asyncio
-    async def test_duplicate_link_not_requeued(self, bot):
+    async def test_duplicate_link_is_requeued(self, bot):
         bot._client.send_message = AsyncMock()
         await bot._handle_update(
             _update(text="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
         )
+        item_id, _ = bot._qm.enqueue_unique(
+            "link", "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT", 12345
+        )
+        bot._qm.log_failed_track(item_id, "Track", "download_failed")
         await bot._handle_update(
             _update(text="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
         )
         assert bot._qm.get_status()["queued"] == 1
-        _assert_sent(bot, "Already queued")
+        assert bot._qm.get_item(item_id)["retries"] == 0
+        assert bot._qm.get_failed_tracks(item_id=item_id) == []
+        _assert_sent(bot, "Re-queued")
+
+    @pytest.mark.asyncio
+    async def test_duplicate_running_link_not_requeued(self, bot):
+        bot._client.send_message = AsyncMock()
+        await bot._handle_update(
+            _update(text="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
+        )
+        item = bot._qm.dequeue()
+        await bot._handle_update(
+            _update(text="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
+        )
+        assert bot._qm.get_item(item["id"])["status"] == "running"
+        _assert_sent(bot, "Already running")
 
     @pytest.mark.asyncio
     async def test_search_queued(self, bot):

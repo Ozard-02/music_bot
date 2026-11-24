@@ -720,28 +720,48 @@ class Bot:
 
         _get_or_create_user(self._qm, user, self._cfg.get("quality", "LOSSLESS"))
 
-        queued: list[tuple[int, str]] = []
-        dupes: list[tuple[int, str]] = []
+        queued: list[tuple[int, str, bool]] = []  # (id, value, was_requeued)
+        dupes: list[tuple[int, str, str]] = []  # (id, value, status)
         for input_type, value in valid:
             item_id, is_new = await asyncio.to_thread(
                 self._qm.enqueue_unique, input_type, value, user["id"],
             )
             if is_new:
-                queued.append((item_id, value))
+                queued.append((item_id, value, False))
                 self._logger.info("Enqueued #%d: %s (%s)", item_id, value, input_type)
+                continue
+
+            # A duplicate is only "already queued" if it is actually running.
+            # Re-sending a link after a failure/backoff should retry it (and
+            # clear the per-track give-up rows) instead of leaving it stuck.
+            row = await asyncio.to_thread(self._qm.get_item, item_id)
+            status = str((row or {}).get("status") or "")
+            if status == "queued" and await asyncio.to_thread(
+                self._qm.retry_item, item_id, user["id"]
+            ):
+                queued.append((item_id, value, True))
+                self._logger.info("Requeued duplicate #%d: %s", item_id, value)
             else:
-                dupes.append((item_id, value))
+                dupes.append((item_id, value, status or "queued"))
 
         if queued:
             self._wake_event.set()
 
         if len(entries) == 1:
             # Single entry: keep the personal per-item reply
-            item_id, value = (queued + dupes)[0]
+            item_id, value, was_requeued = (queued + dupes)[0]
             if not queued:
+                label = "running" if was_requeued == "running" else "queued"
                 await self._client.send_message(
                     chat_id,
-                    f"⚠️ <b>Already queued as #{item_id}</b>\n  <code>{esc(value[:80])}</code>",
+                    f"⚠️ <b>Already {label} as #{item_id}</b>\n  <code>{esc(value[:80])}</code>",
+                )
+                return
+            if was_requeued:
+                await self._client.send_message(
+                    chat_id,
+                    f"🔄 <b>Re-queued #{item_id}</b>\n"
+                    f"  Retry counter reset.\n  <code>{esc(value[:80])}</code>",
                 )
                 return
             s = await asyncio.to_thread(self._qm.get_status, user["id"])
@@ -754,13 +774,17 @@ class Bot:
 
         # A pasted list: one summary instead of a message storm.
         lines = [f"📥 <b>Queued {len(queued)} item{'s' if len(queued) != 1 else ''}</b>"]
-        for item_id, value in queued[:_MAX_LISTED_FILES]:
-            lines.append(f"  #{item_id} <code>{esc(value[:60])}</code>")
+        for item_id, value, was_requeued in queued[:_MAX_LISTED_FILES]:
+            prefix = "🔄 " if was_requeued else ""
+            lines.append(f"  {prefix}#{item_id} <code>{esc(value[:60])}</code>")
         if len(queued) > _MAX_LISTED_FILES:
             lines.append(f"  … and {len(queued) - _MAX_LISTED_FILES} more")
         if dupes:
+            running = sum(1 for _, _, status in dupes if status == "running")
+            label = "running" if running == len(dupes) else "queued/running"
             lines.append(
-                f"  ⚠️ {len(dupes)} already queued (last: <code>{esc(dupes[-1][1][:60])}</code>)"
+                f"  ⚠️ {len(dupes)} already {label} "
+                f"(last: <code>{esc(dupes[-1][1][:60])}</code>)"
             )
         for value in invalid[:_MAX_LISTED_FILES]:
             lines.append(f"  ❓ Unrecognised: <code>{esc(value[:60])}</code>")
