@@ -290,3 +290,14 @@ the native providers entirely: every download now goes through a JS extension.
       `ext:qobuz-web`; Docker image (Node 20.19.2, SpotiFLAC 5.0.6) downloaded
       a track with mounted sessions and no browser.
 - [x] Document the one-time session seed + TrueNAS volume requirement.
+
+## Phase 16 — 1.2.1 hardening (2026-11-25)
+
+- [x] Duplicate link resend now requeues a queued item (clears retries and
+      `failed_tracks`) instead of replying "already queued"; running items are
+      left alone.
+- [x] Session keeper checks immediately at worker startup (then every 2h).
+- [x] `session_refresh.py` emits a JSON summary; Telegram warnings distinguish
+      missing extensions, expired sessions and transient refresh errors.
+- [x] Pin `pydoll-python==3.0.1` in the Dockerfile and tests.
+- [x] Tests: 495 passed.

@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # but never invoked: no chromium binary is installed, so no browser can spawn.
 # Node.js (installed above) is required by the JS extension runtime that
 # SpotiFLAC 5.x uses for every download provider.
-RUN pip install --no-cache-dir SpotiFLAC==5.0.6 pydoll-python
+RUN pip install --no-cache-dir SpotiFLAC==5.0.6 pydoll-python==3.0.1
 
 COPY . .
 

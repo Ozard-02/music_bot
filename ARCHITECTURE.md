@@ -78,8 +78,8 @@ the image includes Node.js.  The extensions authenticate against the Zarz v2
 gateway with a signed session stored in `~/.spotiflac/signed_sessions/`.
 
 A session lasts ~5 hours and is refreshed 2h before expiry.  `worker.py` runs
-`session_refresh.py` every 2h in a subprocess, so a bot that is idle for a
-while keeps working without a browser.  The first session must be created once
+`session_refresh.py` at startup and every 2h in a subprocess, so a bot that is
+idle for a while keeps working without a browser.  The first session must be created once
 with `scripts/seed_sessions.py` on a machine with a browser; the bot itself
 never launches one.  If the session is missing/expired, downloads fail and the
 worker sends a Telegram warning instead of retrying silently.

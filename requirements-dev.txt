@@ -3,6 +3,6 @@
 # requirements.txt) plus the pytest plugins the async tests need.
 -r requirements.txt
 SpotiFLAC==5.0.6
-pydoll-python
+pydoll-python==3.0.1
 pytest>=8
 pytest-asyncio>=0.23
