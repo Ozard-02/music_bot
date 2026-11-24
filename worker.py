@@ -28,7 +28,6 @@ from config import (
     SPOTIFY_BLOCK_PAUSE,
     SESSION_REFRESH_INTERVAL,
     SESSION_REFRESH_SCRIPT,
-    SESSION_REFRESH_START_DELAY,
     WORKER_IDLE_POLL_MAX,
     esc,
     file_log_path,
@@ -78,6 +77,55 @@ def is_permanent_failure(error: str | None) -> bool:
         return False
     text = str(error).lower()
     return any(marker in text for marker in _PERMANENT_ERROR_MARKERS)
+
+
+def session_alert(summary: dict) -> str | None:
+    """Turn a session_refresh.py summary into an actionable Telegram message.
+
+    Distinguishes a missing extension from an expired session and from a
+    transient refresh error; None means the required sessions are healthy.
+    """
+    failed = [str(item) for item in (summary.get("required_failed") or [])]
+    if not failed:
+        return None
+    results = {
+        str(item.get("name")): item
+        for item in (summary.get("results") or [])
+        if isinstance(item, dict)
+    }
+    missing = [
+        name for name in failed
+        if results.get(name, {}).get("state") == "not-installed"
+    ]
+    expired = [
+        name for name in failed
+        if results.get(name, {}).get("state") in ("expired", "no-session")
+    ]
+    other = [name for name in failed if name not in missing and name not in expired]
+
+    lines = ["⚠️ <b>Download sessions need attention</b>"]
+    if missing:
+        lines.append(
+            "  Missing extension: "
+            + ", ".join(f"<code>{esc(name)}</code>" for name in missing)
+        )
+        lines.append("  Copy <code>~/.spotiflac/extensions/</code> to the server volume.")
+    if expired:
+        lines.append(
+            "  Expired session: "
+            + ", ".join(f"<code>{esc(name)}</code>" for name in expired)
+        )
+        lines.append(
+            "  Run <code>scripts/seed_sessions.py</code> on a machine with a "
+            "browser, then copy the JSON files to the server."
+        )
+    if other:
+        lines.append(
+            "  Refresh error: "
+            + ", ".join(f"<code>{esc(name)}</code>" for name in other)
+        )
+        lines.append("  Check <code>spoty_loop.log</code>.")
+    return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -354,7 +402,6 @@ class Worker:
         covers long idle periods. It runs in a subprocess so the parent never
         imports SpotiFLAC, and it never opens a browser.
         """
-        await asyncio.sleep(SESSION_REFRESH_START_DELAY)
         while not self._shutdown:
             await self._refresh_sessions()
             await asyncio.sleep(SESSION_REFRESH_INTERVAL)
@@ -407,19 +454,28 @@ class Worker:
             self._session_warned = False
             return
 
+        summary: dict = {}
+        for line in reversed(out.decode("utf-8", errors="replace").splitlines()):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                summary = json.loads(line)
+                break
+            except ValueError:
+                continue
+
         detail = (err or out or b"").decode("utf-8", errors="replace").strip()
         self._logger.warning(
             "Session refresh failed (rc=%s): %s", proc.returncode, detail[-800:]
         )
         if not self._session_warned:
             self._session_warned = True
-            await self._safe_notify(
-                "⚠️ <b>Spotify session expired</b>\n"
-                "  Downloads will fail until it is renewed.\n"
-                "  Run <code>scripts/seed_sessions.py</code> on a machine with a browser, "
-                "then copy the JSON files into <code>~/.spotiflac/signed_sessions/</code>.",
-                self._chat_id,
+            alert = session_alert(summary) or (
+                "⚠️ <b>Signed-session refresh failed</b>\n"
+                "  Check <code>spoty_loop.log</code>."
             )
+            await self._safe_notify(alert, self._chat_id)
 
     async def _process(self, item: dict):
         self._logger.info("Processing #%d: %s", item["id"], item["query"])

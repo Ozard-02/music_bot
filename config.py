@@ -18,7 +18,6 @@ SESSION_REFRESH_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "session_refresh.py"
 )
 SESSION_REFRESH_INTERVAL = 7200  # 2h; sessions last ~5h and refresh 2h before expiry
-SESSION_REFRESH_START_DELAY = 60  # let startup settle before the first check
 
 
 def esc(value) -> str:

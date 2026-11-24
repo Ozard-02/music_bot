@@ -152,6 +152,14 @@ async def main_async(args) -> int:
         item for item in results
         if item["name"] in required and item.get("state") != "active"
     ]
+    summary = {
+        "ok": not failed,
+        "required": sorted(required),
+        "required_failed": [item["name"] for item in failed],
+        "results": results,
+    }
+    # stdout is for the worker; the human-readable lines stay on stderr.
+    print(json.dumps(summary), flush=True)
     if failed:
         log.warning(
             "Required sessions not active: %s",

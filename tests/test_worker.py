@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from config import MAX_QUEUE_RETRIES, MAX_TRACK_RETRIES, RETRY_BACKOFF_BASE, SPOTIFY_BLOCK_PAUSE
-from worker import Worker, decide_failure, is_permanent_failure
+from worker import Worker, decide_failure, is_permanent_failure, session_alert
 
 
 class TestPermanentFailure:
@@ -481,3 +481,34 @@ class TestSessionKeeper:
             "tidal-web,deezer",
             "tidal-web,deezer",
         )
+
+
+class TestSessionAlert:
+    """The keeper's message must tell the user what to fix."""
+
+    def test_healthy_returns_none(self):
+        assert session_alert({"required_failed": [], "results": []}) is None
+
+    def test_missing_extension(self):
+        msg = session_alert({
+            "required_failed": ["deezer"],
+            "results": [{"name": "deezer", "state": "not-installed"}],
+        })
+        assert "Missing extension" in msg
+        assert "extensions/" in msg
+
+    def test_expired_session(self):
+        msg = session_alert({
+            "required_failed": ["qobuz-web"],
+            "results": [{"name": "qobuz-web", "state": "expired"}],
+        })
+        assert "Expired session" in msg
+        assert "seed_sessions.py" in msg
+
+    def test_refresh_error(self):
+        msg = session_alert({
+            "required_failed": ["deezer"],
+            "results": [{"name": "deezer", "state": "error", "error": "timeout"}],
+        })
+        assert "Refresh error" in msg
+        assert "spoty_loop.log" in msg
