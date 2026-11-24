@@ -87,6 +87,10 @@ def _client_kwargs(cfg: dict) -> dict:
         "max_concurrent_downloads": MAX_CONCURRENT,
         # SpotiFLAC 5.x defaults to True; keep the 1.x tagging behaviour.
         "include_featuring": False,
+        # Pin the installed extensions: the signed session is keyed by the
+        # manifest's appVersion, so an automatic extension update can orphan
+        # it. Updates are explicit (copy extensions + re-seed when needed).
+        "sync_extensions": False,
     }
 
 
