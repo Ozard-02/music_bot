@@ -226,6 +226,8 @@ class TestQueueManager:
         qm.enqueue_unique("link", "url", user=1)
         item = qm.dequeue()
         qm.mark_failed(item["id"], "boom")
+        qm.log_failed_track(item["id"], "Broken Song", "Deezer 404")
+        assert qm.get_give_up_titles(item["id"], threshold=1) == {"Broken Song"}
 
         assert qm.retry_item(item["id"], user_id=2) is False
         assert qm.retry_item(item["id"], user_id=1) is True
@@ -233,6 +235,10 @@ class TestQueueManager:
         assert row["status"] == "queued"
         assert row["retries"] == 0
         assert row["error"] is None
+        # A manual retry clears the give-up rows, otherwise the next job
+        # would skip the track again.
+        assert qm.get_failed_tracks(item_id=item["id"]) == []
+        assert qm.get_give_up_titles(item["id"], threshold=1) == set()
 
     def test_permanent_failure_gives_up_immediately_and_uses_track_id(
         self, queue_manager: QueueManager,

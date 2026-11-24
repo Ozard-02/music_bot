@@ -250,6 +250,13 @@ class QueueManager:
                         "WHERE id=? AND status != 'running' AND user IS ?",
                         (item_id, user_id),
                     )
+                # A manual retry must also clear the per-track give-up counter:
+                # otherwise get_give_up_titles() skips every track that already
+                # reached MAX_TRACK_RETRIES and the retry does nothing.
+                if cursor.rowcount > 0:
+                    conn.execute(
+                        "DELETE FROM failed_tracks WHERE item_id=?", (item_id,)
+                    )
                 return cursor.rowcount > 0
 
     def mark_done(self, item_id: int, ok: int, skipped: int, failed: int):
