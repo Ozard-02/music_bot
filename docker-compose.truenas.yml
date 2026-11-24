@@ -10,8 +10,9 @@ services:
       # One container: the API runs in a daemon thread inside bot.py.
       - RUN_API=1
     volumes:
-      - /mnt/pool/navidrome/Music:/root/Music
-      - /mnt/pool/VM/spotiflac:/root/.spotiflac
+      # Adjust the pool name (TB2 in the reference deployment) if needed.
+      - /mnt/${TRUENAS_POOL:-TB2}/navidrome/Music:/root/Music
+      - /mnt/${TRUENAS_POOL:-TB2}/VM/spotiflac:/root/.spotiflac
     ports:
       - "8099:8099"
     restart: unless-stopped

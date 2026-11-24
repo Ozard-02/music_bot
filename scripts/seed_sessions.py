@@ -33,6 +33,34 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+async def _manual_grant(client) -> None:
+    """Browser-independent fallback: open the challenge, paste the grant.
+
+    SpotiFLAC 5.x has no `authenticate_with_manual_grant()` helper anymore
+    (only the automatic Turnstile path and the low-level bootstrap/exchange
+    pair), so the flow is reproduced here.
+    """
+    boot = await client.bootstrap()
+    if boot is True:
+        return  # session obtained directly
+    if not client.pending_challenge_id:
+        raise RuntimeError(f"bootstrap did not provide a challenge (got {boot!r})")
+    challenge_url = client._build_challenge_url_with_callback(
+        client.pending_challenge_id,
+        "http://127.0.0.1:1/callback",
+    )
+    print(
+        "\nOpen this URL, solve the Turnstile, then copy the `grant` value from\n"
+        "DevTools → Network → the `verify` request → Preview (valid ~60s):\n\n"
+        f"{challenge_url}\n",
+        file=sys.stderr,
+    )
+    grant = input("Paste grant: ").strip()
+    if not grant:
+        raise RuntimeError("no grant provided")
+    await client.exchange_grant(grant)
+
+
 async def _seed_one(name: str, root: Path, manual: bool) -> tuple[str, bool, str]:
     manifest_path = root / "extensions" / name / "manifest.json"
     if not manifest_path.exists():
@@ -47,18 +75,18 @@ async def _seed_one(name: str, root: Path, manual: bool) -> tuple[str, bool, str
     try:
         if client.authenticated:
             return name, True, f"already active until {client.expires_at}"
-        try:
-            if manual:
-                raise RuntimeError("manual mode requested")
-            await client.authenticate_with_turnstile(timeout=90)
-        except Exception as exc:
-            if not manual:
+        if manual:
+            await _manual_grant(client)
+        else:
+            try:
+                await client.authenticate_with_turnstile(timeout=90)
+            except Exception as exc:
                 print(
                     f"{name}: automatic Turnstile failed ({exc}); "
                     "retrying with manual grant",
                     file=sys.stderr,
                 )
-            await client.authenticate_with_manual_grant(timeout=300)
+                await _manual_grant(client)
         if not client.authenticated:
             return name, False, "authentication finished but no session is active"
         return name, True, f"active until {client.expires_at}"

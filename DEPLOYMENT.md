@@ -39,8 +39,10 @@ docker-compose -f docker-compose.truenas.yml up -d
 
 - Uses a **pinned** ghcr tag (default `:1.2.0`; override with
   `SPOTY_LOOP_TAG`), not `latest`.
-- Volumes point at `/mnt/pool/navidrome/Music` (shared with Navidrome) and
-  `/mnt/pool/VM/spotiflac` (SpotiFLAC config/credentials/extensions/sessions).
+- Volumes point at `/mnt/<pool>/navidrome/Music` (shared with Navidrome) and
+  `/mnt/<pool>/VM/spotiflac` (SpotiFLAC config/credentials/extensions/sessions).
+  The reference deployment uses pool `TB2`; the compose file defaults to it
+  via `TRUENAS_POOL`.
 - After the first deploy, seed the sessions once (from a machine with a
   browser) and copy them to `/mnt/pool/VM/spotiflac/signed_sessions/`. The
   worker refreshes them every 2h, so later image rebuilds need no manual
@@ -58,9 +60,9 @@ extensions and a valid session:
 
 # copy the extension code + the two active session files to the NAS
 # (the session files are 0600; use sudo/root on both sides)
-sudo rsync -a ~/.spotiflac/extensions/ root@truenas:/mnt/pool/VM/spotiflac/extensions/
+sudo rsync -a ~/.spotiflac/extensions/ root@truenas:/mnt/TB2/VM/spotiflac/extensions/
 sudo scp ~/.spotiflac/signed_sessions/zarz-v2-*.json \
-  root@truenas:/mnt/pool/VM/spotiflac/signed_sessions/
+  root@truenas:/mnt/TB2/VM/spotiflac/signed_sessions/
 ```
 
 Only the active `zarz-v2-*.json` files matter; orphaned/expired ones are
