@@ -69,6 +69,11 @@ HMAC-signed with the session secret, not IP-bound), run the seed script against
 a temporary container with Chromium on the NAS network — never add Chromium to
 the bot image itself.
 
+The bot pins the installed extensions (`sync_extensions=False`) because the
+session file is keyed by the manifest's `appVersion`.  To update a provider,
+copy a newer `extensions/` directory and re-seed if that `appVersion` changed;
+do not rely on a runtime extension update.
+
 After that, `session_refresh.py` keeps the sessions alive and a plain
 `docker compose -f docker-compose.truenas.yml pull && up -d` is enough for
 later image builds.
