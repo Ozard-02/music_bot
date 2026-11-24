@@ -46,6 +46,32 @@ docker-compose -f docker-compose.truenas.yml up -d
   worker refreshes them every 2h, so later image rebuilds need no manual
   session work as long as the volume is kept and the container is not stopped
   for longer than the session lifetime.
+
+### First 5.x migration (one time)
+
+The 5.x providers are JS extensions, so the volume needs both the current
+extensions and a valid session:
+
+```bash
+# on the workstation, with the repo venv and a browser
+.venv/bin/python scripts/seed_sessions.py --data-dir ~/.spotiflac
+
+# copy the extension code + the two active session files to the NAS
+# (the session files are 0600; use sudo/root on both sides)
+sudo rsync -a ~/.spotiflac/extensions/ root@truenas:/mnt/pool/VM/spotiflac/extensions/
+sudo scp ~/.spotiflac/signed_sessions/zarz-v2-*.json \
+  root@truenas:/mnt/pool/VM/spotiflac/signed_sessions/
+```
+
+Only the active `zarz-v2-*.json` files matter; orphaned/expired ones are
+harmless.  If the NAS IP is rejected by the gateway (unlikely: the refresh is
+HMAC-signed with the session secret, not IP-bound), run the seed script against
+a temporary container with Chromium on the NAS network — never add Chromium to
+the bot image itself.
+
+After that, `session_refresh.py` keeps the sessions alive and a plain
+`docker compose -f docker-compose.truenas.yml pull && up -d` is enough for
+later image builds.
 - One container with `RUN_API=1`: the API runs in a daemon thread inside the
   bot process, so it shares the same `queue.db` and mounts. The standalone
   `python api.py` service remains supported if you prefer two processes.
