@@ -1,6 +1,6 @@
 """Deezer metadata → SpotiFLAC TrackMetadata (subprocess only).
 
-Deezer's public API gives us everything the provider chain needs: title,
+Deezer's public API gives us everything the provider/extension chain needs: title,
 artist, album, duration, ISRC, track/disc numbers, cover and release date.
 The download still goes through SpotiFLAC's Qobuz/Deezer/Amazon providers;
 only the metadata source changes for the Laila path.

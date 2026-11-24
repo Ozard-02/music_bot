@@ -12,6 +12,7 @@ ENV MALLOC_ARENA_MAX=2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     flac \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,7 +21,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # pydoll is an import-time dependency of SpotiFLAC (amazon -> signed_session_mono),
 # but never invoked: no chromium binary is installed, so no browser can spawn.
-RUN pip install --no-cache-dir SpotiFLAC==1.6.0 pydoll-python
+# Node.js (installed above) is required by the JS extension runtime that
+# SpotiFLAC 5.x uses for every download provider.
+RUN pip install --no-cache-dir SpotiFLAC==5.0.6 pydoll-python
 
 COPY . .
 

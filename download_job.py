@@ -80,7 +80,7 @@ async def _maybe_m3u8(spec: dict, logger: logging.Logger) -> None:
     """Auto-build an .m3u8 for playlist downloads (SpotiFLAC lives here)."""
     if not spec.get("want_m3u8"):
         return
-    from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+    from SpotiFLAC.core.spotify_metadata import parse_spotify_url
     from m3u8 import build_m3u8
 
     url = spec.get("url")

@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 from SpotiFLAC import TrackMetadata
 from SpotiFLAC.client import SpotifyMetadataClient
-from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+from SpotiFLAC.core.spotify_metadata import parse_spotify_url
 
 from config import load_config
 from track_utils import (

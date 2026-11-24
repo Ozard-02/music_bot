@@ -18,8 +18,8 @@ from pathlib import Path
 from config import MAX_CONCURRENT, PER_TRACK_TIMEOUT, PER_TRACK_RETRIES, SPOTIFY_BLOCKED_ERROR
 
 # Import the patch before anything that imports SpotiFLAC: it skips the GitHub
-# version check and installs the provider guards at import time.
-from spotiflac_patch import pop_track_provider
+# version check and installs the console/MusicBrainz patches at import time.
+import spotiflac_patch  # noqa: F401
 
 from deezer_meta import (
     DeezerMetadataError,
@@ -85,6 +85,8 @@ def _client_kwargs(cfg: dict) -> dict:
         "track_max_retries": PER_TRACK_RETRIES,
         "timeout_s": PER_TRACK_TIMEOUT,
         "max_concurrent_downloads": MAX_CONCURRENT,
+        # SpotiFLAC 5.x defaults to True; keep the 1.x tagging behaviour.
+        "include_featuring": False,
     }
 
 
@@ -97,7 +99,7 @@ async def run_url(
     failure_cb=None,
 ) -> DownloadResult:
     from SpotiFLAC import AsyncSpotiFLAC
-    from SpotiFLAC.providers.spotify_metadata import parse_spotify_url
+    from SpotiFLAC.core.spotify_metadata import parse_spotify_url
 
     parsed = parse_spotify_url(url)
 
@@ -297,6 +299,19 @@ def _rename_after_download(track, cfg: dict, logger: logging.Logger, started: fl
         logger.warning("Rename %s -> %s failed: %s", spoti_rel, orig_rel, exc)
 
 
+def _last_result(client, track_id: str):
+    """Best-effort per-track DownloadResult from SpotiFLAC 5.x.
+
+    The engine keeps the last batch in ``_last_results``; concurrent downloads
+    share it, so this is only a hint for the provider name and error text —
+    never the source of truth for whether a file was written.
+    """
+    results = getattr(getattr(client, "_downloader", None), "_last_results", None)
+    if isinstance(results, dict):
+        return results.get(track_id)
+    return None
+
+
 async def _download_tracks(
     client,
     tracks: list,
@@ -339,6 +354,7 @@ async def _download_tracks(
             if lock_fd is None:
                 skipped_inflight.append(track)
                 return
+            failed_here = False
             try:
                 started = time.time()
                 if download_one is not None:
@@ -346,13 +362,16 @@ async def _download_tracks(
                 else:
                     fl = await client.download_track(track.external_url)
                 if fl:
+                    failed_here = True
                     failed_list.append(track)
                     if failure_cb:
                         for f in fl:
                             if isinstance(f, tuple):
                                 title, err = f[1], f[3] or "download_failed"
                             else:
-                                title, err = f.title, "download_failed"
+                                title = f.title
+                                result = _last_result(client, track.id)
+                                err = getattr(result, "error", None) or "download_failed"
                             failure_cb(track.id, title, err)
                 else:
                     await asyncio.to_thread(_rename_after_download, track, cfg, logger, started)
@@ -360,6 +379,7 @@ async def _download_tracks(
                     if cfg.get("embed_lyrics"):
                         await asyncio.to_thread(_write_lyrics_sidecar, track, cfg, logger)
             except Exception as exc:
+                failed_here = True
                 failed_list.append(track)
                 if failure_cb:
                     failure_cb(track.id, track.title, str(exc))
@@ -370,9 +390,12 @@ async def _download_tracks(
                     except OSError:
                         pass
             done_count += 1
-            provider = pop_track_provider(track.id)
-            if provider:
-                providers[provider] = providers.get(provider, 0) + 1
+            provider = None
+            if not failed_here:
+                result = _last_result(client, track.id)
+                provider = getattr(result, "provider", None)
+                if provider:
+                    providers[provider] = providers.get(provider, 0) + 1
             if progress_cb:
                 # Called inline (cheap: one stdout line in the job process)
                 # so every protocol write stays on the event-loop thread.

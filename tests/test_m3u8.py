@@ -35,6 +35,7 @@ def make_track(
     t.title = title
     t.artists = artists
     t.first_artist = first_artist
+    t.first_album_artist = album_artist
     t.album = album
     t.album_artist = album_artist
     t.duration_seconds = duration_seconds

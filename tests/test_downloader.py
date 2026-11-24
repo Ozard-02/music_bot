@@ -33,6 +33,7 @@ def _mock_track(track_id: str, title: str, **kwargs):
     t.title = title
     t.external_url = f"https://open.spotify.com/track/{track_id}"
     t.first_artist = kwargs.get("first_artist", "Artist")
+    t.first_album_artist = kwargs.get("first_album_artist", "AlbumArtist")
     t.artists = kwargs.get("artists", "Artist")
     t.album_artist = kwargs.get("album_artist", "AlbumArtist")
     t.album = kwargs.get("album", "Album")
@@ -220,7 +221,7 @@ class TestRunUrl:
         track = _mock_track("abc123", "Test Track")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track, download_return=[], cfg=config)
@@ -256,7 +257,7 @@ class TestRunUrl:
 
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track)
@@ -274,7 +275,7 @@ class TestRunUrl:
         failed = [_mock_track("abc123", "Test Track")]
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track, download_return=failed)
@@ -295,7 +296,7 @@ class TestRunUrl:
         instead of returning a retryable failure."""
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = AsyncMock()
@@ -320,7 +321,7 @@ class TestRunUrl:
         so the worker pauses the whole queue instead of hammering Spotify."""
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = AsyncMock()
@@ -358,7 +359,7 @@ class TestRunUrl:
 
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(playlist_return=({"name": "Test Album", "type": "album"}, [t1, t2]))
@@ -386,7 +387,7 @@ class TestRunUrl:
         }
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -427,7 +428,7 @@ class TestRunUrl:
 
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -452,7 +453,7 @@ class TestRunUrl:
         t2 = _mock_track("t2", "Song B")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -478,7 +479,7 @@ class TestRunUrl:
         t2 = _mock_track("t2", "Song B")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -503,7 +504,7 @@ class TestRunUrl:
                                 album="Album", album_artist="Artist")]
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -525,7 +526,7 @@ class TestRunUrl:
         track = _mock_track("abc123", "Test Track")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track)
@@ -546,7 +547,7 @@ class TestRunUrl:
         calls = []
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -573,7 +574,7 @@ class TestRunUrl:
         calls = []
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -596,7 +597,7 @@ class TestRunUrl:
         calls = []
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track)
@@ -616,7 +617,7 @@ class TestRunUrl:
         calls = []
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track, download_return=[], cfg=config)
@@ -634,7 +635,7 @@ class TestRunUrl:
         t2 = _mock_track("t2", "Song B")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -661,7 +662,7 @@ class TestRunUrl:
         calls = []
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "track", "id": "abc123"}
             client = _make_client(track_return=track)  # no cfg -> writes nothing
@@ -726,7 +727,7 @@ class TestRunUrl:
         t2 = _mock_track("t2", "Song B")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -758,8 +759,7 @@ class TestRunUrl:
         t2 = _mock_track("t2", "Song B")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
-            patch("downloader.pop_track_provider") as mock_pop,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -770,7 +770,14 @@ class TestRunUrl:
             mock_cls.return_value.__aenter__ = AsyncMock(return_value=client)
             mock_cls.return_value.__aexit__ = AsyncMock()
 
-            mock_pop.side_effect = lambda track_id: {"t1": "deezer", "t2": "amazon"}.get(track_id)
+            # SpotiFLAC 5.x exposes the per-track result (and its provider)
+            # through the engine; the downloader treats it as a hint.
+            from SpotiFLAC.core.models import DownloadResult
+
+            client._downloader._last_results = {
+                "t1": DownloadResult(success=True, provider="deezer", file_path="/tmp/a"),
+                "t2": DownloadResult(success=True, provider="amazon", file_path="/tmp/b"),
+            }
 
             calls = []
 
@@ -790,7 +797,7 @@ class TestRunUrl:
         t1 = _mock_track("t1", "Song A")
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
         ):
             mock_parse.return_value = {"type": "album", "id": "alb123"}
             client = _make_client(
@@ -838,7 +845,7 @@ class TestRunUrl:
 
         with (
             patch("SpotiFLAC.AsyncSpotiFLAC") as mock_cls,
-            patch("SpotiFLAC.providers.spotify_metadata.parse_spotify_url") as mock_parse,
+            patch("SpotiFLAC.core.spotify_metadata.parse_spotify_url") as mock_parse,
             patch("downloader.resolve_cover_data", new=AsyncMock(return_value=None)),
             patch("downloader.read_lrc", new=lambda p: "[01:23.45]hello\n[02:30.00]bye"),
         ):
@@ -947,19 +954,6 @@ class TestConsoleSilencing:
         out, err = capsys.readouterr()
         assert out == "" and err == ""
 
-    def test_provider_copies_are_noops(self, capsys):
-        from SpotiFLAC.core import console
-        from SpotiFLAC.providers import qobuz, tidal
-
-        assert qobuz.print_api_failure is console.print_api_failure
-        assert qobuz.print_source_banner is console.print_source_banner
-        assert tidal.print_quality_fallback is console.print_quality_fallback
-        qobuz.print_api_failure("qobuz", "", "bound to a different event loop")
-        tidal.print_source_banner("tidal", "", "FLAC")
-
-        out, err = capsys.readouterr()
-        assert out == "" and err == ""
-
     def test_builtins_input_is_noop(self, capsys):
         import builtins
 
@@ -967,47 +961,6 @@ class TestConsoleSilencing:
         assert builtins.input(prompt) == ""
         out, err = capsys.readouterr()
         assert out == "" and err == ""
-
-
-class TestQobuzLockPatch:
-    """QobuzProvider stores an asyncio.Lock bound to the first event loop;
-    SpotiFLAC awaits it from fresh loops and dies with 'bound to a different
-    event loop'.  _patch_qobuz_lock must replace it with a loop-agnostic lock."""
-
-    def test_provider_uses_loop_agnostic_lock(self):
-        from spotiflac_patch import _AsyncLockAdapter
-        from SpotiFLAC.providers.qobuz import QobuzProvider
-
-        provider = QobuzProvider()
-        assert isinstance(provider._creds_lock, _AsyncLockAdapter)
-
-    @pytest.mark.asyncio
-    async def test_lock_works_across_two_event_loops(self):
-        import threading
-        from spotiflac_patch import _AsyncLockAdapter
-
-        lock = _AsyncLockAdapter()
-
-        async def _probe(l):
-            async with l:
-                pass
-
-        results = []
-
-        def _run_in_new_loop():
-            asyncio.run(_probe(lock))
-            results.append(True)
-
-        await _probe(lock)
-
-        threads = [threading.Thread(target=_run_in_new_loop) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
-
-        assert results == [True, True]
-        assert not any(t.is_alive() for t in threads)
 
 
 class TestRenameAfterDownload:
