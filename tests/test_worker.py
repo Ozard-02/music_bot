@@ -458,3 +458,26 @@ class TestWorkerPerUser:
         assert captured["cfg"]["output_dir"] == str(tmp_path)
         bot.assert_awaited_once()
         assert bot.call_args[0][1] == 12345
+
+class TestSessionKeeper:
+    """The keeper maps configured services to extension ids; no browser."""
+
+    def test_maps_configured_services(self, worker):
+        assert worker._session_extension_names() == (
+            "qobuz-web,deezer,amazon",
+            "qobuz-web,deezer",
+        )
+
+    def test_falls_back_when_services_empty(self, worker):
+        worker._cfg = {**worker._cfg, "services": []}
+        assert worker._session_extension_names() == (
+            "deezer,qobuz-web,amazon",
+            "deezer,qobuz-web",
+        )
+
+    def test_strips_ext_prefix_and_tidal_alias(self, worker):
+        worker._cfg = {**worker._cfg, "services": ["ext:tidal", "deezer"]}
+        assert worker._session_extension_names() == (
+            "tidal-web,deezer",
+            "tidal-web,deezer",
+        )

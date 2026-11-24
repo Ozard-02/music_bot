@@ -26,6 +26,9 @@ from config import (
     MAX_RETRY_BACKOFF,
     SPOTIFY_BLOCKED_ERROR,
     SPOTIFY_BLOCK_PAUSE,
+    SESSION_REFRESH_INTERVAL,
+    SESSION_REFRESH_SCRIPT,
+    SESSION_REFRESH_START_DELAY,
     WORKER_IDLE_POLL_MAX,
     esc,
     file_log_path,
@@ -245,9 +248,11 @@ class Worker:
         self._shutdown = False
         self._tasks: set[asyncio.Task] = set()
         self._paused_until = 0.0  # monotonic; set when Spotify blocks us
+        self._session_warned = False
 
     async def run(self):
         self._logger.info("Worker started (max_parallel=%d)", self._max_parallel)
+        self._tasks.add(asyncio.create_task(self._session_keeper()))
         while not self._shutdown:
             paused = self._paused_until - time.monotonic()
             if paused > 0:
@@ -340,6 +345,81 @@ class Worker:
             await self._notify(text, chat or self._chat_id)
         except Exception as e:
             self._logger.warning("Failed to send notification: %s", e)
+
+    async def _session_keeper(self) -> None:
+        """Keep the SpotiFLAC signed sessions alive while the bot is idle.
+
+        Sessions last ~5h and are refreshed 2h before expiry. The download
+        path refreshes them too, but only when a download happens; this task
+        covers long idle periods. It runs in a subprocess so the parent never
+        imports SpotiFLAC, and it never opens a browser.
+        """
+        await asyncio.sleep(SESSION_REFRESH_START_DELAY)
+        while not self._shutdown:
+            await self._refresh_sessions()
+            await asyncio.sleep(SESSION_REFRESH_INTERVAL)
+
+    def _session_extension_names(self) -> tuple[str, str]:
+        """Map the configured services to extension ids + the required ones."""
+        aliases = {"qobuz": "qobuz-web", "tidal": "tidal-web"}
+        names: list[str] = []
+        for service in self._cfg.get("services") or []:
+            raw = str(service).lower().removeprefix("ext:")
+            name = aliases.get(raw, raw)
+            if name and name not in names:
+                names.append(name)
+        if not names:
+            names = ["deezer", "qobuz-web", "amazon"]
+        # The first two configured services are the ones downloads rely on;
+        # extra services are refreshed but do not raise the "expired" warning.
+        return ",".join(names), ",".join(names[:2])
+
+    async def _refresh_sessions(self) -> None:
+        extensions, required = self._session_extension_names()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                SESSION_REFRESH_SCRIPT,
+                "--extensions", extensions,
+                "--required", required,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except Exception as exc:  # noqa: BLE001 - keeper must never crash the worker
+            self._logger.warning("Could not start session refresh: %s", exc)
+            return
+
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            self._logger.warning("Session refresh timed out")
+            return
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
+
+        if proc.returncode == 0:
+            if self._session_warned:
+                self._logger.info("Signed sessions are healthy again")
+            self._session_warned = False
+            return
+
+        detail = (err or out or b"").decode("utf-8", errors="replace").strip()
+        self._logger.warning(
+            "Session refresh failed (rc=%s): %s", proc.returncode, detail[-800:]
+        )
+        if not self._session_warned:
+            self._session_warned = True
+            await self._safe_notify(
+                "⚠️ <b>Spotify session expired</b>\n"
+                "  Downloads will fail until it is renewed.\n"
+                "  Run <code>scripts/seed_sessions.py</code> on a machine with a browser, "
+                "then copy the JSON files into <code>~/.spotiflac/signed_sessions/</code>.",
+                self._chat_id,
+            )
 
     async def _process(self, item: dict):
         self._logger.info("Processing #%d: %s", item["id"], item["query"])

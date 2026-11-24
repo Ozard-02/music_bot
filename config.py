@@ -12,6 +12,13 @@ os.environ.setdefault("TQDM_DISABLE", "1")  # suppress SpotiFLAC's tqdm progress
 # Subprocess entry point (download jobs + one-shot maintenance commands).
 # Lives in the same dir as the parent, so paths are stable inside Docker.
 JOB_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download_job.py")
+# Periodic signed-session refresh (SpotiFLAC 5.x extensions). Runs in a
+# subprocess because the parent must never import SpotiFLAC.
+SESSION_REFRESH_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "session_refresh.py"
+)
+SESSION_REFRESH_INTERVAL = 7200  # 2h; sessions last ~5h and refresh 2h before expiry
+SESSION_REFRESH_START_DELAY = 60  # let startup settle before the first check
 
 
 def esc(value) -> str:
