@@ -15,7 +15,7 @@ docker compose logs -f music-bot
   (`~/Music`, `~/.spotiflac`) — downloads survive container rebuilds.
 - Downloads go through SpotiFLAC's JS extensions, which need Node.js (baked
   into the image) and a signed `zarz-v2` session. Sessions live in
-  `~/.spotiflac/signed_sessions/`; the bot refreshes them every 2h. The first
+  `~/.spotiflac/signed_sessions/`; the bot refreshes them every hour. The first
   session must be created on a machine with a browser:
   `python scripts/seed_sessions.py --data-dir ~/.spotiflac`, then copy the
   `zarz-v2-*.json` files to the server's volume (mode 0600). The bot itself
@@ -37,7 +37,7 @@ docker compose logs -f music-bot
 docker-compose -f docker-compose.truenas.yml up -d
 ```
 
-- Uses a **pinned** ghcr tag (default `:1.2.1`; override with
+- Uses a **pinned** ghcr tag (default `:1.2.2`; override with
   `SPOTY_LOOP_TAG`), not `latest`.
 - Volumes point at `/mnt/<pool>/navidrome/Music` (shared with Navidrome) and
   `/mnt/<pool>/VM/spotiflac` (SpotiFLAC config/credentials/extensions/sessions).
@@ -45,7 +45,7 @@ docker-compose -f docker-compose.truenas.yml up -d
   via `TRUENAS_POOL`.
 - After the first deploy, seed the sessions once (from a machine with a
   browser) and copy them to `/mnt/pool/VM/spotiflac/signed_sessions/`. The
-  worker refreshes them every 2h, so later image rebuilds need no manual
+  worker refreshes them every hour, so later image rebuilds need no manual
   session work as long as the volume is kept and the container is not stopped
   for longer than the session lifetime.
 
@@ -99,9 +99,9 @@ GitHub Actions on `main`:
 Release:
 
 ```bash
-git tag v1.2.1
-git push origin v1.2.1
-# docker-compose.truenas.yml already defaults to :1.2.1
+git tag v1.2.2
+git push origin v1.2.2
+# docker-compose.truenas.yml already defaults to :1.2.2
 ```
 
 The parent is stdlib-only, so the CI test job does not need the full SpotiFLAC

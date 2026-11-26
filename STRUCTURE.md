@@ -51,7 +51,7 @@ spoty_loop/
   they are never imported by a front end. `scripts/seed_sessions.py` is a
   workstation-only tool (needs a browser) and is not used by the bot.
 - Downloads require Node.js + a signed `zarz-v2` session; the worker refreshes
-  sessions every 2h from a subprocess. The parent only spawns the refresh
+  sessions every hour from a subprocess. The parent only spawns the refresh
   script, never imports SpotiFLAC.
 - `config.py` must NOT import `spotiflac_patch` — the silence loop is inlined
   so the front-end import graph never touches SpotiFLAC.

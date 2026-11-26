@@ -111,7 +111,7 @@ python scripts/seed_sessions.py --data-dir ~/.spotiflac
 # copy ~/.spotiflac/signed_sessions/zarz-v2-*.json to the server's volume
 ```
 
-The worker refreshes the sessions every 2 hours from `session_refresh.py`
+The worker refreshes the sessions every hour from `session_refresh.py`
 (no browser); if a session is missing/expired it sends a Telegram warning.
 Sessions are per installation/extension version, so an extension update may
 require a fresh seed.

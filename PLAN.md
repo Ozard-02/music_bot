@@ -301,3 +301,14 @@ the native providers entirely: every download now goes through a JS extension.
       missing extensions, expired sessions and transient refresh errors.
 - [x] Pin `pydoll-python==3.0.1` in the Dockerfile and tests.
 - [x] Tests: 495 passed.
+
+## Phase 17 — 1.2.2 session resilience (2026-11-26)
+
+- [x] `is_permanent_failure`: mixed provider errors (one permanent, one
+      "verification paused") stay retryable instead of giving up immediately.
+- [x] Session keeper runs every hour (was 2h) and warns on refresh failure.
+- [x] `session_refresh.py` retries the refresh 3x and verifies the expiry
+      actually moved; a silent network failure no longer looks healthy.
+- [x] Give-up message no longer claims "after 10 attempts" for permanent
+      failures.
+- [x] Tests: 496 passed.

@@ -66,7 +66,7 @@ target predates this stack; the hard rule is still "well under the old 89MiB".
 | `deezer_meta.py` | Deezer track/album/playlist metadata → `TrackMetadata`, including ISRC enrichment |
 | `downloader.py` | Download engine (`run_url` for Spotify, `run_deezer` for Deezer): resolution, partition, parallel download, rename, cover |
 | `spotiflac_patch.py` | Import-time monkey-patches (GitHub version-check skip, console/input silencing, MB no-op, ProgressManager neutralization) |
-| `session_refresh.py` | Refresh the signed `zarz-v2` sessions over HTTP (no browser); run by the worker every 2h |
+| `session_refresh.py` | Refresh the signed `zarz-v2` sessions over HTTP (no browser); run by the worker every hour |
 | `m3u8.py` | Playlist m3u8 + cover generation (auto-build happens here, not in parent) |
 | `flac_utils.py` | FLAC tag read/write, cover embed/dedupe (httpx/mutagen/pillow live here) |
 
@@ -78,7 +78,7 @@ the image includes Node.js.  The extensions authenticate against the Zarz v2
 gateway with a signed session stored in `~/.spotiflac/signed_sessions/`.
 
 A session lasts ~5 hours and is refreshed 2h before expiry.  `worker.py` runs
-`session_refresh.py` at startup and every 2h in a subprocess, so a bot that is
+`session_refresh.py` at startup and every hour in a subprocess, so a bot that is
 idle for a while keeps working without a browser.  The first session must be created once
 with `scripts/seed_sessions.py` on a machine with a browser; the bot itself
 never launches one.  If the session is missing/expired, downloads fail and the
@@ -207,7 +207,7 @@ so overlap protection moves to **`fcntl.flock` lockfiles**:
   (30min) instead of letting every item retry against a rate-limited IP.
 - Download subprocesses skip SpotiFLAC's import-time GitHub version check
   (one useless HTTPS request per job).
-- Session keeper: one tiny refresh subprocess every 2h (three HMAC-signed
+- Session keeper: one tiny refresh subprocess every hour (three HMAC-signed
   POSTs); no browser and no polling.
 - QueueManager: one persistent SQLite connection, no polling.
 - `gc.freeze()` after startup imports + API thread: permanent objects are

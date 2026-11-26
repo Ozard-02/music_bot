@@ -10,7 +10,7 @@ copied to the server:
     scp ~/.spotiflac/signed_sessions/zarz-v2-*.json \
         truenas:/mnt/pool/VM/spotiflac/signed_sessions/
 
-After that `session_refresh.py` (run by the bot every 2h) keeps them alive.
+After that `session_refresh.py` (run by the bot every hour) keeps them alive.
 
 Options:
   --extensions deezer,qobuz-web,amazon   which extensions to seed
