@@ -64,6 +64,27 @@ def _refresh_due(client) -> bool:
     return (expires_at - now).total_seconds() <= skew
 
 
+async def _refresh_with_retry(client, attempts: int = 3) -> tuple[bool, str]:
+    """Refresh until the expiry actually moves; 5.x swallows network errors."""
+    before = _parse_time(getattr(client, "expires_at", None))
+    last_error = ""
+    for attempt in range(attempts):
+        try:
+            await client._refresh()
+        except Exception as exc:  # noqa: BLE001 - report after the retries
+            last_error = f"{type(exc).__name__}: {exc}"
+        after = _parse_time(getattr(client, "expires_at", None))
+        if client.authenticated and after and (before is None or after > before):
+            return True, ""
+        if not client.authenticated:
+            last_error = "refresh produced an expired session"
+        else:
+            last_error = last_error or "refresh did not extend the expiry"
+        if attempt + 1 < attempts:
+            await asyncio.sleep(2 * (attempt + 1))
+    return False, last_error
+
+
 async def _refresh_one(name: str, manifest_path: Path, root: Path, force: bool) -> dict:
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -87,15 +108,13 @@ async def _refresh_one(name: str, manifest_path: Path, root: Path, force: bool) 
             }
         if force or _refresh_due(client):
             log.info("%s: refreshing (expires %s)", name, client.expires_at)
-            await client._refresh()
-            # _refresh() never raises for a network error in 5.x; re-read the
-            # outcome from the client instead of trusting the call.
-            if not client.authenticated:
+            refreshed, error = await _refresh_with_retry(client)
+            if not refreshed:
                 return {
                     "name": name,
-                    "state": "expired",
+                    "state": "error",
                     "expires_at": getattr(client, "expires_at", None),
-                    "error": "refresh did not produce a valid session",
+                    "error": error or "refresh failed",
                 }
         return {
             "name": name,

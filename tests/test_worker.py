@@ -30,6 +30,7 @@ class TestPermanentFailure:
         "Download timed out after 100s",
         "Connection reset by peer",
         "no_file_after_download",
+        "All providers failed after 4 attempt(s) — ext:qobuz-web: verification paused after a failed attempt — next try in 5 min; ext:amazon: Track not available: not_found_on_amazon",
     ])
     def test_transient_or_unknown(self, error):
         assert not is_permanent_failure(error)

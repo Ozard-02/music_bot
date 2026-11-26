@@ -70,12 +70,34 @@ _PERMANENT_ERROR_MARKERS = (
     "invalid spotify",
 )
 
+# A single provider can report a permanent-looking reason (e.g. Amazon
+# "not available") while another provider only failed because the signed
+# session was paused. The combined error must stay retryable in that case.
+_TRANSIENT_ERROR_MARKERS = (
+    "verification paused",
+    "auth_failed",
+    "unauthorized",
+    "forbidden",
+    "rate limit",
+    "429",
+    "timeout",
+    "timed out",
+    "connection",
+    "temporary",
+    "try again",
+    "502",
+    "503",
+    "504",
+)
+
 
 def is_permanent_failure(error: str | None) -> bool:
     """True when retrying the same track cannot plausibly succeed."""
     if not error:
         return False
     text = str(error).lower()
+    if any(marker in text for marker in _TRANSIENT_ERROR_MARKERS):
+        return False
     return any(marker in text for marker in _PERMANENT_ERROR_MARKERS)
 
 
@@ -182,7 +204,9 @@ def _done_message(display: str, result: dict, given_up: int) -> str:
         parts.append(f"❌ {given_up} given up")
     msg = f"✅ <b>{esc(display)}</b>\n  {' | '.join(parts)}"
     if given_up:
-        msg += f"\n  🧊 Tracks gave up after {MAX_TRACK_RETRIES} attempts"
+        # Not every give-up is the retry limit: a permanent provider failure
+        # gives up on the first attempt, so do not claim a specific count.
+        msg += "\n  🧊 Tracks gave up"
     return msg
 
 
