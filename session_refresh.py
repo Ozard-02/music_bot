@@ -177,6 +177,19 @@ async def main_async(args) -> int:
         "required_failed": [item["name"] for item in failed],
         "results": results,
     }
+    # Persist the last check for troubleshooting. No session secrets or full
+    # URLs are written; only states, expiry timestamps and error messages.
+    status = {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        **summary,
+    }
+    try:
+        status_path = root / "session_status.json"
+        status_path.write_text(json.dumps(status, indent=2), encoding="utf-8")
+        os.chmod(status_path, 0o644)
+    except OSError as exc:
+        log.warning("Cannot write session status: %s", exc)
+
     # stdout is for the worker; the human-readable lines stay on stderr.
     print(json.dumps(summary), flush=True)
     if failed:

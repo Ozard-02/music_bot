@@ -312,3 +312,12 @@ the native providers entirely: every download now goes through a JS extension.
 - [x] Give-up message no longer claims "after 10 attempts" for permanent
       failures.
 - [x] Tests: 496 passed.
+
+## Phase 18 — 1.2.3 session diagnostics (2026-11-27)
+
+- [x] `session_refresh.py` writes `~/.spotiflac/session_status.json` after
+      every check (states, expiry timestamps, errors; no session secrets).
+- [x] `SESSION_REFRESH_INTERVAL` env override lets another machine own the
+      refresh without changing code.
+- [x] Used to determine whether the NAS can refresh a session created on the
+      workstation.

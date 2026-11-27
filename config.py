@@ -17,7 +17,9 @@ JOB_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download_
 SESSION_REFRESH_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "session_refresh.py"
 )
-SESSION_REFRESH_INTERVAL = 3600  # 1h; retry a failed refresh before the ~5h expiry
+SESSION_REFRESH_INTERVAL = int(os.environ.get("SESSION_REFRESH_INTERVAL", "3600"))
+# 1h default: retry a failed refresh before the ~5h expiry. The env override
+# lets a deployment hand refresh ownership to another machine.
 
 
 def esc(value) -> str:

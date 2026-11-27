@@ -37,7 +37,7 @@ docker compose logs -f music-bot
 docker-compose -f docker-compose.truenas.yml up -d
 ```
 
-- Uses a **pinned** ghcr tag (default `:1.2.2`; override with
+- Uses a **pinned** ghcr tag (default `:1.2.3`; override with
   `SPOTY_LOOP_TAG`), not `latest`.
 - Volumes point at `/mnt/<pool>/navidrome/Music` (shared with Navidrome) and
   `/mnt/<pool>/VM/spotiflac` (SpotiFLAC config/credentials/extensions/sessions).
@@ -99,9 +99,9 @@ GitHub Actions on `main`:
 Release:
 
 ```bash
-git tag v1.2.2
-git push origin v1.2.2
-# docker-compose.truenas.yml already defaults to :1.2.2
+git tag v1.2.3
+git push origin v1.2.3
+# docker-compose.truenas.yml already defaults to :1.2.3
 ```
 
 The parent is stdlib-only, so the CI test job does not need the full SpotiFLAC
